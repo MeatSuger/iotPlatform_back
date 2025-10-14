@@ -1,9 +1,6 @@
 package com.yu.iotplatform;
 
-import cn.dev33.satoken.stp.StpUtil;
 import com.alibaba.fastjson.JSON;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.toolkit.Assert;
 import com.yu.iotplatform.Util.RedisUtil;
 import com.yu.iotplatform.entity.User;
 import com.yu.iotplatform.mapper.UserMapper;

@@ -1,20 +1,19 @@
 package com.yu.iotplatform.control;
 
-import cn.dev33.satoken.annotation.SaCheckLogin;
+
 import cn.dev33.satoken.stp.StpUtil;
 import com.alibaba.fastjson2.JSON;
 import com.yu.iotplatform.entity.Device;
 import com.yu.iotplatform.service.DeviceService;
 import jakarta.annotation.Resource;
 import lombok.Data;
-import org.springframework.beans.factory.annotation.Autowired;
+
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("/device")
