@@ -14,11 +14,11 @@ public class CrossConfig {
     @Bean
     public SaCorsHandleFunction saCorsHandle() {
         return (saRequest, saResponse, saStorage) -> {
-            saResponse.setHeader("Access-Control-Allow-Origin", "*")
+            saResponse.setHeader("Access-Control-Allow-Origin", "http://localhost:5173")
                     .setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS, DELETE, PUT")
                     .setHeader("Access-Control-Max-Age", "3600")
-                    .setHeader("Access-Control-Allow-Headers", "*");
-
+                    .setHeader("Access-Control-Allow-Headers", "*")
+                    .setHeader("Access-Control-Allow-Credentials", "true");
             SaRouter.match(SaHttpMethod.OPTIONS)
                     .free(saRouterStaff ->
                             System.out.println("--------OPTIONS预检请求，不做处理"))

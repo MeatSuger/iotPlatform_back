@@ -1,7 +1,7 @@
 server:
   servlet:
     context-path: /api
-  port: 8080
+  port: 8181
 spring:
   application:
     name: IotPlatform
