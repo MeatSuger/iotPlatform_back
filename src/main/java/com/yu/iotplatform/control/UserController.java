@@ -8,9 +8,11 @@ import cn.dev33.satoken.stp.SaTokenInfo;
 import cn.dev33.satoken.stp.StpUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.yu.iotplatform.common.ApiResponse;
 import com.yu.iotplatform.entity.User;
 import com.yu.iotplatform.service.UserService;
 import jakarta.annotation.Resource;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -28,7 +30,7 @@ import java.util.Objects;
 @RestController
 @RequestMapping("/user")
 public class UserController {
-    public static final String USER_STATUS_ACTIVE = "active";
+    public static final String USER_STATUS_ACTIVE = "ACTIVE";
     public static final String USER_STATUS_BANDER = "BANDED";
     @Resource
     private UserService userService;
@@ -40,22 +42,22 @@ public class UserController {
      */
     @PostMapping("/register")
     @SaIgnore
-    public ResponseEntity<String> register(@RequestBody User user) {
+    public ApiResponse<String> register(@RequestBody User user) {
         if (user.getAccount() == null || user.getAccount().isBlank()
                 || user.getPasswd() == null || user.getPasswd().isBlank()) {
-            return ResponseEntity.badRequest().body("账号和密码不能为空");
+            return ApiResponse.fail(HttpStatus.BAD_REQUEST.value(), "账号和密码不能为空");
         }
 
         User existUser = userService.getOne(
                 new LambdaQueryWrapper<User>().eq(User::getAccount, user.getAccount())
         );
         if (existUser != null) {
-            return ResponseEntity.badRequest().body("账号已存在");
+            return ApiResponse.fail(HttpStatus.BAD_REQUEST.value(), "账号已存在");
         }
         user.setStatus(USER_STATUS_ACTIVE);
         return userService.save(user)
-                ? ResponseEntity.ok("注册成功")
-                : ResponseEntity.badRequest().body("注册失败");
+                ? ApiResponse.success("注册成功", null)
+                : ApiResponse.fail(HttpStatus.BAD_REQUEST.value(), "注册失败");
     }
 
     /**
@@ -70,27 +72,27 @@ public class UserController {
      */
     @PutMapping
     @SaCheckLogin
-    public ResponseEntity<String> update(@RequestBody User user) {
+    public ApiResponse<String> update(@RequestBody User user) {
         Long loginId = StpUtil.getLoginIdAsLong();
         String selfRole = getHighestRole(loginId);
 
         User target = userService.getById(user.getId());
         if (target == null) {
-            return ResponseEntity.badRequest().body("目标用户不存在");
+            return ApiResponse.fail(400, "目标用户不存在");
         }
 
         String targetRole = getHighestRole(target.getId());
 
         if ("user".equals(selfRole) && !loginId.equals(user.getId())) {
-            return ResponseEntity.status(403).body("普通用户只能修改自己的信息");
+            return ApiResponse.fail(403, "普通用户只能修改自己的信息");
         }
 
         if ("admin".equals(selfRole) && "super-admin".equals(targetRole)) {
-            return ResponseEntity.status(403).body("管理员不能修改超级管理员信息");
+            return ApiResponse.fail(403, "管理员不能修改超级管理员信息");
         }
 
         userService.updateById(user);
-        return ResponseEntity.ok("修改成功");
+        return ApiResponse.success("修改成功", null);
     }
 
     /**
@@ -102,38 +104,39 @@ public class UserController {
      * - user → 只能查询自己；
      * - admin → 可查询他人但不能查询 super-admin；
      * - super-admin → 可查询所有用户。
+     * <p/>
      */
     @GetMapping("/profile")
     @SaCheckLogin
-    public ResponseEntity<User> getProfile(@RequestParam Long id) {
+    public ApiResponse<User> getProfile(@RequestParam Long id) {
         Long loginId = StpUtil.getLoginIdAsLong();
         String selfRole = getHighestRole(loginId);
         String targetRole = getHighestRole(id);
 
         if ("user".equals(selfRole) && !loginId.equals(id)) {
-            return ResponseEntity.status(403).build();
+            return ApiResponse.fail(403, "无权限查看他人信息");
         }
 
         if ("admin".equals(selfRole) && "super-admin".equals(targetRole)) {
-            return ResponseEntity.status(403).build();
+            return ApiResponse.fail(403, "管理员不能查看超级管理员信息");
         }
 
         User user = userService.getById(id);
         if (user == null) {
-            return ResponseEntity.notFound().build();
+            return ApiResponse.fail(404, "用户不存在");
         }
 
-        return ResponseEntity.ok(user);
+        return ApiResponse.success(user);
     }
 
     /**
      * @return 用户列表。
      * @brief 查询所有用户（仅 super-admin 可用）。
      */
-    @GetMapping
+    @GetMapping("/list")
     @SaCheckRole("super-admin")
-    public ResponseEntity<List<User>> listAll() {
-        return ResponseEntity.ok(userService.list());
+    public ApiResponse<List<User>> listAll() {
+        return ApiResponse.success(userService.list());
     }
 
     /**
@@ -145,24 +148,29 @@ public class UserController {
      * - admin → 可删他人但不能删 super-admin；
      * - super-admin → 可删任何人。
      */
-    @DeleteMapping("/{id}")
+    @PostMapping("/delete")
     @SaCheckLogin
-    public ResponseEntity<String> delete(@PathVariable Long id) {
+    public ApiResponse<String> delete(@RequestParam Long id) {
         Long loginId = StpUtil.getLoginIdAsLong();
         String selfRole = getHighestRole(loginId);
         String targetRole = getHighestRole(id);
 
         if ("user".equals(selfRole)) {
-            return ResponseEntity.status(403).body("无权限删除用户");
+            return ApiResponse.fail(403, "无权限删除用户");
         }
 
         if ("admin".equals(selfRole) && "super-admin".equals(targetRole)) {
-            return ResponseEntity.status(403).body("管理员不能删除超级管理员");
+            return ApiResponse.fail(403, "管理员不能删除超级管理员");
         }
 
         boolean removed = userService.removeById(id);
-        return removed ? ResponseEntity.ok("删除成功") : ResponseEntity.notFound().build();
+        if (!removed) {
+            return ApiResponse.fail(404, "用户不存在或删除失败");
+        }
+
+        return ApiResponse.success("删除成功", null);
     }
+
 
     /**
      * @param pageNum  页码。
@@ -176,7 +184,7 @@ public class UserController {
      */
     @GetMapping("/page")
     @SaCheckRole(value = {"admin", "super-admin"}, mode = SaMode.OR)
-    public ResponseEntity<Page<User>> findPage(
+    public ApiResponse<Page<User>> findPage(
             @RequestParam(defaultValue = "0") Integer pageNum,
             @RequestParam(defaultValue = "10") Integer pageSize,
             @RequestParam(defaultValue = "") String name) {
@@ -187,7 +195,7 @@ public class UserController {
         }
 
         Page<User> page = userService.page(new Page<>(pageNum, pageSize), queryWrapper);
-        return ResponseEntity.ok(page);
+        return ApiResponse.success(page);
     }
 
     /**
@@ -198,24 +206,25 @@ public class UserController {
      */
     @SaIgnore
     @PostMapping("/login")
-    public ResponseEntity<Object> doLogin(@RequestParam String account,
-                                          @RequestParam String passwd) {
+    public ApiResponse<Object> doLogin(@RequestParam String account,
+                                       @RequestParam String passwd) {
 
         User user = userService.getByAccount(account);
         if (user == null) {
-            return ResponseEntity.badRequest().body("用户未注册");
+            return ApiResponse.fail(400, "用户未注册");
         }
         if (!Objects.equals(user.getPasswd(), passwd)) {
-            return ResponseEntity.badRequest().body("密码错误");
+            return ApiResponse.fail(400, "密码错误");
         }
 
         if (!USER_STATUS_ACTIVE.equals(user.getStatus())) {
-            return ResponseEntity.badRequest().body("用户被封禁");
+            return ApiResponse.fail(403, "用户被封禁");
         }
 
         StpUtil.login(user.getId());
+        getHighestRole(user.getId());
         SaTokenInfo tokenInfo = StpUtil.getTokenInfo();
-        return ResponseEntity.ok(tokenInfo);
+        return ApiResponse.success("登录成功", tokenInfo);
     }
 
     /**
@@ -224,8 +233,8 @@ public class UserController {
      */
     @GetMapping("/isLogin")
     @SaIgnore
-    public String isLogin() {
-        return "当前会话是否登录：" + StpUtil.isLogin();
+    public ApiResponse<String> isLogin() {
+        return ApiResponse.success(StpUtil.isLogin() ? "已登录" : "未登录", null);
     }
 
     /**
