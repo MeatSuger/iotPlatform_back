@@ -28,15 +28,15 @@ import java.util.Objects;
 @RestController
 @RequestMapping("/user")
 public class UserController {
-
+    public static final String USER_STATUS_ACTIVE = "active";
+    public static final String USER_STATUS_BANDER = "BANDED";
     @Resource
     private UserService userService;
 
     /**
-     * @brief 用户注册接口（公开访问）。
-     *
      * @param user 用户对象，包含账号和密码。
      * @return 注册结果信息。
+     * @brief 用户注册接口（公开访问）。
      */
     @PostMapping("/register")
     @SaIgnore
@@ -52,22 +52,21 @@ public class UserController {
         if (existUser != null) {
             return ResponseEntity.badRequest().body("账号已存在");
         }
-
+        user.setStatus(USER_STATUS_ACTIVE);
         return userService.save(user)
                 ? ResponseEntity.ok("注册成功")
                 : ResponseEntity.badRequest().body("注册失败");
     }
 
     /**
+     * @param user 待修改的用户对象。
+     * @return 修改结果。
      * @brief 修改用户信息。
      * <p>
      * 权限：
      * - user → 只能修改自己；
      * - admin → 可修改他人但不能修改 super-admin；
      * - super-admin → 可修改任何人。
-     *
-     * @param user 待修改的用户对象。
-     * @return 修改结果。
      */
     @PutMapping
     @SaCheckLogin
@@ -95,15 +94,14 @@ public class UserController {
     }
 
     /**
+     * @param id 用户ID。
+     * @return 用户对象或错误状态。
      * @brief 查询单个用户信息。
      * <p>
      * 权限：
      * - user → 只能查询自己；
      * - admin → 可查询他人但不能查询 super-admin；
      * - super-admin → 可查询所有用户。
-     *
-     * @param id 用户ID。
-     * @return 用户对象或错误状态。
      */
     @GetMapping("/profile")
     @SaCheckLogin
@@ -129,9 +127,8 @@ public class UserController {
     }
 
     /**
-     * @brief 查询所有用户（仅 super-admin 可用）。
-     *
      * @return 用户列表。
+     * @brief 查询所有用户（仅 super-admin 可用）。
      */
     @GetMapping
     @SaCheckRole("super-admin")
@@ -140,14 +137,13 @@ public class UserController {
     }
 
     /**
+     * @param id 待删除用户ID。
+     * @return 删除结果。
      * @brief 删除用户。
      * 权限：
      * - user → 无权限；
      * - admin → 可删他人但不能删 super-admin；
      * - super-admin → 可删任何人。
-     *
-     * @param id 待删除用户ID。
-     * @return 删除结果。
      */
     @DeleteMapping("/{id}")
     @SaCheckLogin
@@ -169,15 +165,14 @@ public class UserController {
     }
 
     /**
+     * @param pageNum  页码。
+     * @param pageSize 每页大小。
+     * @param name     模糊查询用户名。
+     * @return 分页结果。
      * @brief 用户分页查询接口。
      * <p>
      * 权限：
      * - admin 和 super-admin 可使用。
-     *
-     * @param pageNum 页码。
-     * @param pageSize 每页大小。
-     * @param name 模糊查询用户名。
-     * @return 分页结果。
      */
     @GetMapping("/page")
     @SaCheckRole(value = {"admin", "super-admin"}, mode = SaMode.OR)
@@ -196,11 +191,10 @@ public class UserController {
     }
 
     /**
-     * @brief 用户登录接口（公开访问）。
-     *
      * @param account 用户账号。
-     * @param passwd 用户密码。
+     * @param passwd  用户密码。
      * @return 登录结果，包含 Token 信息。
+     * @brief 用户登录接口（公开访问）。
      */
     @SaIgnore
     @PostMapping("/login")
@@ -208,11 +202,14 @@ public class UserController {
                                           @RequestParam String passwd) {
 
         User user = userService.getByAccount(account);
-        if (user == null || !Objects.equals(user.getPasswd(), passwd)) {
-            return ResponseEntity.badRequest().body("用户账号或密码错误");
+        if (user == null) {
+            return ResponseEntity.badRequest().body("用户未注册");
+        }
+        if (!Objects.equals(user.getPasswd(), passwd)) {
+            return ResponseEntity.badRequest().body("密码错误");
         }
 
-        if (!"active".equals(user.getStatus())) {
+        if (!USER_STATUS_ACTIVE.equals(user.getStatus())) {
             return ResponseEntity.badRequest().body("用户被封禁");
         }
 
@@ -222,9 +219,8 @@ public class UserController {
     }
 
     /**
-     * @brief 查询当前登录状态（公开访问）。
-     *
      * @return 当前会话登录状态。
+     * @brief 查询当前登录状态（公开访问）。
      */
     @GetMapping("/isLogin")
     @SaIgnore
@@ -233,10 +229,9 @@ public class UserController {
     }
 
     /**
-     * @brief 获取指定用户的最高角色。
-     *
      * @param userId 用户ID。
      * @return 用户最高角色（user、admin、super-admin）。
+     * @brief 获取指定用户的最高角色。
      */
     private String getHighestRole(Long userId) {
         List<String> roles = StpUtil.getRoleList(userId);
