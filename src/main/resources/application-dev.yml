@@ -31,6 +31,11 @@ spring:
           min-idle: 2
           # 最大等待时间（-1 表示无限制）
           max-wait: -1ms
+    influx:
+      url: http://47.99.74.160:8086
+      token: 5q_l74YeDkDSCP8RD8TmquRfduzc-23uKQilcGs-A2686iFyxGgo7W3WwVJuxgGB69RbpstlLo7yNoJJwv7yeQ==
+      org: influxdb_NHn2Qm
+      bucket: influxdb_ans3DQ
 sa-token:
   # token 名称（同时也是 cookie 名称）
   token-name: Authorization
@@ -49,3 +54,4 @@ sa-token:
 
 mybatis-plus:
   mapper-locations: classpath*:/mapper/*.xml
+

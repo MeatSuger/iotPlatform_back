@@ -1,19 +1,24 @@
 package com.yu.iotplatform.control;
 
-
 import cn.dev33.satoken.stp.StpUtil;
 import com.alibaba.fastjson2.JSON;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.yu.iotplatform.common.ApiResponse;
 import com.yu.iotplatform.entity.Device;
 import com.yu.iotplatform.service.DeviceService;
 import jakarta.annotation.Resource;
 import lombok.Data;
 
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.List;
+
+import static com.yu.iotplatform.control.UserController.USER_STATUS_ACTIVE;
 
 @RestController
 @RequestMapping("/device")
@@ -25,16 +30,19 @@ public class DeviceController {
     @Resource
     private RedisTemplate<String, Object> redisTemplate;
 
-    private static final String DEVICE_CACHE_KEY = "iot:device:";
+    public static final String DEVICE_CACHE_KEY = "iot:device:";
     private static final String DEVICE_STATUS_KEY = "iot:device:status:";
 
     // ----------------- 设备注册 -----------------
     @PostMapping("/register")
     public ResponseEntity<?> registerDevice(@RequestBody Device device) {
-        if (device.getDeviceId() == null || device.getDeviceId().isBlank()) {
-            return ResponseEntity.badRequest().body("deviceId不能为空");
+        if (device.getDeviceName().isBlank()) {
+            return ResponseEntity.badRequest().body("devicesName不能为空");
         }
-
+        if (deviceService.lambdaQuery().eq(Device::getDeviceName, device.getDeviceName()).count() > 0) {
+            return ResponseEntity.badRequest().body("devicesName重复");
+        }
+        device.setDeviceId(deviceService.generateDeviceId());
         // 检查设备是否已存在
         Device exist = deviceService.lambdaQuery().eq(Device::getDeviceId, device.getDeviceId()).one();
         if (exist != null) {
@@ -42,148 +50,95 @@ public class DeviceController {
         }
         // 当前登录用户 ID 作为设备 owner
         device.setOwnerId(StpUtil.getLoginIdAsLong());
-        device.setStatus("active");
+        device.setStatus(USER_STATUS_ACTIVE);
         deviceService.save(device);
+        redisTemplate.opsForValue().set(DEVICE_CACHE_KEY + device.getDeviceId(), JSON.toJSONString(device));
         return ResponseEntity.ok(device);
     }
 
-    // ----------------- 设备登录 -----------------
-    // 设备用硬件 deviceId 登录，返回 token
-    @PostMapping("/login")
-    public ResponseEntity<?> deviceLogin(@RequestParam String deviceId) {
-        Device device = deviceService.lambdaQuery().eq(Device::getDeviceId, deviceId).one();
 
-        if (device == null) return ResponseEntity.badRequest().body("设备不存在");
+    // ----------------- 设备状态上报 -----------------
+    @PostMapping("/{deviceId}/Data")
+    public ApiResponse<String> reportStatus(@PathVariable String deviceId, @RequestBody DeviceStatusDTO statusDTO) {
+        Device device = deviceService.getDeviceById(deviceId);
+        if (device == null) return ApiResponse.fail(404, "设备不存在");
 
-        if (!"active".equals(device.getStatus())) return ResponseEntity.badRequest().body("设备未激活");
+        DeviceStatus status = new DeviceStatus();
+        status.setDeviceId(deviceId);
+        status.setSensors(statusDTO.getSensors());
+        status.setLastActiveTime(LocalDateTime.now());
 
-        // 登录 Sa-Token，使用设备表主键 ID 作为登录 ID
-        StpUtil.login(device.getId());
-        return ResponseEntity.ok(StpUtil.getTokenInfo());
+        redisTemplate.opsForValue().set(DEVICE_STATUS_KEY + deviceId, JSON.toJSONString(status));
+
+        return ApiResponse.success("状态上报成功", null);
     }
-
-//    // ----------------- 设备状态上报 -----------------
-//    @PostMapping("/status/report")
-//    public ResponseEntity<?> reportStatus(@RequestBody DeviceStatusDTO statusDTO) {
-//        Long deviceId = StpUtil.getLoginIdAsLong();
-//
-//        DeviceStatusRedis status = new DeviceStatusRedis();
-//        status.setDeviceId(deviceId);
-//        status.setTemperature(statusDTO.getTemperature());
-//        status.setHumidity(statusDTO.getHumidity());
-//        status.setBatteryLevel(statusDTO.getBatteryLevel());
-//        status.setSignalStrength(statusDTO.getSignalStrength());
-//        status.setLastActiveTime(LocalDateTime.now());
-//
-//        // JSON 存 Redis
-//        redisTemplate.opsForValue().set(DEVICE_STATUS_KEY + deviceId, JSON.toJSONString(status), 5, TimeUnit.MINUTES);
-//
-//        return ResponseEntity.ok("上报成功");
-//    }
-
 
     // ----------------- 获取设备列表 -----------------
     @GetMapping("/list")
-    public ResponseEntity<?> listDevices() {
+    public ApiResponse<?> listDevices() {
         Long ownerId = StpUtil.getLoginIdAsLong();
         List<Device> devices = deviceService.lambdaQuery().eq(Device::getOwnerId, ownerId).list();
-        return ResponseEntity.ok(devices);
+        return ApiResponse.success(devices);
     }
 
     // ----------------- 获取设备详情 -----------------
-    @GetMapping("/{id}")
-    public ResponseEntity<?> getDeviceDetail(@PathVariable Long id) {
-        Device device = deviceService.getById(id);
-        if (device == null) return ResponseEntity.badRequest().body("未找到设备");
+    @GetMapping("/{deviceId}/Data")
+    public ApiResponse<DeviceStatus> getDeviceDetail(@PathVariable String deviceId) {
+        Device device = deviceService.getDeviceById(deviceId);
+        if (device == null) return ApiResponse.fail(404, "未找到设备");
 
-        String statusJson = (String) redisTemplate.opsForValue().get(DEVICE_STATUS_KEY + id);
-        DeviceStatusRedis status = statusJson == null ? null : JSON.parseObject(statusJson, DeviceStatusRedis.class);
+        String statusJson = (String) redisTemplate.opsForValue().get(DEVICE_STATUS_KEY + deviceId);
+        DeviceStatus status = statusJson == null ? new DeviceStatus() : JSON.parseObject(statusJson, DeviceStatus.class);
 
-        DeviceDetailDTO detailDTO = new DeviceDetailDTO();
-        detailDTO.setId(device.getId());
-        detailDTO.setDeviceId(device.getDeviceId());
-        detailDTO.setOwnerId(device.getOwnerId());
-        detailDTO.setStatus(device.getStatus());
+        // 补充设备基本信息
+        status.setId(device.getId());
+        status.setDeviceId(device.getDeviceId());
+        status.setOwnerId(device.getOwnerId());
+        status.setStatus(device.getStatus());
 
-        if (status != null) {
-            detailDTO.setTemperature(status.getTemperature());
-            detailDTO.setHumidity(status.getHumidity());
-            detailDTO.setBatteryLevel(status.getBatteryLevel());
-            detailDTO.setSignalStrength(status.getSignalStrength());
-            detailDTO.setLastActiveTime(status.getLastActiveTime());
-        }
-
-        return ResponseEntity.ok(detailDTO);
+        return ApiResponse.success(status);
     }
 
     // ----------------- 删除设备 -----------------
-    @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteDevice(@PathVariable Long id) {
-        deviceService.removeById(id);
+    @PostMapping("/{deviceId}/delete")
+    public ApiResponse<?> deleteDevice(@PathVariable String deviceId) {
+        boolean removed = deviceService.remove(
+                new QueryWrapper<Device>().eq("device_id", deviceId)
+        );
         // 删除 Redis 缓存
-        redisTemplate.delete(DEVICE_STATUS_KEY + id);
-        return ResponseEntity.ok("删除成功");
+        boolean cacheDeleted = redisTemplate.delete(DEVICE_STATUS_KEY + deviceId);
+        redisTemplate.opsForValue().set(DEVICE_CACHE_KEY + deviceId, JSON.toJSONString(cacheDeleted));
+
+        if (removed && cacheDeleted) {
+            return ApiResponse.success("删除成功");
+        } else {
+            return ApiResponse.fail(HttpStatus.BAD_REQUEST.value(), "删除目标不存在或错误");
+        }
     }
 
-//
-//    @PostMapping("/heartbeat")
-//    public ResponseEntity<?> heartbeat() {
-//        Long deviceId = StpUtil.getLoginIdAsLong();
-//
-//        String key = DEVICE_STATUS_KEY + deviceId;
-//        String statusJson = (String) redisTemplate.opsForValue().get(key);
-//
-//        DeviceStatusRedis status;
-//        if (statusJson != null) {
-//            status = JSON.parseObject(statusJson, DeviceStatusRedis.class);
-//        } else {
-//            status = new DeviceStatusRedis();
-//            status.setDeviceId(deviceId);
-//        }
-//
-//        // 只更新时间戳
-//        status.setLastActiveTime(LocalDateTime.now());
-//
-//        // 写回 Redis，延长 5 分钟过期
-//        redisTemplate.opsForValue().set(key, JSON.toJSONString(status), 5, TimeUnit.MINUTES);
-//
-//        return ResponseEntity.ok("心跳更新成功");
-//    }
+    // ----------------- 统一设备状态对象 -----------------
+    @Data
+    public static class DeviceStatus {
+        private Long id;                    // 设备主键ID
+        private String deviceId;            // 设备编号
+        private Long ownerId;               // 所有者ID
+        private String status;              // 设备状态
+        private LocalDateTime lastActiveTime; // 最后活跃时间
+        private List<SensorData> sensors;   // 传感器数据列表
+    }
 
-
-    // ----------------- DTO: 设备状态上报 -----------------
+    // ----------------- 设备状态上报DTO -----------------
     @Data
     public static class DeviceStatusDTO {
-        private Double temperature;
-        private Double humidity;
-        private Integer batteryLevel;
-        private Integer signalStrength;
+        private List<SensorData> sensors;   // 传感器数据
     }
 
-    // ----------------- Redis 存储对象 -----------------
+    // ----------------- 传感器数据 -----------------
     @Data
-    public static class DeviceStatusRedis {
-        private Long deviceId;
-        private Double temperature;
-        private Double humidity;
-        private Integer batteryLevel;
-        private Integer signalStrength;
-        private LocalDateTime lastActiveTime;
+    public static class SensorData {
+        private String name;        // 传感器名称
+        private String type;        // 数据类型
+        private Object value;       // 传感器数值
+        private LocalDateTime timestamp; // 采集时间
     }
-
-    // ----------------- DTO: 设备详情 -----------------
-    @Data
-    public static class DeviceDetailDTO {
-        private Long id;
-        private String deviceId;
-        private Long ownerId;
-        private String status;
-
-        private Double temperature;
-        private Double humidity;
-        private Integer batteryLevel;
-        private Integer signalStrength;
-        private LocalDateTime lastActiveTime;
-    }
-
 }
