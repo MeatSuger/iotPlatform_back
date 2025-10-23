@@ -2,7 +2,6 @@ package com.yu.iotplatform;
 
 import com.alibaba.fastjson.JSON;
 import com.yu.iotplatform.Util.RedisUtil;
-import com.yu.iotplatform.entity.Device;
 import com.yu.iotplatform.entity.User;
 import com.yu.iotplatform.mapper.UserMapper;
 import com.yu.iotplatform.service.UserService;
