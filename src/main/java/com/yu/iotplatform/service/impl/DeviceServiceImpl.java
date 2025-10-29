@@ -14,7 +14,6 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.UUID;
 
-
 import static com.yu.iotplatform.control.DeviceController.DEVICE_CACHE_KEY;
 
 @Service
