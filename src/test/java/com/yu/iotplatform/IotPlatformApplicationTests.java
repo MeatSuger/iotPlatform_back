@@ -2,7 +2,7 @@ package com.yu.iotplatform;
 
 import com.alibaba.fastjson.JSON;
 import com.yu.iotplatform.Util.RedisUtil;
-import com.yu.iotplatform.control.DeviceController.SensorData;
+import com.yu.iotplatform.entity.SensorData;
 import com.yu.iotplatform.entity.User;
 import com.yu.iotplatform.mapper.UserMapper;
 import com.yu.iotplatform.service.InfluxDBService;
@@ -135,6 +135,10 @@ class IotPlatformApplicationTests {
         List<SensorData> recent = influxDBService.queryRecentDeviceSensors(deviceId, 10);
         assertNotNull(recent);
         assertTrue(recent.size() >= 2);
+
+        List<SensorData> recent1 = influxDBService.queryRecentDeviceSensors(deviceId, 10,LocalDateTime.now().minusDays(4));
+        assertNotNull(recent1);
+        assertTrue(recent1.size() >= 2);
 
         // ✅ 测试按时间区间查询
         LocalDateTime start = LocalDateTime.now().minusHours(1);
