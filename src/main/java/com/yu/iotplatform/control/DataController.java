@@ -66,4 +66,9 @@ public class DataController {
 
     }
 
+    @GetMapping("/list")
+    public ApiResponse<String> listDevices() {
+        return ApiResponse.fail(HttpStatus.BAD_REQUEST.value(), "暂未实现");
+    }
+
 }

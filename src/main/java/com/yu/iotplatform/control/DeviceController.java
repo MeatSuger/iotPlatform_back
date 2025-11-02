@@ -57,7 +57,7 @@ public class DeviceController {
     @GetMapping("/list")
     public ApiResponse<?> listDevices() {
         Long ownerId = StpUtil.getLoginIdAsLong();
-        List<Device> devices = deviceService.lambdaQuery().eq(Device::getOwnerId, ownerId).list();
+        List<Device> devices = deviceService.lambdaQuery().eq(Device::getOwnerId, ownerId).orderByDesc(Device::getId).list();
         return ApiResponse.success(devices);
     }
 
