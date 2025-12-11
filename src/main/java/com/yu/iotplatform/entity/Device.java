@@ -7,7 +7,7 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 @Data
-@TableName("`iot_device`")
+@TableName("\"iot_device\"")
 public class Device {
 
     @TableId(type = IdType.AUTO)

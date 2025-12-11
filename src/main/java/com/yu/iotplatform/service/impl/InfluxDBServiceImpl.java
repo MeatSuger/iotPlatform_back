@@ -28,10 +28,15 @@ public class InfluxDBServiceImpl implements InfluxDBService {
 
     @Resource
     private InfluxDBConfig influxDBConfig;
+    private final WriteApiBlocking writeApi;
+
+
+    public InfluxDBServiceImpl(InfluxDBClient influxDBClient) {
+        this.writeApi = influxDBClient.getWriteApiBlocking();
+    }
 
     @Override
     public void writeDeviceSensers(String deviceID, List<SensorData> sensers) {
-        WriteApiBlocking writeApi = influxDBClient.getWriteApiBlocking();
         List<Point> points = sensers.stream().map(sensorData -> {
             Point point = Point.measurement("device_sensors")
                     .addTag("deviceID", deviceID)

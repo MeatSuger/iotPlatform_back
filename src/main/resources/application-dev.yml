@@ -6,10 +6,10 @@ spring:
   application:
     name: IotPlatform
   datasource:
-    driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://47.99.74.160:3306/iotuser?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
-    username: yu_
-    password: yuhao1125
+    driver-class-name: org.postgresql.Driver
+    url: jdbc:postgresql://47.99.74.160:5432/iotuser
+    username: user_mBQFp4
+    password: password_5NREGY
   data:
     redis:
       database: 0
@@ -17,7 +17,7 @@ spring:
       # Redis 服务器端口
       port: 6379
       # Redis 服务器密码（若未设置密码，可省略）
-      password: redis_B5ZfSF
+      password: redis_DbbDB3
       # 连接超时时间（毫秒）
       timeout: 10s
       # Lettuce 连接池配置
@@ -33,9 +33,9 @@ spring:
           max-wait: -1ms
     influx:
       url: http://47.99.74.160:8086
-      token: 5q_l74YeDkDSCP8RD8TmquRfduzc-23uKQilcGs-A2686iFyxGgo7W3WwVJuxgGB69RbpstlLo7yNoJJwv7yeQ==
-      org: influxdb_NHn2Qm
-      bucket: influxdb_ans3DQ
+      token: gnEhyyrDN3li0yYcz1_pa0Hy3e63Ht19f9BXwHTuuNJ80SkM9yAlhNFgxpiYOGAY8mBsCXutxkYdY4hNA_lOmQ==
+      org: influxdb_yHi3BP
+      bucket: influxdb_a8C2pf
 sa-token:
   # token 名称（同时也是 cookie 名称）
   token-name: Authorization
@@ -54,4 +54,8 @@ sa-token:
 
 mybatis-plus:
   mapper-locations: classpath*:/mapper/*.xml
-
+#logging:
+#  level:
+#    root: debug
+#    web: debug
+#    sql: debug

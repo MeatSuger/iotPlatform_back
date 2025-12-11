@@ -1,5 +1,6 @@
 package com.yu.iotplatform.control;
 
+import cn.dev33.satoken.annotation.SaIgnore;
 import cn.dev33.satoken.stp.StpUtil;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -77,6 +78,15 @@ public class DeviceController {
         status.setStatus(device.getStatus());
 
         return ApiResponse.success(status);
+    }
+
+    //--获取设备token--
+    @GetMapping("/{deviceId}/token")
+    public ApiResponse<?> getDevicesToken(@PathVariable String deviceId) {
+        Device device = deviceService.getDeviceById(deviceId);
+        if (device == null) return ApiResponse.fail(404, "未找到设备");
+        if (!device.getOwnerId().equals(StpUtil.getLoginIdAsLong())) return ApiResponse.fail(404, "设备id未找到");
+        return ApiResponse.success(StpUtil.getTokenValue());
     }
 
     // ----------------- 删除设备 -----------------
