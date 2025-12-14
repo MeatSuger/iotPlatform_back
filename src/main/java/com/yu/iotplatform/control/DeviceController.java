@@ -103,5 +103,4 @@ public class DeviceController {
             return ApiResponse.fail(HttpStatus.BAD_REQUEST.value(), "删除目标不存在或错误");
         }
     }
-
 }
