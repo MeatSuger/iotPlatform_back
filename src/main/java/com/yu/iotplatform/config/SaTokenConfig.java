@@ -16,12 +16,21 @@ public class SaTokenConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
 
         registry.addInterceptor(new SaInterceptor(handle -> {
-            SaRouter.match("/**").notMatch("/user/login",
-                    "/user/register",
-                    "/device/register",
-                    "/device/login").check(r -> StpUtil.checkLogin());
-
-
+            SaRouter.match("/**")
+                    // 排除业务接口
+                    .notMatch("/user/login",
+                            "/user/register",
+                            "/device/register",
+                            "/device/login")
+                    // 排除 Swagger 3.0 相关全部资源 (注意路径开头的 / 和末尾的 /**)
+                    .notMatch(
+                            "/swagger-ui.html",
+                            "/swagger-ui/**",
+                            "/v3/api-docs/**",
+                            "/swagger-resources/**",
+                            "/webjars/**"
+                    )
+                    .check(r -> StpUtil.checkLogin());
         })).addPathPatterns("/**");
     }
 

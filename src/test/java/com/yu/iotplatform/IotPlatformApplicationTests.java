@@ -1,6 +1,6 @@
 package com.yu.iotplatform;
 
-import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson2.JSON;
 import com.yu.iotplatform.Util.RedisUtil;
 import com.yu.iotplatform.entity.SensorData;
 import com.yu.iotplatform.entity.User;
@@ -19,6 +19,7 @@ import org.springframework.util.DigestUtils;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -60,8 +61,8 @@ class IotPlatformApplicationTests {
     @Test
     void testListAll() {
         List<User> users = userService.list();
-        System.out.println("所有用户：" + JSON.toJSONString(users, true));
-//        Assertions.assertFalse(users.isEmpty());
+        System.out.println("所有用户：" + JSON.toJSONString(users, String.valueOf(true)));
+        Assertions.assertFalse(users.isEmpty());
     }
 
     /**
@@ -73,7 +74,7 @@ class IotPlatformApplicationTests {
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<User>()
                         .eq(User::getAccount, "iot_test")
         );
-        System.out.println("查询用户：" + JSON.toJSONString(user, true));
+        System.out.println("查询用户：" + JSON.toJSONString(user, String.valueOf(true)));
         Assertions.assertNotNull(user);
     }
 
@@ -99,13 +100,13 @@ class IotPlatformApplicationTests {
                 new SensorData() {{
                     setName("temperature");
                     setType("temp");
-                    setValue(26.4);
+                    setValue(Optional.of(26.4));
                     setTimestamp(LocalDateTime.now());
                 }},
                 new SensorData() {{
                     setName("humidity");
                     setType("humidy");
-                    setValue(75);
+                    setValue(Optional.of(75));
                     setTimestamp(LocalDateTime.now());
                 }}
         );
@@ -118,12 +119,12 @@ class IotPlatformApplicationTests {
         SensorData s1 = new SensorData();
         s1.setName("temp");
         s1.setType("temperature");
-        s1.setValue(25.3);
+        s1.setValue(Optional.of(25.3));
 
         SensorData s2 = new SensorData();
         s2.setName("humidity");
         s2.setType("humidity");
-        s2.setValue(60);
+        s2.setValue(Optional.of(60));
 
         List<SensorData> sensors = List.of(s1, s2);
         String deviceId = "TEST_DEVICE_001";

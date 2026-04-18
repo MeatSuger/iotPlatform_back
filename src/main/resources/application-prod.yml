@@ -2,3 +2,61 @@ server:
   servlet:
     context-path: /api
   port: 9090
+spring:
+  application:
+    name: IotPlatform
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    url: jdbc:postgresql://47.99.74.160:5432/iotuser
+    username: user_mBQFp4
+    password: password_5NREGY
+  data:
+    redis:
+      database: 0
+      host: 47.99.74.160
+      # Redis 服务器端口
+      port: 6379
+      # Redis 服务器密码（若未设置密码，可省略）
+      password: redis_DbbDB3
+      # 连接超时时间（毫秒）
+      timeout: 10s
+      # Lettuce 连接池配置
+      lettuce:
+        pool:
+          # 最大连接数
+          max-active: 200
+          # 最大空闲连接
+          max-idle: 8
+          # 最小空闲连接
+          min-idle: 2
+          # 最大等待时间（-1 表示无限制）
+          max-wait: -1ms
+    influx:
+      url: http://47.99.74.160:8086
+      token: edBQ1U5Vw21Yycg8_BIV2kET6X4-HW071OrYa26HnRhmi1PTeKwXVZ9esF0VIdy1wKn36-yS0Bv4uje6RT2Yfw==
+      org: influxdb_yHi3BP
+      bucket: influxdb_a8C2pf
+sa-token:
+  # token 名称（同时也是 cookie 名称）
+  token-name: Authorization
+  # token 有效期（单位：秒） 默认30天，-1 代表永久有效
+  timeout: 2592000
+  # token 最低活跃频率（单位：秒），如果 token 超过此时间没有访问系统就会被冻结，默认-1 代表不限制，永不冻结
+  active-timeout: -1
+  # 是否允许同一账号多地同时登录 （为 true 时允许一起登录, 为 false 时新登录挤掉旧登录）
+  is-concurrent: true
+  # 在多人登录同一账号时，是否共用一个 token （为 true 时所有登录共用一个 token, 为 false 时每次登录新建一个 token）
+  is-share: false
+  # token 风格（默认可取值：uuid、simple-uuid、random-32、random-64、random-128、tik）
+  token-style: uuid
+  # 是否输出操作日志
+  is-log: true
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/*.xml
+springdoc:
+  api-docs:
+    enabled: false
+    version: openapi_3_0
+  swagger-ui:
+    enabled: false

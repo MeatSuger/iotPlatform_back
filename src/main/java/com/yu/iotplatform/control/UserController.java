@@ -220,6 +220,17 @@ public class UserController {
             return ApiResponse.fail(403, "用户被封禁");
         }
 
+        // 如果当前请求已携带同账号有效 token，则直接复用，避免重复登录触发旧 token 注销
+        if (StpUtil.isLogin()) {
+            Object currentLoginId = StpUtil.getLoginIdDefaultNull();
+            if (currentLoginId != null && Objects.equals(String.valueOf(currentLoginId), String.valueOf(user.getId()))) {
+                SaTokenInfo tokenInfo = StpUtil.getTokenInfo();
+                return ApiResponse.success("登录成功", tokenInfo);
+            }
+            // 当前已登录但不是同一账号，先清理再登录目标账号
+            StpUtil.logout();
+        }
+
         StpUtil.login(user.getId());
         getHighestRole(user.getId());
         SaTokenInfo tokenInfo = StpUtil.getTokenInfo();
