@@ -14,6 +14,8 @@ public interface InfluxDBService {
 
     void writeDeviceSensers(String deviceID, List<SensorData> sensers);
 
+    void writeDeviceSensersAsync(String deviceID, List<SensorData> sensers);
+
     /**
      * 查询设备最近 N 条数据
      */

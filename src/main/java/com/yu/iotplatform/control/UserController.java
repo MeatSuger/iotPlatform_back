@@ -232,9 +232,19 @@ public class UserController {
         }
 
         StpUtil.login(user.getId());
-        getHighestRole(user.getId());
         SaTokenInfo tokenInfo = StpUtil.getTokenInfo();
         return ApiResponse.success("登录成功", tokenInfo);
+    }
+
+    /**
+     * @return 退出登录结果。
+     * @brief 当前用户退出登录。
+     */
+    @PostMapping("/logout")
+    @SaCheckLogin
+    public ApiResponse<String> logout() {
+        StpUtil.logout();
+        return ApiResponse.success("退出登录成功", null);
     }
 
     /**

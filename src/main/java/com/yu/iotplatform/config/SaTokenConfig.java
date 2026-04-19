@@ -21,7 +21,10 @@ public class SaTokenConfig implements WebMvcConfigurer {
                     .notMatch("/user/login",
                             "/user/register",
                             "/device/register",
-                            "/device/login")
+                            "/device/login",
+                            "/data/*/Data",
+                            "/data/*/ping",
+                            "/data/*/heartbeat")
                     // 排除 Swagger 3.0 相关全部资源 (注意路径开头的 / 和末尾的 /**)
                     .notMatch(
                             "/swagger-ui.html",

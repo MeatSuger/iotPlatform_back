@@ -11,6 +11,7 @@ import com.yu.iotplatform.entity.SensorData;
 import com.yu.iotplatform.service.InfluxDBService;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -56,6 +57,16 @@ public class InfluxDBServiceImpl implements InfluxDBService {
         }).toList();
         writeApi.writePoints(influxDBConfig.bucket, influxDBConfig.org, points);
         log.info("批量写入 InfluxDB: deviceId={}, 数量={}", deviceID, points.size());
+    }
+
+    @Async("iotTaskExecutor")
+    @Override
+    public void writeDeviceSensersAsync(String deviceID, List<SensorData> sensers) {
+        try {
+            writeDeviceSensers(deviceID, sensers);
+        } catch (Exception e) {
+            log.error("异步写入 InfluxDB 失败: deviceId={}, error={}", deviceID, e.getMessage(), e);
+        }
     }
 
     /**

@@ -1,9 +1,8 @@
 package com.yu.iotplatform.control;
 
 import cn.dev33.satoken.stp.StpUtil;
-import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.yu.iotplatform.Util.RedisUtil;
+import com.yu.iotplatform.Util.DeviceUtil;
 import com.yu.iotplatform.common.ApiResponse;
 import com.yu.iotplatform.entity.Device;
 import com.yu.iotplatform.entity.DeviceStatus;
@@ -12,7 +11,9 @@ import jakarta.annotation.Resource;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static com.yu.iotplatform.control.UserController.USER_STATUS_ACTIVE;
 
@@ -23,8 +24,8 @@ public class DeviceController {
     @Resource
     private DeviceService deviceService;
 
-    public static final String DEVICE_CACHE_KEY = "iot:device:";
-    public static final String DEVICE_STATUS_KEY = "iot:device:status:";
+    public static final String DEVICE_CACHE_KEY = DeviceUtil.DEVICE_CACHE_KEY_PREFIX;
+    public static final String DEVICE_STATUS_KEY = DeviceUtil.DEVICE_STATUS_KEY_PREFIX;
 
     // ----------------- 设备注册 -----------------
     @PostMapping("/register")
@@ -45,8 +46,13 @@ public class DeviceController {
         device.setOwnerId(StpUtil.getLoginIdAsLong());
         device.setStatus(USER_STATUS_ACTIVE);
         deviceService.save(device);
-        RedisUtil.StringOps.set(DEVICE_CACHE_KEY + device.getDeviceId(), JSON.toJSONString(device));
-        return ApiResponse.success(device);
+        DeviceUtil.cacheDevice(device);
+
+        String deviceToken = DeviceUtil.getOrCreateDeviceToken(device.getDeviceId());
+        Map<String, Object> result = new HashMap<>();
+        result.put("device", device);
+        result.put("deviceToken", deviceToken);
+        return ApiResponse.success("设备注册成功", result);
     }
 
 
@@ -64,14 +70,8 @@ public class DeviceController {
         Device device = deviceService.getDeviceById(deviceId);
         if (device == null) return ApiResponse.fail(404, "未找到设备");
 
-        String statusJson = RedisUtil.StringOps.get(DEVICE_STATUS_KEY + deviceId);
-        DeviceStatus status = statusJson == null ? new DeviceStatus() : JSON.parseObject(statusJson, DeviceStatus.class);
-
-        // 补充设备基本信息
-        status.setId(device.getId());
-        status.setDeviceId(device.getDeviceId());
-        status.setOwnerId(device.getOwnerId());
-        status.setStatus(device.getStatus());
+        DeviceStatus status = DeviceUtil.getCachedDeviceStatus(deviceId);
+        status = DeviceUtil.mergeDeviceWithStatus(device, status);
 
         return ApiResponse.success(status);
     }
@@ -82,16 +82,23 @@ public class DeviceController {
         Device device = deviceService.getDeviceById(deviceId);
         if (device == null) return ApiResponse.fail(404, "未找到设备");
         if (!device.getOwnerId().equals(StpUtil.getLoginIdAsLong())) return ApiResponse.fail(404, "设备id未找到");
-        return ApiResponse.success(StpUtil.getTokenValue());
+
+        String token = DeviceUtil.getOrCreateDeviceToken(deviceId);
+        Map<String, Object> result = new HashMap<>();
+        result.put("deviceId", deviceId);
+        result.put("deviceToken", token);
+        return ApiResponse.success(result);
     }
 
     // ----------------- 删除设备 -----------------
     @PostMapping("/{deviceId}/delete")
     public ApiResponse<?> deleteDevice(@PathVariable String deviceId) {
         boolean removed = deviceService.remove(new QueryWrapper<Device>().eq("device_id", deviceId));
-        // 删除 Redis 缓存
-        boolean cacheDeleted = RedisUtil.KeyOps.delete(DEVICE_CACHE_KEY + deviceId);
-        RedisUtil.StringOps.set(DEVICE_CACHE_KEY + deviceId, JSON.toJSONString(cacheDeleted));
+        // 删除 Redis 缓存（设备、状态、最近传感器）
+        boolean cacheDeleted = DeviceUtil.clearDeviceCache(deviceId);
+        DeviceUtil.clearDeviceStatusCache(deviceId);
+        DeviceUtil.clearRecentSensorCache(deviceId);
+        DeviceUtil.clearDeviceTokenCache(deviceId);
 
         if (removed && cacheDeleted) {
             return ApiResponse.success("删除成功");
