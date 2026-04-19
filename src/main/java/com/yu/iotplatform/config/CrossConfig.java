@@ -3,7 +3,6 @@ package com.yu.iotplatform.config;
 import cn.dev33.satoken.context.SaHolder;
 import cn.dev33.satoken.filter.SaServletFilter;
 import cn.dev33.satoken.router.SaRouter;
-import cn.dev33.satoken.util.SaResult;
 import com.yu.iotplatform.common.ApiResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

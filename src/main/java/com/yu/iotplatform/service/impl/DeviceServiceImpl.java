@@ -2,42 +2,39 @@ package com.yu.iotplatform.service.impl;
 
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.yu.iotplatform.Util.RedisUtil;
 import com.yu.iotplatform.entity.Device;
 import com.yu.iotplatform.mapper.DeviceMapper;
 import com.yu.iotplatform.service.DeviceService;
-import jakarta.annotation.Resource;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import static com.yu.iotplatform.control.DeviceController.DEVICE_CACHE_KEY;
 
 @Service
 public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> implements DeviceService {
 
-    @Resource
-    private RedisTemplate<String, Object> redisTemplate;
-
-
     @Override
     public Device getDeviceById(String deviceId) {
         String key = DEVICE_CACHE_KEY + deviceId;
 
         // 1. 从缓存读取
-        String cached = (String) redisTemplate.opsForValue().get(key);
+        String cached = RedisUtil.StringOps.get(key);
         if (cached != null) {
             return JSON.parseObject(cached, Device.class);
         }
 
-        // 2. 数据库读取
-        Device device = this.getById(deviceId);
+        // 2. 数据库读取（按 device_id 查询，避免把 String 传给主键 id）
+        Device device = this.lambdaQuery()
+            .eq(Device::getDeviceId, deviceId)
+            .one();
         if (device != null) {
             // 写回缓存，设置过期时间
-            redisTemplate.opsForValue().set(key, JSON.toJSONString(device), Duration.ofMinutes(10));
+            RedisUtil.StringOps.setEx(key, JSON.toJSONString(device), 10, TimeUnit.MINUTES);
         } else {
             // 数据库没找到 → 设备已删除，直接返回 null
             return null;

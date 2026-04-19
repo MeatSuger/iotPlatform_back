@@ -1,15 +1,14 @@
 package com.yu.iotplatform.control;
 
-import cn.dev33.satoken.annotation.SaIgnore;
 import cn.dev33.satoken.stp.StpUtil;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.yu.iotplatform.Util.RedisUtil;
 import com.yu.iotplatform.common.ApiResponse;
 import com.yu.iotplatform.entity.Device;
 import com.yu.iotplatform.entity.DeviceStatus;
 import com.yu.iotplatform.service.DeviceService;
 import jakarta.annotation.Resource;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
@@ -24,11 +23,8 @@ public class DeviceController {
     @Resource
     private DeviceService deviceService;
 
-    @Resource
-    private RedisTemplate<String, Object> redisTemplate;
-
     public static final String DEVICE_CACHE_KEY = "iot:device:";
-    private static final String DEVICE_STATUS_KEY = "iot:device:status:";
+    public static final String DEVICE_STATUS_KEY = "iot:device:status:";
 
     // ----------------- 设备注册 -----------------
     @PostMapping("/register")
@@ -49,7 +45,7 @@ public class DeviceController {
         device.setOwnerId(StpUtil.getLoginIdAsLong());
         device.setStatus(USER_STATUS_ACTIVE);
         deviceService.save(device);
-        redisTemplate.opsForValue().set(DEVICE_CACHE_KEY + device.getDeviceId(), JSON.toJSONString(device));
+        RedisUtil.StringOps.set(DEVICE_CACHE_KEY + device.getDeviceId(), JSON.toJSONString(device));
         return ApiResponse.success(device);
     }
 
@@ -68,7 +64,7 @@ public class DeviceController {
         Device device = deviceService.getDeviceById(deviceId);
         if (device == null) return ApiResponse.fail(404, "未找到设备");
 
-        String statusJson = (String) redisTemplate.opsForHash().get(DEVICE_CACHE_KEY, deviceId);
+        String statusJson = RedisUtil.StringOps.get(DEVICE_STATUS_KEY + deviceId);
         DeviceStatus status = statusJson == null ? new DeviceStatus() : JSON.parseObject(statusJson, DeviceStatus.class);
 
         // 补充设备基本信息
@@ -94,8 +90,8 @@ public class DeviceController {
     public ApiResponse<?> deleteDevice(@PathVariable String deviceId) {
         boolean removed = deviceService.remove(new QueryWrapper<Device>().eq("device_id", deviceId));
         // 删除 Redis 缓存
-        boolean cacheDeleted = redisTemplate.delete(DEVICE_CACHE_KEY + deviceId);
-        redisTemplate.opsForValue().set(DEVICE_CACHE_KEY + deviceId, JSON.toJSONString(cacheDeleted));
+        boolean cacheDeleted = RedisUtil.KeyOps.delete(DEVICE_CACHE_KEY + deviceId);
+        RedisUtil.StringOps.set(DEVICE_CACHE_KEY + deviceId, JSON.toJSONString(cacheDeleted));
 
         if (removed && cacheDeleted) {
             return ApiResponse.success("删除成功");

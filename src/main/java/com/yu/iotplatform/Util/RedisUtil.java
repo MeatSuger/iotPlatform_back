@@ -7,9 +7,6 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.data.redis.RedisSystemException;
 import org.springframework.data.redis.connection.DataType;
-import org.springframework.data.redis.connection.RedisConnection;
-import org.springframework.data.redis.connection.RedisStringCommands;
-import org.springframework.data.redis.connection.ReturnType;
 import org.springframework.data.redis.connection.jedis.JedisConnection;
 import org.springframework.data.redis.connection.lettuce.LettuceConnection;
 import org.springframework.data.redis.core.Cursor;
@@ -17,10 +14,9 @@ import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations.TypedTuple;
-import org.springframework.data.redis.core.types.Expiration;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
 import java.util.Map.Entry;
@@ -46,7 +42,6 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @Component
-@SuppressWarnings("unused")
 public class RedisUtil implements ApplicationContextAware {
 
     /** 使用StringRedisTemplate(，其是RedisTemplate的定制化升级) */
@@ -3101,12 +3096,7 @@ public class RedisUtil implements ApplicationContextAware {
                 log.info("getLock(...) => key -> {}, value -> {}, timeout -> {}, unit -> {}, recordLog -> {}",
                         key, value, timeout, unit, recordLog);
             }
-            Boolean result = redisTemplate.execute((RedisConnection connection) ->
-                    connection.set(key.getBytes(StandardCharsets.UTF_8),
-                            value.getBytes(StandardCharsets.UTF_8),
-                            Expiration.seconds(unit.toSeconds(timeout)),
-                            RedisStringCommands.SetOption.SET_IF_ABSENT)
-            );
+            Boolean result = redisTemplate.opsForValue().setIfAbsent(key, value, timeout, unit);
             if (recordLog) {
                 log.info("getLock(...) => result -> {}", result);
             }
@@ -3132,16 +3122,15 @@ public class RedisUtil implements ApplicationContextAware {
          */
         public static boolean releaseLock(final String key, final String value) {
             log.info("releaseLock(...) => key -> {}, lockValue -> {}", key, value);
-            Boolean result = redisTemplate.execute((RedisConnection connection) ->
-                    connection.eval(RELEASE_LOCK_LUA.getBytes(),
-                            ReturnType.BOOLEAN ,1,
-                            key.getBytes(StandardCharsets.UTF_8), value.getBytes(StandardCharsets.UTF_8))
-            );
+            DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+            script.setScriptText(RELEASE_LOCK_LUA);
+            script.setResultType(Long.class);
+            Long result = redisTemplate.execute(script, Collections.singletonList(key), value);
             log.info("releaseLock(...) => result -> {}", result);
             if (result == null) {
                 throw new RedisOpsResultIsNullException();
             }
-            return result;
+            return result == 1L;
         }
 
         /**

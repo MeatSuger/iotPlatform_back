@@ -4,7 +4,6 @@ import com.alibaba.fastjson2.JSON;
 import com.yu.iotplatform.Util.RedisUtil;
 import com.yu.iotplatform.entity.SensorData;
 import com.yu.iotplatform.entity.User;
-import com.yu.iotplatform.mapper.UserMapper;
 import com.yu.iotplatform.service.InfluxDBService;
 import com.yu.iotplatform.service.UserService;
 import jakarta.annotation.Resource;
@@ -12,7 +11,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.util.DigestUtils;
 
@@ -27,8 +25,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @SpringBootTest
 class IotPlatformApplicationTests {
 
-    @Autowired
-    private UserMapper userMapper;
+
     @Resource
     private UserService userService;
     @Resource
@@ -88,15 +85,12 @@ class IotPlatformApplicationTests {
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<User>()
                         .eq(User::getAccount, "iot_test")
         );
-        System.out.println("删除结果：" + removed);
         Assertions.assertTrue(removed);
     }
 
-    private List<SensorData> mockSensors;
-
     @BeforeEach
     void setUp() {
-        mockSensors = List.of(
+        List.of(
                 new SensorData() {{
                     setName("temperature");
                     setType("temp");
