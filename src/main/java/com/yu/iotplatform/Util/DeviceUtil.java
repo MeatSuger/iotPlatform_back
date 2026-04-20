@@ -1,6 +1,5 @@
 package com.yu.iotplatform.Util;
 
-import cn.dev33.satoken.exception.NotLoginException;
 import cn.dev33.satoken.stp.StpLogic;
 import com.alibaba.fastjson2.JSON;
 import com.yu.iotplatform.entity.Device;
@@ -136,21 +135,6 @@ public class DeviceUtil {
 		String normalizedDeviceId = normalizeDeviceId(deviceId);
 		DEVICE_STP.login(normalizedDeviceId);
 		return DEVICE_STP.getTokenValueByLoginId(normalizedDeviceId);
-	}
-
-	/**
-	 * 校验设备 token 是否合法且属于该 deviceId
-	 */
-	public static boolean validateDeviceToken(String deviceId, String token) {
-		if (deviceId == null || token == null || token.isBlank()) {
-			return false;
-		}
-		try {
-			Object loginId = DEVICE_STP.getLoginIdByToken(token);
-			return Objects.equals(normalizeDeviceId(deviceId), normalizeDeviceId(String.valueOf(loginId)));
-		} catch (NotLoginException e) {
-			return false;
-		}
 	}
 
 	/**

@@ -73,3 +73,18 @@ springdoc:
     version: openapi_3_0
   swagger-ui:
     enabled: true
+
+iot:
+  mqtt:
+    enabled: true
+    broker-url: tcp://127.0.0.1:1883
+    client-id: iot-platform-backend-dev
+    username: dev_mqtt_user
+    password: dev_mqtt_password
+    topics:
+      - iot/+/telemetry
+    qos: 1
+    clean-session: true
+    connection-timeout-seconds: 10
+    keep-alive-seconds: 60
+    reconnect-delay-seconds: 5

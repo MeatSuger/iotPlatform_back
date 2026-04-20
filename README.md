@@ -41,6 +41,20 @@ java -jar target\iotPlatform-0.0.1-SNAPSHOT.jar.original --spring.profiles.activ
 
 - 默认配置文件在 `src/main/resources/`
 - 若使用外部中间件，请在 `application.yml` 中填充连接信息（例如 `spring.data.redis`, `spring.datasource`, `mqtt`, `influx` 等键）
+- 上报接口支持直接 MQTT 风格路径：`/api/mqtt/{deviceId}/Data`，body 格式与原 HTTP 上报完全一致
+
+设备上报示例（HTTP/MQTT 共用 body 结构）
+
+```json
+{
+  "sensors": [
+    {"name": "temperature", "type": "number", "value": 25.5}
+  ]
+}
+```
+
+- `deviceId` 放在 URL 路径里，不再放在 body 里
+- `deviceToken` 放在 `Authorization` 或 `X-Device-Token` 请求头里
 
 测试
 

@@ -1,0 +1,19 @@
+services:
+  mqtt:
+    image: eclipse-mosquitto:2.0.20
+    container_name: mqtt
+    restart: unless-stopped
+    volumes:
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    networks:
+      - iot-net
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:
+
+networks:
+  iot-net:
+    name: iot-net
