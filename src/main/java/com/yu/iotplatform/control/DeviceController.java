@@ -6,7 +6,9 @@ import com.yu.iotplatform.Util.DeviceUtil;
 import com.yu.iotplatform.common.ApiResponse;
 import com.yu.iotplatform.entity.Device;
 import com.yu.iotplatform.entity.DeviceStatus;
+import com.yu.iotplatform.service.DeviceReportService;
 import com.yu.iotplatform.service.DeviceService;
+import com.yu.iotplatform.service.UserService;
 import jakarta.annotation.Resource;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -23,9 +25,10 @@ public class DeviceController {
 
     @Resource
     private DeviceService deviceService;
-
-    public static final String DEVICE_CACHE_KEY = DeviceUtil.DEVICE_CACHE_KEY_PREFIX;
-    public static final String DEVICE_STATUS_KEY = DeviceUtil.DEVICE_STATUS_KEY_PREFIX;
+    @Resource
+    private DeviceReportService deviceReportService;
+    @Resource
+    private UserService userService;
 
     // ----------------- 设备注册 -----------------
     @PostMapping("/register")
@@ -46,12 +49,12 @@ public class DeviceController {
         device.setOwnerId(StpUtil.getLoginIdAsLong());
         device.setStatus(USER_STATUS_ACTIVE);
         deviceService.save(device);
-        DeviceUtil.cacheDevice(device);
+        deviceService.cacheDevice(device);
 
-        String deviceToken = DeviceUtil.getOrCreateDeviceToken(device.getDeviceId());
+        DeviceUtil.getDeviceStp().login(device.getDeviceId());
         Map<String, Object> result = new HashMap<>();
         result.put("device", device);
-        result.put("deviceToken", deviceToken);
+        result.put("deviceToken", DeviceUtil.getDeviceStp().getTokenValue());
         return ApiResponse.success("设备注册成功", result);
     }
 
@@ -68,25 +71,26 @@ public class DeviceController {
     @GetMapping("/{deviceId}/Data")
     public ApiResponse<DeviceStatus> getDeviceDetail(@PathVariable String deviceId) {
         Device device = deviceService.getDeviceById(deviceId);
-        if (device == null) return ApiResponse.fail(404, "未找到设备");
+        if (device == null) return ApiResponse.fail(HttpStatus.NOT_FOUND.value(), "未找到设备");
 
-        DeviceStatus status = DeviceUtil.getCachedDeviceStatus(deviceId);
+        DeviceStatus status = deviceReportService.getDeviceStatus(deviceId);
         status = DeviceUtil.mergeDeviceWithStatus(device, status);
 
         return ApiResponse.success(status);
     }
 
     //--获取设备token--
-    @GetMapping("/{deviceId}/token")
+    @GetMapping("/{deviceId}/login")
     public ApiResponse<?> getDevicesToken(@PathVariable String deviceId) {
         Device device = deviceService.getDeviceById(deviceId);
-        if (device == null) return ApiResponse.fail(404, "未找到设备");
-        if (!device.getOwnerId().equals(StpUtil.getLoginIdAsLong())) return ApiResponse.fail(404, "设备id未找到");
+        if (device == null) return ApiResponse.fail(HttpStatus.NOT_FOUND.value(), "未找到设备");
+        if (!userService.isUserExist(device.getOwnerId()))
+            return ApiResponse.fail(HttpStatus.NOT_FOUND.value(), "设备id未找到或者未绑定到用户");
 
-        String token = DeviceUtil.getOrCreateDeviceToken(deviceId);
+        DeviceUtil.getDeviceStp().login(device.getDeviceId());
         Map<String, Object> result = new HashMap<>();
         result.put("deviceId", deviceId);
-        result.put("deviceToken", token);
+        result.put("deviceToken", DeviceUtil.getDeviceStp().getTokenValue());
         return ApiResponse.success(result);
     }
 
@@ -94,13 +98,12 @@ public class DeviceController {
     @PostMapping("/{deviceId}/delete")
     public ApiResponse<?> deleteDevice(@PathVariable String deviceId) {
         boolean removed = deviceService.remove(new QueryWrapper<Device>().eq("device_id", deviceId));
-        // 删除 Redis 缓存（设备、状态、最近传感器）
-        boolean cacheDeleted = DeviceUtil.clearDeviceCache(deviceId);
-        DeviceUtil.clearDeviceStatusCache(deviceId);
-        DeviceUtil.clearRecentSensorCache(deviceId);
-        DeviceUtil.clearDeviceTokenCache(deviceId);
+        deviceService.evictDeviceCache(deviceId);
+        deviceReportService.evictDeviceStatus(deviceId);
+        deviceReportService.evictSensorRecentCache(deviceId);
+        DeviceUtil.getDeviceStp().logout();
 
-        if (removed && cacheDeleted) {
+        if (removed) {
             return ApiResponse.success("删除成功");
         } else {
             return ApiResponse.fail(HttpStatus.BAD_REQUEST.value(), "删除目标不存在或错误");

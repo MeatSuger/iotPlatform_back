@@ -2,41 +2,41 @@ package com.yu.iotplatform.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yu.iotplatform.Util.DeviceUtil;
+import com.yu.iotplatform.config.CacheConfig;
 import com.yu.iotplatform.entity.Device;
 import com.yu.iotplatform.mapper.DeviceMapper;
 import com.yu.iotplatform.service.DeviceService;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 @Service
 public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> implements DeviceService {
 
     @Override
+    @Cacheable(value = CacheConfig.CACHE_DEVICE, key = "#deviceId" , unless = "#result == null")
     public Device getDeviceById(String deviceId) {
-        // 1. 从缓存读取
-        Device cached = DeviceUtil.getCachedDevice(deviceId);
-        if (cached != null) {
-            return cached;
-        }
-
-        // 2. 数据库读取（按 device_id 查询，避免把 String 传给主键 id）
-        Device device = this.lambdaQuery()
+        return this.lambdaQuery()
             .eq(Device::getDeviceId, deviceId)
             .one();
-        if (device != null) {
-            // 写回缓存，设置过期时间
-            DeviceUtil.cacheDevice(device);
-        } else {
-            // 数据库没找到 → 设备已删除，直接返回 null
-            return null;
-        }
-
-        return device;
     }
-
 
     @Override
     public String generateDeviceId() {
         return DeviceUtil.generateShortDeviceId();
     }
 
+    /**
+     * 注册后缓存设备
+     */
+    @CachePut(value = CacheConfig.CACHE_DEVICE, key = "#device.deviceId")
+    public void cacheDevice(Device device) {
+    }
+
+    /** 删除时清除设备缓存 */
+    @CacheEvict(value = CacheConfig.CACHE_DEVICE, key = "#deviceId")
+    public void evictDeviceCache(String deviceId) {
+        // 注解自动处理
+    }
 }

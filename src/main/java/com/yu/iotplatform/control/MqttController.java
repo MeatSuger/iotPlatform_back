@@ -11,14 +11,7 @@ import com.yu.iotplatform.service.DeviceReportService;
 import com.yu.iotplatform.service.MqttClientService;
 import jakarta.annotation.Resource;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
@@ -33,10 +26,11 @@ public class MqttController {
 
     @PostMapping("/{deviceId}/Data")
     public ApiResponse<String> reportStatus(@PathVariable String deviceId,
-                                            @RequestHeader(value = "Authorization", required = false) String authorization,
                                             @RequestHeader(value = "X-Device-Token", required = false) String deviceTokenHeader,
+                                            @CookieValue(value = "X-Device-Token", required = false) String deviceTokenCookie,
                                             @RequestBody DeviceStatusDTO statusDTO) {
-        return deviceReportService.reportStatus(deviceId, authorization, deviceTokenHeader, statusDTO);
+        String token = resolveToken(deviceTokenHeader, deviceTokenCookie);
+        return deviceReportService.reportStatus(deviceId, token, statusDTO);
     }
 
     /**
@@ -44,9 +38,21 @@ public class MqttController {
      */
     @PostMapping({"/{deviceId}/ping", "/{deviceId}/heartbeat"})
     public ApiResponse<?> heartbeat(@PathVariable String deviceId,
-                                    @RequestHeader(value = "Authorization", required = false) String authorization,
-                                    @RequestHeader(value = "X-Device-Token", required = false) String deviceTokenHeader) {
-        return deviceReportService.heartbeat(deviceId, authorization, deviceTokenHeader);
+                                    @RequestHeader(value = "X-Device-Token", required = false) String deviceTokenHeader,
+                                    @CookieValue(value = "X-Device-Token", required = false) String deviceTokenCookie) {
+        String token = resolveToken(deviceTokenHeader, deviceTokenCookie);
+        return deviceReportService.heartbeat(deviceId, token);
+    }
+
+    /** 合并 Header 和 Cookie 中的 Token，Header 优先 */
+    private String resolveToken(String headerToken, String cookieToken) {
+        if (headerToken != null && !headerToken.isBlank()) {
+            return headerToken.trim();
+        }
+        if (cookieToken != null && !cookieToken.isBlank()) {
+            return cookieToken.trim();
+        }
+        return null;
     }
 
     /**

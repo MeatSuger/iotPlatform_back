@@ -1,7 +1,7 @@
 package com.yu.iotplatform.service.impl;
 
 import com.alibaba.fastjson2.JSON;
-import com.yu.iotplatform.Util.RedisUtil;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import com.yu.iotplatform.entity.mqtt.MqttClientStatus;
 import com.yu.iotplatform.entity.mqtt.MqttMessageView;
 import com.yu.iotplatform.entity.mqtt.MqttPublishRequest;
@@ -79,13 +79,16 @@ public class MqttClientServiceImpl implements MqttClientService {
     private final Map<String, Integer> subscriptions = new ConcurrentHashMap<>();
     private final ConcurrentLinkedDeque<MqttMessageView> messageBuffer = new ConcurrentLinkedDeque<>();
     private final MqttPublishLogService mqttPublishLogService;
+    private final StringRedisTemplate stringRedisTemplate;
 
     private volatile MqttClient client;
     private volatile String activeBrokerUrl;
     private volatile String activeClientId;
 
-    public MqttClientServiceImpl(MqttPublishLogService mqttPublishLogService) {
+    public MqttClientServiceImpl(MqttPublishLogService mqttPublishLogService,
+                                 StringRedisTemplate stringRedisTemplate) {
         this.mqttPublishLogService = mqttPublishLogService;
+        this.stringRedisTemplate = stringRedisTemplate;
     }
 
     @Override
@@ -326,8 +329,8 @@ public class MqttClientServiceImpl implements MqttClientService {
         }
 
         try {
-            RedisUtil.ListOps.lRightPush(PUBLISH_HISTORY_KEY, JSON.toJSONString(logEntry));
-            RedisUtil.ListOps.lTrim(PUBLISH_HISTORY_KEY, -MAX_PUBLISH_HISTORY, -1);
+            stringRedisTemplate.opsForList().rightPush(PUBLISH_HISTORY_KEY, JSON.toJSONString(logEntry));
+            stringRedisTemplate.opsForList().trim(PUBLISH_HISTORY_KEY, -MAX_PUBLISH_HISTORY, -1);
         } catch (Exception e) {
             log.error("MQTT发布日志写入Redis失败: {}", e.getMessage(), e);
         }

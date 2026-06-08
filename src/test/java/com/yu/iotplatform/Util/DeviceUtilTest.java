@@ -37,13 +37,6 @@ class DeviceUtilTest {
     }
 
     @Test
-    void cacheKeyBuilders_shouldUseNormalizedDeviceId() {
-        assertEquals("iot:device:abc123", DeviceUtil.deviceCacheKey("  AbC123  "));
-        assertEquals("iot:device:status:abc123", DeviceUtil.deviceStatusKey("  AbC123  "));
-        assertEquals("iot:cache:sensor:recent:abc123:20", DeviceUtil.sensorRecentCacheKey("  AbC123  ", 20));
-    }
-
-    @Test
     void mergeDeviceWithStatus_shouldCreateWhenStatusNull() {
         Device device = new Device();
         device.setId(1L);

@@ -11,4 +11,11 @@ public interface UserService extends IService<User> {
         return this.getOne(new LambdaQueryWrapper<User>()
                 .eq(User::getAccount, account));
     }
+
+    default boolean isUserExist(Long uid) {
+        if (uid == null) {
+            return false;
+        };
+        return count(new LambdaQueryWrapper<User>().eq(User::getId, uid)) > 0;
+    }
 }

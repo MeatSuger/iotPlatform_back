@@ -1,7 +1,6 @@
 package com.yu.iotplatform;
 
 import com.alibaba.fastjson2.JSON;
-import com.yu.iotplatform.Util.RedisUtil;
 import com.yu.iotplatform.entity.SensorData;
 import com.yu.iotplatform.entity.User;
 import com.yu.iotplatform.service.InfluxDBService;
@@ -28,8 +27,6 @@ class IotPlatformApplicationTests {
 
     @Resource
     private UserService userService;
-    @Resource
-    private RedisUtil redisUtil;
 
     @Resource
     private InfluxDBService influxDBService;

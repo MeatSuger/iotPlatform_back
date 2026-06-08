@@ -6,11 +6,13 @@ import com.influxdb.client.domain.WritePrecision;
 import com.influxdb.client.write.Point;
 import com.influxdb.query.FluxRecord;
 import com.influxdb.query.FluxTable;
+import com.yu.iotplatform.config.CacheConfig;
 import com.yu.iotplatform.config.InfluxDBConfig;
 import com.yu.iotplatform.entity.SensorData;
 import com.yu.iotplatform.service.InfluxDBService;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -70,9 +72,10 @@ public class InfluxDBServiceImpl implements InfluxDBService {
     }
 
     /**
-     * ✅ 默认查询最近 N 条（近 7 天）
+     * 默认查询最近 N 条（近 7 天），结果缓存 30 秒
      */
     @Override
+    @Cacheable(value = CacheConfig.CACHE_SENSOR_RECENT, key = "#deviceID + ':' + #limit", unless = "#result.isEmpty()")
     public List<SensorData> queryRecentDeviceSensors(String deviceID, int limit) {
         return queryRecentDeviceSensors(deviceID, limit, LocalDateTime.now().minusDays(7));
     }
