@@ -1,11 +1,9 @@
 package com.yu.iotplatform.service.impl;
 
 import com.alibaba.fastjson2.JSON;
+import com.yu.iotplatform.entity.mqtt.*;
+import org.jspecify.annotations.NonNull;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import com.yu.iotplatform.entity.mqtt.MqttClientStatus;
-import com.yu.iotplatform.entity.mqtt.MqttMessageView;
-import com.yu.iotplatform.entity.mqtt.MqttPublishRequest;
-import com.yu.iotplatform.entity.mqtt.MqttSubscribeRequest;
 import com.yu.iotplatform.entity.MqttPublishLog;
 import com.yu.iotplatform.service.MqttClientService;
 import com.yu.iotplatform.service.MqttPublishLogService;
@@ -19,6 +17,7 @@ import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -114,34 +113,7 @@ public class MqttClientServiceImpl implements MqttClientService {
         try {
             closeCurrentClient();
 
-            MqttClient newClient = new MqttClient(brokerUrl, clientId, new MemoryPersistence());
-            newClient.setCallback(new MqttCallback() {
-                @Override
-                public void connectionLost(Throwable cause) {
-                    log.warn("MQTT连接断开: {}", cause == null ? "unknown" : cause.getMessage());
-                }
-
-                @Override
-                public void messageArrived(String topic, MqttMessage message) {
-                    MqttMessageView view = MqttMessageView.builder()
-                            .topic(topic)
-                            .payload(new String(message.getPayload(), StandardCharsets.UTF_8))
-                            .qos(message.getQos())
-                            .retained(message.isRetained())
-                            .duplicate(message.isDuplicate())
-                            .receivedAt(LocalDateTime.now())
-                            .build();
-                    messageBuffer.addLast(view);
-                    while (messageBuffer.size() > MAX_BUFFERED_MESSAGES) {
-                        messageBuffer.pollFirst();
-                    }
-                }
-
-                @Override
-                public void deliveryComplete(IMqttDeliveryToken token) {
-                    // 发布完成回调，可按需扩展
-                }
-            });
+            MqttClient newClient = getMqttClient(brokerUrl, clientId);
 
             MqttConnectOptions options = new MqttConnectOptions();
             options.setCleanSession(cleanSession);
@@ -173,6 +145,41 @@ public class MqttClientServiceImpl implements MqttClientService {
         } catch (MqttException e) {
             throw new IllegalStateException("MQTT连接失败: " + e.getMessage(), e);
         }
+    }
+
+    private @NonNull MqttClient getMqttClient(String brokerUrl, String clientId) throws MqttException {
+        MqttClient newClient = new MqttClient(brokerUrl, clientId, new MemoryPersistence());
+        newClient.setCallback(new MqttCallback() {
+            @Override
+            public void connectionLost(Throwable cause) {
+                log.warn("MQTT连接断开: {}", cause == null ? "unknown" : cause.getMessage());
+            }
+
+            @Override
+            public void messageArrived(String topic, MqttMessage message) {
+                MqttMessageView view = MqttMessageView.builder()
+                        .topic(topic)
+                        .payload(new String(message.getPayload(), StandardCharsets.UTF_8))
+                        .qos(message.getQos())
+                        .retained(message.isRetained())
+                        .duplicate(message.isDuplicate())
+                        .receivedAt(LocalDateTime.now())
+                        .build();
+                messageBuffer.addLast(view);
+                while (messageBuffer.size() > MAX_BUFFERED_MESSAGES) {
+                    messageBuffer.pollFirst();
+                }
+                String json = JSON.toJSONString(view);
+                Mqtt2WebSocket.broadcast(json);
+            }
+
+            @Override
+            public void deliveryComplete(IMqttDeliveryToken token) {
+                // 发布完成回调，可按需扩展
+                log.info("发布完成");
+            }
+        });
+        return newClient;
     }
 
     @Override

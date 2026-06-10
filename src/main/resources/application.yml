@@ -1,11 +1,4 @@
 spring:
   profiles:
-    active: dev
+    active: prod
 
-iot:
-  mqtt:
-    enabled: false
-    broker-url: tcp://127.0.0.1:1883
-    client-id: iot-platform-backend
-    default-topic: iot/+/telemetry
-    qos: 1
