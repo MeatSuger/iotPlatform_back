@@ -9,20 +9,20 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class InfluxDBConfig {
 
-    @Value("${spring.data.influx.url}")
-    public String influxUrl;
+	@Value("${spring.data.influx.url}")
+	public String influxUrl;
 
-    @Value("${spring.data.influx.token}")
-    public String token;
+	@Value("${spring.data.influx.token}")
+	public String token;
 
-    @Value("${spring.data.influx.org}")
-    public String org;
+	@Value("${spring.data.influx.org}")
+	public String org;
 
-    @Value("${spring.data.influx.bucket}")
-    public String bucket;
+	@Value("${spring.data.influx.bucket}")
+	public String bucket;
 
-    @Bean
-    public InfluxDBClient influxDBClient() {
-        return InfluxDBClientFactory.create(influxUrl, token.toCharArray(), org, bucket);
-    }
+	@Bean
+	public InfluxDBClient influxDBClient() {
+		return InfluxDBClientFactory.create(influxUrl, token.toCharArray(), org, bucket);
+	}
 }

@@ -17,19 +17,21 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 public class GlobalExceptionHandler {
 
 
-    /**
-     * 没有权限拦截类
-     * @param e
-     * @return
-     */
-    @ExceptionHandler(NotPermissionException.class)
-    public ApiResponse<String> notPermissionExceptionHandler(NotPermissionException e) {
-        SaHolder.getResponse().setStatus(HttpStatus.FORBIDDEN.value());
-        return ApiResponse.fail(HttpStatus.BAD_REQUEST.value(),  e.getMessage());
-    }
-    @ExceptionHandler(NotLoginException.class)
-    public ApiResponse<String> notLoginExceptionHandler(NotLoginException e) {
-        SaHolder.getResponse().setStatus(HttpStatus.UNAUTHORIZED.value());
-        return ApiResponse.fail(HttpStatus.UNAUTHORIZED.value(),  e.getMessage());
-    }
+	/**
+	 * 没有权限拦截类
+	 *
+	 * @param e
+	 * @return
+	 */
+	@ExceptionHandler(NotPermissionException.class)
+	public ApiResponse<String> notPermissionExceptionHandler(NotPermissionException e) {
+		SaHolder.getResponse().setStatus(HttpStatus.FORBIDDEN.value());
+		return ApiResponse.fail(HttpStatus.BAD_REQUEST.value(), e.getMessage());
+	}
+
+	@ExceptionHandler(NotLoginException.class)
+	public ApiResponse<String> notLoginExceptionHandler(NotLoginException e) {
+		SaHolder.getResponse().setStatus(HttpStatus.UNAUTHORIZED.value());
+		return ApiResponse.fail(HttpStatus.UNAUTHORIZED.value(), e.getMessage());
+	}
 }

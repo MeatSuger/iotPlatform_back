@@ -12,9 +12,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/index")
 public class IotPlatformApplication {
 
-    public static void main(String[] args) {
-        SpringApplication.run(IotPlatformApplication.class, args);
-    }
+	public static void main(String[] args) {
+		SpringApplication.run(IotPlatformApplication.class, args);
+	}
 
 //
 //    /***

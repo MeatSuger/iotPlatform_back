@@ -1,33 +1,23 @@
 package com.yu.iotplatform.service.impl;
 
 import com.alibaba.fastjson2.JSON;
-import com.yu.iotplatform.entity.mqtt.*;
-import org.jspecify.annotations.NonNull;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import com.yu.iotplatform.entity.MqttPublishLog;
+import com.yu.iotplatform.entity.mqtt.*;
 import com.yu.iotplatform.service.MqttClientService;
 import com.yu.iotplatform.service.MqttPublishLogService;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
-import org.eclipse.paho.client.mqttv3.MqttCallback;
-import org.eclipse.paho.client.mqttv3.MqttClient;
-import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
-import org.eclipse.paho.client.mqttv3.MqttException;
-import org.eclipse.paho.client.mqttv3.MqttMessage;
+import org.eclipse.paho.client.mqttv3.*;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
+import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
@@ -35,311 +25,297 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 @Service
 public class MqttClientServiceImpl implements MqttClientService {
 
-    private static final int MAX_BUFFERED_MESSAGES = 500;
-    private static final int MAX_PUBLISH_HISTORY = 500;
-    private static final String PUBLISH_HISTORY_KEY = "iot:mqtt:publish:messages";
+	private static final int MAX_BUFFERED_MESSAGES = 500;
+	private static final int MAX_PUBLISH_HISTORY = 500;
+	private static final String PUBLISH_HISTORY_KEY = "iot:mqtt:publish:messages";
+	private final Map<String, Integer> subscriptions = new ConcurrentHashMap<>();
+	private final ConcurrentLinkedDeque<MqttMessageView> messageBuffer = new ConcurrentLinkedDeque<>();
+	private final MqttPublishLogService mqttPublishLogService;
+	private final StringRedisTemplate stringRedisTemplate;
+	@Value("${iot.mqtt.broker-url:}")
+	private String defaultBrokerUrl;
+	@Value("${iot.mqtt.client-id:iot-platform-backend}")
+	private String defaultClientId;
+	@Value("${iot.mqtt.username:}")
+	private String defaultUsername;
+	@Value("${iot.mqtt.password:}")
+	private String defaultPassword;
+	@Value("${iot.mqtt.clean-session:true}")
+	private boolean defaultCleanSession;
+	@Value("${iot.mqtt.keep-alive-seconds:60}")
+	private int defaultKeepAliveSeconds;
+	@Value("${iot.mqtt.connection-timeout-seconds:10}")
+	private int defaultConnectionTimeoutSeconds;
+	@Value("${iot.mqtt.automatic-reconnect:true}")
+	private boolean defaultAutomaticReconnect;
+	@Value("${iot.mqtt.will-topic:}")
+	private String defaultWillTopic;
+	@Value("${iot.mqtt.will-payload:}")
+	private String defaultWillPayload;
+	@Value("${iot.mqtt.will-qos:0}")
+	private int defaultWillQos;
+	@Value("${iot.mqtt.will-retained:false}")
+	private boolean defaultWillRetained;
+	private volatile MqttClient client;
+	private volatile String activeBrokerUrl;
+	private volatile String activeClientId;
 
-    @Value("${iot.mqtt.broker-url:}")
-    private String defaultBrokerUrl;
+	public MqttClientServiceImpl(MqttPublishLogService mqttPublishLogService,
+								 StringRedisTemplate stringRedisTemplate) {
+		this.mqttPublishLogService = mqttPublishLogService;
+		this.stringRedisTemplate = stringRedisTemplate;
+	}
 
-    @Value("${iot.mqtt.client-id:iot-platform-backend}")
-    private String defaultClientId;
+	@Override
+	public synchronized MqttClientStatus connect() {
+		String brokerUrl = trimToNull(defaultBrokerUrl);
+		if (!StringUtils.hasText(brokerUrl)) {
+			throw new IllegalArgumentException("brokerUrl不能为空");
+		}
 
-    @Value("${iot.mqtt.username:}")
-    private String defaultUsername;
+		String clientId = trimToNull(defaultClientId);
+		if (!StringUtils.hasText(clientId)) {
+			clientId = "iot-platform-" + UUID.randomUUID();
+		}
 
-    @Value("${iot.mqtt.password:}")
-    private String defaultPassword;
+		String username = trimToNull(defaultUsername);
+		String password = trimToNull(defaultPassword);
 
-    @Value("${iot.mqtt.clean-session:true}")
-    private boolean defaultCleanSession;
+		boolean cleanSession = defaultCleanSession;
+		int keepAliveSeconds = Math.max(1, defaultKeepAliveSeconds);
+		int connectionTimeoutSeconds = Math.max(1, defaultConnectionTimeoutSeconds);
+		boolean automaticReconnect = defaultAutomaticReconnect;
 
-    @Value("${iot.mqtt.keep-alive-seconds:60}")
-    private int defaultKeepAliveSeconds;
+		try {
+			closeCurrentClient();
 
-    @Value("${iot.mqtt.connection-timeout-seconds:10}")
-    private int defaultConnectionTimeoutSeconds;
+			MqttClient newClient = getMqttClient(brokerUrl, clientId);
 
-    @Value("${iot.mqtt.automatic-reconnect:true}")
-    private boolean defaultAutomaticReconnect;
+			MqttConnectOptions options = new MqttConnectOptions();
+			options.setCleanSession(cleanSession);
+			options.setKeepAliveInterval(keepAliveSeconds);
+			options.setConnectionTimeout(connectionTimeoutSeconds);
+			options.setAutomaticReconnect(automaticReconnect);
 
-    @Value("${iot.mqtt.will-topic:}")
-    private String defaultWillTopic;
+			if (StringUtils.hasText(username)) {
+				options.setUserName(username);
+			}
+			if (StringUtils.hasText(password)) {
+				options.setPassword(password.toCharArray());
+			}
 
-    @Value("${iot.mqtt.will-payload:}")
-    private String defaultWillPayload;
+			applyWillOption(options);
 
-    @Value("${iot.mqtt.will-qos:0}")
-    private int defaultWillQos;
+			newClient.connect(options);
+			this.client = newClient;
+			this.activeBrokerUrl = brokerUrl;
+			this.activeClientId = clientId;
 
-    @Value("${iot.mqtt.will-retained:false}")
-    private boolean defaultWillRetained;
+			if (!subscriptions.isEmpty()) {
+				for (Map.Entry<String, Integer> entry : subscriptions.entrySet()) {
+					newClient.subscribe(entry.getKey(), entry.getValue());
+				}
+			}
 
-    private final Map<String, Integer> subscriptions = new ConcurrentHashMap<>();
-    private final ConcurrentLinkedDeque<MqttMessageView> messageBuffer = new ConcurrentLinkedDeque<>();
-    private final MqttPublishLogService mqttPublishLogService;
-    private final StringRedisTemplate stringRedisTemplate;
+			return status();
+		} catch (MqttException e) {
+			throw new IllegalStateException("MQTT连接失败: " + e.getMessage(), e);
+		}
+	}
 
-    private volatile MqttClient client;
-    private volatile String activeBrokerUrl;
-    private volatile String activeClientId;
+	private @NonNull MqttClient getMqttClient(String brokerUrl, String clientId) throws MqttException {
+		MqttClient newClient = new MqttClient(brokerUrl, clientId, new MemoryPersistence());
+		newClient.setCallback(new MqttCallback() {
+			@Override
+			public void connectionLost(Throwable cause) {
+				log.warn("MQTT连接断开: {}", cause == null ? "unknown" : cause.getMessage());
+			}
 
-    public MqttClientServiceImpl(MqttPublishLogService mqttPublishLogService,
-                                 StringRedisTemplate stringRedisTemplate) {
-        this.mqttPublishLogService = mqttPublishLogService;
-        this.stringRedisTemplate = stringRedisTemplate;
-    }
+			@Override
+			public void messageArrived(String topic, MqttMessage message) {
+				MqttMessageView view = MqttMessageView.builder()
+						.topic(topic)
+						.payload(new String(message.getPayload(), StandardCharsets.UTF_8))
+						.qos(message.getQos())
+						.retained(message.isRetained())
+						.duplicate(message.isDuplicate())
+						.receivedAt(LocalDateTime.now())
+						.build();
+				messageBuffer.addLast(view);
+				while (messageBuffer.size() > MAX_BUFFERED_MESSAGES) {
+					messageBuffer.pollFirst();
+				}
+				String json = JSON.toJSONString(view);
+				Mqtt2WebSocket.broadcast(json);
+			}
 
-    @Override
-    public synchronized MqttClientStatus connect() {
-        String brokerUrl = trimToNull(defaultBrokerUrl);
-        if (!StringUtils.hasText(brokerUrl)) {
-            throw new IllegalArgumentException("brokerUrl不能为空");
-        }
+			@Override
+			public void deliveryComplete(IMqttDeliveryToken token) {
+				// 发布完成回调，可按需扩展
+				log.info("发布完成");
+			}
+		});
+		return newClient;
+	}
 
-        String clientId = trimToNull(defaultClientId);
-        if (!StringUtils.hasText(clientId)) {
-            clientId = "iot-platform-" + UUID.randomUUID();
-        }
+	@Override
+	public synchronized MqttClientStatus disconnect() {
+		closeCurrentClient();
+		return status();
+	}
 
-        String username = trimToNull(defaultUsername);
-        String password = trimToNull(defaultPassword);
+	@Override
+	public synchronized MqttClientStatus subscribe(MqttSubscribeRequest request) {
+		ensureConnected();
+		if (request == null || !StringUtils.hasText(request.getTopic())) {
+			throw new IllegalArgumentException("订阅topic不能为空");
+		}
+		int qos = normalizeQos(request.getQos());
+		try {
+			client.subscribe(request.getTopic(), qos);
+			subscriptions.put(request.getTopic(), qos);
+			return status();
+		} catch (MqttException e) {
+			throw new IllegalStateException("订阅失败: " + e.getMessage(), e);
+		}
+	}
 
-        boolean cleanSession = defaultCleanSession;
-        int keepAliveSeconds = Math.max(1, defaultKeepAliveSeconds);
-        int connectionTimeoutSeconds = Math.max(1, defaultConnectionTimeoutSeconds);
-        boolean automaticReconnect = defaultAutomaticReconnect;
+	@Override
+	public synchronized MqttClientStatus unsubscribe(String topic) {
+		ensureConnected();
+		if (!StringUtils.hasText(topic)) {
+			throw new IllegalArgumentException("取消订阅topic不能为空");
+		}
+		try {
+			client.unsubscribe(topic);
+			subscriptions.remove(topic);
+			return status();
+		} catch (MqttException e) {
+			throw new IllegalStateException("取消订阅失败: " + e.getMessage(), e);
+		}
+	}
 
-        try {
-            closeCurrentClient();
+	@Override
+	public synchronized void publish(MqttPublishRequest request) {
+		ensureConnected();
+		if (request == null || !StringUtils.hasText(request.getTopic())) {
+			throw new IllegalArgumentException("发布topic不能为空");
+		}
+		try {
+			String payload = request.getPayload() == null ? "" : request.getPayload();
+			int qos = normalizeQos(request.getQos());
+			boolean retained = request.getRetained() != null && request.getRetained();
 
-            MqttClient newClient = getMqttClient(brokerUrl, clientId);
+			MqttMessage message = new MqttMessage();
+			message.setPayload(payload.getBytes(StandardCharsets.UTF_8));
+			message.setQos(qos);
+			message.setRetained(retained);
+			client.publish(request.getTopic(), message);
 
-            MqttConnectOptions options = new MqttConnectOptions();
-            options.setCleanSession(cleanSession);
-            options.setKeepAliveInterval(keepAliveSeconds);
-            options.setConnectionTimeout(connectionTimeoutSeconds);
-            options.setAutomaticReconnect(automaticReconnect);
+			persistPublishedMessage(request.getTopic(), payload, qos, retained);
+		} catch (MqttException e) {
+			throw new IllegalStateException("发布失败: " + e.getMessage(), e);
+		}
+	}
 
-            if (StringUtils.hasText(username)) {
-                options.setUserName(username);
-            }
-            if (StringUtils.hasText(password)) {
-                options.setPassword(password.toCharArray());
-            }
+	@Override
+	public MqttClientStatus status() {
+		return MqttClientStatus.builder()
+				.connected(client != null && client.isConnected())
+				.brokerUrl(activeBrokerUrl)
+				.clientId(activeClientId)
+				.subscriptions(new LinkedHashMap<>(subscriptions))
+				.bufferedMessages(messageBuffer.size())
+				.build();
+	}
 
-            applyWillOption(options);
+	@Override
+	public List<MqttMessageView> recentMessages(int limit) {
+		int size = Math.max(1, Math.min(limit, MAX_BUFFERED_MESSAGES));
+		List<MqttMessageView> snapshot = new ArrayList<>(messageBuffer);
+		if (snapshot.size() <= size) {
+			return snapshot;
+		}
+		return snapshot.subList(snapshot.size() - size, snapshot.size());
+	}
 
-            newClient.connect(options);
-            this.client = newClient;
-            this.activeBrokerUrl = brokerUrl;
-            this.activeClientId = clientId;
+	@PreDestroy
+	public synchronized void shutdown() {
+		closeCurrentClient();
+	}
 
-            if (!subscriptions.isEmpty()) {
-                for (Map.Entry<String, Integer> entry : subscriptions.entrySet()) {
-                    newClient.subscribe(entry.getKey(), entry.getValue());
-                }
-            }
+	private void ensureConnected() {
+		if (client == null || !client.isConnected()) {
+			throw new IllegalStateException("MQTT客户端未连接");
+		}
+	}
 
-            return status();
-        } catch (MqttException e) {
-            throw new IllegalStateException("MQTT连接失败: " + e.getMessage(), e);
-        }
-    }
+	private void closeCurrentClient() {
+		if (client == null) {
+			return;
+		}
+		try {
+			if (client.isConnected()) {
+				client.disconnect();
+			}
+			client.close();
+		} catch (MqttException e) {
+			log.warn("关闭MQTT客户端失败: {}", e.getMessage());
+		} finally {
+			client = null;
+			activeBrokerUrl = null;
+			activeClientId = null;
+		}
+	}
 
-    private @NonNull MqttClient getMqttClient(String brokerUrl, String clientId) throws MqttException {
-        MqttClient newClient = new MqttClient(brokerUrl, clientId, new MemoryPersistence());
-        newClient.setCallback(new MqttCallback() {
-            @Override
-            public void connectionLost(Throwable cause) {
-                log.warn("MQTT连接断开: {}", cause == null ? "unknown" : cause.getMessage());
-            }
+	private void applyWillOption(MqttConnectOptions options) {
+		String willTopic = trimToNull(defaultWillTopic);
+		if (!StringUtils.hasText(willTopic)) {
+			return;
+		}
+		int willQos = normalizeQos(defaultWillQos);
+		byte[] willPayload = (defaultWillPayload == null ? "" : defaultWillPayload).getBytes(StandardCharsets.UTF_8);
+		options.setWill(willTopic, willPayload, willQos, defaultWillRetained);
+	}
 
-            @Override
-            public void messageArrived(String topic, MqttMessage message) {
-                MqttMessageView view = MqttMessageView.builder()
-                        .topic(topic)
-                        .payload(new String(message.getPayload(), StandardCharsets.UTF_8))
-                        .qos(message.getQos())
-                        .retained(message.isRetained())
-                        .duplicate(message.isDuplicate())
-                        .receivedAt(LocalDateTime.now())
-                        .build();
-                messageBuffer.addLast(view);
-                while (messageBuffer.size() > MAX_BUFFERED_MESSAGES) {
-                    messageBuffer.pollFirst();
-                }
-                String json = JSON.toJSONString(view);
-                Mqtt2WebSocket.broadcast(json);
-            }
+	private int normalizeQos(Integer qos) {
+		if (qos == null) {
+			return 0;
+		}
+		if (qos < 0 || qos > 2) {
+			throw new IllegalArgumentException("QoS 只能是 0/1/2");
+		}
+		return qos;
+	}
 
-            @Override
-            public void deliveryComplete(IMqttDeliveryToken token) {
-                // 发布完成回调，可按需扩展
-                log.info("发布完成");
-            }
-        });
-        return newClient;
-    }
+	private String trimToNull(String value) {
+		if (!StringUtils.hasText(value)) {
+			return null;
+		}
+		return value.trim();
+	}
 
-    @Override
-    public synchronized MqttClientStatus disconnect() {
-        closeCurrentClient();
-        return status();
-    }
+	private void persistPublishedMessage(String topic, String payload, int qos, boolean retained) {
+		MqttPublishLog logEntry = new MqttPublishLog();
+		logEntry.setTopic(topic);
+		logEntry.setPayload(payload);
+		logEntry.setQos(qos);
+		logEntry.setRetained(retained);
+		logEntry.setClientId(activeClientId);
+		logEntry.setBrokerUrl(activeBrokerUrl);
+		logEntry.setCreateTime(LocalDateTime.now());
 
-    @Override
-    public synchronized MqttClientStatus subscribe(MqttSubscribeRequest request) {
-        ensureConnected();
-        if (request == null || !StringUtils.hasText(request.getTopic())) {
-            throw new IllegalArgumentException("订阅topic不能为空");
-        }
-        int qos = normalizeQos(request.getQos());
-        try {
-            client.subscribe(request.getTopic(), qos);
-            subscriptions.put(request.getTopic(), qos);
-            return status();
-        } catch (MqttException e) {
-            throw new IllegalStateException("订阅失败: " + e.getMessage(), e);
-        }
-    }
+		try {
+			mqttPublishLogService.save(logEntry);
+		} catch (Exception e) {
+			log.error("MQTT发布日志写入数据库失败: {}", e.getMessage(), e);
+		}
 
-    @Override
-    public synchronized MqttClientStatus unsubscribe(String topic) {
-        ensureConnected();
-        if (!StringUtils.hasText(topic)) {
-            throw new IllegalArgumentException("取消订阅topic不能为空");
-        }
-        try {
-            client.unsubscribe(topic);
-            subscriptions.remove(topic);
-            return status();
-        } catch (MqttException e) {
-            throw new IllegalStateException("取消订阅失败: " + e.getMessage(), e);
-        }
-    }
-
-    @Override
-    public synchronized void publish(MqttPublishRequest request) {
-        ensureConnected();
-        if (request == null || !StringUtils.hasText(request.getTopic())) {
-            throw new IllegalArgumentException("发布topic不能为空");
-        }
-        try {
-            String payload = request.getPayload() == null ? "" : request.getPayload();
-            int qos = normalizeQos(request.getQos());
-            boolean retained = request.getRetained() != null && request.getRetained();
-
-            MqttMessage message = new MqttMessage();
-            message.setPayload(payload.getBytes(StandardCharsets.UTF_8));
-            message.setQos(qos);
-            message.setRetained(retained);
-            client.publish(request.getTopic(), message);
-
-            persistPublishedMessage(request.getTopic(), payload, qos, retained);
-        } catch (MqttException e) {
-            throw new IllegalStateException("发布失败: " + e.getMessage(), e);
-        }
-    }
-
-    @Override
-    public MqttClientStatus status() {
-        return MqttClientStatus.builder()
-                .connected(client != null && client.isConnected())
-                .brokerUrl(activeBrokerUrl)
-                .clientId(activeClientId)
-                .subscriptions(new LinkedHashMap<>(subscriptions))
-                .bufferedMessages(messageBuffer.size())
-                .build();
-    }
-
-    @Override
-    public List<MqttMessageView> recentMessages(int limit) {
-        int size = Math.max(1, Math.min(limit, MAX_BUFFERED_MESSAGES));
-        List<MqttMessageView> snapshot = new ArrayList<>(messageBuffer);
-        if (snapshot.size() <= size) {
-            return snapshot;
-        }
-        return snapshot.subList(snapshot.size() - size, snapshot.size());
-    }
-
-    @PreDestroy
-    public synchronized void shutdown() {
-        closeCurrentClient();
-    }
-
-    private void ensureConnected() {
-        if (client == null || !client.isConnected()) {
-            throw new IllegalStateException("MQTT客户端未连接");
-        }
-    }
-
-    private void closeCurrentClient() {
-        if (client == null) {
-            return;
-        }
-        try {
-            if (client.isConnected()) {
-                client.disconnect();
-            }
-            client.close();
-        } catch (MqttException e) {
-            log.warn("关闭MQTT客户端失败: {}", e.getMessage());
-        } finally {
-            client = null;
-            activeBrokerUrl = null;
-            activeClientId = null;
-        }
-    }
-
-    private void applyWillOption(MqttConnectOptions options) {
-        String willTopic = trimToNull(defaultWillTopic);
-        if (!StringUtils.hasText(willTopic)) {
-            return;
-        }
-        int willQos = normalizeQos(defaultWillQos);
-        byte[] willPayload = (defaultWillPayload == null ? "" : defaultWillPayload).getBytes(StandardCharsets.UTF_8);
-        options.setWill(willTopic, willPayload, willQos, defaultWillRetained);
-    }
-
-    private int normalizeQos(Integer qos) {
-        if (qos == null) {
-            return 0;
-        }
-        if (qos < 0 || qos > 2) {
-            throw new IllegalArgumentException("QoS 只能是 0/1/2");
-        }
-        return qos;
-    }
-
-    private String trimToNull(String value) {
-        if (!StringUtils.hasText(value)) {
-            return null;
-        }
-        return value.trim();
-    }
-
-    private void persistPublishedMessage(String topic, String payload, int qos, boolean retained) {
-        MqttPublishLog logEntry = new MqttPublishLog();
-        logEntry.setTopic(topic);
-        logEntry.setPayload(payload);
-        logEntry.setQos(qos);
-        logEntry.setRetained(retained);
-        logEntry.setClientId(activeClientId);
-        logEntry.setBrokerUrl(activeBrokerUrl);
-        logEntry.setCreateTime(LocalDateTime.now());
-
-        try {
-            mqttPublishLogService.save(logEntry);
-        } catch (Exception e) {
-            log.error("MQTT发布日志写入数据库失败: {}", e.getMessage(), e);
-        }
-
-        try {
-            stringRedisTemplate.opsForList().rightPush(PUBLISH_HISTORY_KEY, JSON.toJSONString(logEntry));
-            stringRedisTemplate.opsForList().trim(PUBLISH_HISTORY_KEY, -MAX_PUBLISH_HISTORY, -1);
-        } catch (Exception e) {
-            log.error("MQTT发布日志写入Redis失败: {}", e.getMessage(), e);
-        }
-    }
+		try {
+			stringRedisTemplate.opsForList().rightPush(PUBLISH_HISTORY_KEY, JSON.toJSONString(logEntry));
+			stringRedisTemplate.opsForList().trim(PUBLISH_HISTORY_KEY, -MAX_PUBLISH_HISTORY, -1);
+		} catch (Exception e) {
+			log.error("MQTT发布日志写入Redis失败: {}", e.getMessage(), e);
+		}
+	}
 }

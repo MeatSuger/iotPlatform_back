@@ -8,17 +8,17 @@ import com.yu.iotplatform.entity.mqtt.MqttSubscribeRequest;
 import java.util.List;
 
 public interface MqttClientService {
-    MqttClientStatus connect();
+	MqttClientStatus connect();
 
-    MqttClientStatus disconnect();
+	MqttClientStatus disconnect();
 
-    MqttClientStatus subscribe(MqttSubscribeRequest request);
+	MqttClientStatus subscribe(MqttSubscribeRequest request);
 
-    MqttClientStatus unsubscribe(String topic);
+	MqttClientStatus unsubscribe(String topic);
 
-    void publish(MqttPublishRequest request);
+	void publish(MqttPublishRequest request);
 
-    MqttClientStatus status();
+	MqttClientStatus status();
 
-    List<MqttMessageView> recentMessages(int limit);
+	List<MqttMessageView> recentMessages(int limit);
 }

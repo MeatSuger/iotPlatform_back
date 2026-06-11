@@ -14,29 +14,31 @@ import org.springframework.stereotype.Service;
 @Service
 public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> implements DeviceService {
 
-    @Override
-    @Cacheable(value = CacheConfig.CACHE_DEVICE, key = "#deviceId" , unless = "#result == null")
-    public Device getDeviceById(String deviceId) {
-        return this.lambdaQuery()
-            .eq(Device::getDeviceId, deviceId)
-            .one();
-    }
+	@Override
+	@Cacheable(value = CacheConfig.CACHE_DEVICE, key = "#deviceId", unless = "#result == null")
+	public Device getDeviceById(String deviceId) {
+		return this.lambdaQuery()
+				.eq(Device::getDeviceId, deviceId)
+				.one();
+	}
 
-    @Override
-    public String generateDeviceId() {
-        return DeviceUtil.generateShortDeviceId();
-    }
+	@Override
+	public String generateDeviceId() {
+		return DeviceUtil.generateShortDeviceId();
+	}
 
-    /**
-     * 注册后缓存设备
-     */
-    @CachePut(value = CacheConfig.CACHE_DEVICE, key = "#device.deviceId" , unless = "#result == null")
-    public void cacheDevice(Device device) {
-    }
+	/**
+	 * 注册后缓存设备
+	 */
+	@CachePut(value = CacheConfig.CACHE_DEVICE, key = "#device.deviceId", unless = "#result == null")
+	public void cacheDevice(Device device) {
+	}
 
-    /** 删除时清除设备缓存 */
-    @CacheEvict(value = CacheConfig.CACHE_DEVICE, key = "#deviceId")
-    public void evictDeviceCache(String deviceId) {
-        // 注解自动处理
-    }
+	/**
+	 * 删除时清除设备缓存
+	 */
+	@CacheEvict(value = CacheConfig.CACHE_DEVICE, key = "#deviceId")
+	public void evictDeviceCache(String deviceId) {
+		// 注解自动处理
+	}
 }

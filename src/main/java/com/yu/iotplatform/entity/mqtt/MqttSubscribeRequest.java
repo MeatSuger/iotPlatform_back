@@ -4,6 +4,6 @@ import lombok.Data;
 
 @Data
 public class MqttSubscribeRequest {
-    private String topic;
-    private Integer qos;
+	private String topic;
+	private Integer qos;
 }
