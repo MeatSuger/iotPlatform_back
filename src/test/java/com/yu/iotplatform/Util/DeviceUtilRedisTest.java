@@ -22,7 +22,7 @@ class DeviceUtilRedisTest {
 	@Resource
 	private DeviceReportService deviceReportService;
 
-	//    @Test
+	    @Test
 	void cacheDevice_and_getCachedDevice_shouldWork() {
 		String deviceId = DeviceUtil.generateShortDeviceId();
 		Device device = new Device();

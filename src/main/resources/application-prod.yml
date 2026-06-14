@@ -28,6 +28,12 @@ spring:
         preparedStatementCacheQueries: 256
         preparedStatementCacheSizeMiB: 5
         tcpKeepAlive: true
+  jackson:
+    time-zone: GMT+8
+    date-format: yyyy-MM-dd HH:mm:ss
+    serialization:
+      write-dates-as-timestamps: false
+      write-dates-with-zone-id: false
   data:
     redis:
       database: 0

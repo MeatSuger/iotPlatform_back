@@ -29,9 +29,11 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
 
 	/**
 	 * 注册后缓存设备
+	 *
 	 */
 	@CachePut(value = CacheConfig.CACHE_DEVICE, key = "#device.deviceId", unless = "#result == null")
-	public void cacheDevice(Device device) {
+	public Device cacheDevice(Device device) {
+		return device;
 	}
 
 	/**

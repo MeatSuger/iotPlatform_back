@@ -190,20 +190,18 @@ public class UserController {
 	}
 
 	/**
-	 * @param account 用户账号。
-	 * @param passwd  用户密码。
 	 * @return 登录结果，包含 Token 信息。
 	 * @brief 用户登录接口（公开访问）。
 	 */
 	@SaIgnore
 	@PostMapping("/login")
-	public ApiResponse<Object> doLogin(@RequestParam String account, @RequestParam String passwd) {
+	public ApiResponse<Object> doLogin(@RequestBody User _user) {
 
-		User user = userService.getByAccount(account);
+		User user = userService.getByAccount(_user.getAccount());
 		if (user == null) {
 			return ApiResponse.fail(400, "用户未注册");
 		}
-		if (!Objects.equals(user.getPasswd(), passwd)) {
+		if (!Objects.equals(user.getPasswd(), _user.getPasswd())) {
 			return ApiResponse.fail(400, "密码错误");
 		}
 

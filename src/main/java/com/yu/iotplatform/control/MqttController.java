@@ -82,7 +82,7 @@ public class MqttController {
 	@PostMapping("/client/unsubscribe")
 	public ApiResponse<MqttClientStatus> unsubscribe(@RequestBody MqttTopicRequest request) {
 		try {
-			String topic = request == null ? null : request.getTopic();
+			String topic = request == null ? null : request.topic();
 			return ApiResponse.success("取消订阅成功", mqttClientService.unsubscribe(topic));
 		} catch (IllegalArgumentException | IllegalStateException e) {
 			return ApiResponse.fail(HttpStatus.BAD_REQUEST.value(), e.getMessage());

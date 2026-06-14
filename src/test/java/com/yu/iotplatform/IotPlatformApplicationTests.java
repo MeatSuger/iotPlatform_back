@@ -25,11 +25,13 @@ import static org.junit.jupiter.api.Assertions.*;
 class IotPlatformApplicationTests {
 
 
-	public static final String deviceId = "TEST-DEVICE-001";
 	@Resource
 	private UserService userService;
+
 	@Resource
 	private InfluxDBService influxDBService;
+
+	public static final String deviceId = "TEST-DEVICE-001";
 
 	/**
 	 * ✅ 测试注册用户

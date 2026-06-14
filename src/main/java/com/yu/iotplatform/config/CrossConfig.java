@@ -25,7 +25,7 @@ public class CrossConfig {
 					// 自定义跨域响应头
 //                    SaHolder.getResponse().setHeader("Access-Control-Allow-Origin", "http://localhost:8181")
 					SaHolder.getResponse().setHeader("Access-Control-Allow-Origin", "https://iot.meatsuger.top")
-							.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+							.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE,OPTIONS")
 							.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin")
 							.setHeader("Access-Control-Allow-Credentials", "true")
 							.setHeader("Access-Control-Max-Age", "3600");
@@ -43,7 +43,6 @@ public class CrossConfig {
 				})
 
 				// 5. 异常处理
-				.setError(e ->
-						ApiResponse.fail(400, "系统安全验证失败: " + e.getMessage()));
+				.setError(e -> ApiResponse.fail(400, "系统安全验证失败: " + e.getMessage()));
 	}
 }

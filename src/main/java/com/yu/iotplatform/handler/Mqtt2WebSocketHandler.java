@@ -1,6 +1,7 @@
-package com.yu.iotplatform.entity.mqtt;
+package com.yu.iotplatform.handler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yu.iotplatform.entity.mqtt.MqttPublishRequest;
 import com.yu.iotplatform.service.MqttClientService;
 import jakarta.websocket.server.ServerEndpoint;
 import lombok.extern.slf4j.Slf4j;
@@ -17,33 +18,15 @@ import java.util.concurrent.CopyOnWriteArraySet;
 @Slf4j
 @Component
 @ServerEndpoint("/ws/mqtt")
-public class Mqtt2WebSocket extends TextWebSocketHandler {
+public class Mqtt2WebSocketHandler extends TextWebSocketHandler {
 
 	// 保存所有连接的会话
 	private static final CopyOnWriteArraySet<WebSocketSession> sessions = new CopyOnWriteArraySet<>();
 	private final ObjectMapper objectMapper = new ObjectMapper();
 	private final MqttClientService mqttClientService;
 
-	public Mqtt2WebSocket(MqttClientService mqttClientService) {
+	public Mqtt2WebSocketHandler(MqttClientService mqttClientService) {
 		this.mqttClientService = mqttClientService;
-	}
-
-	/**
-	 * 广播消息给所有客户端
-	 */
-	public static void broadcast(String message) {
-		if (sessions.isEmpty()) {
-			return;
-		}
-		for (WebSocketSession session : sessions) {
-			if (session.isOpen()) {
-				try {
-					session.sendMessage(new TextMessage(message));
-				} catch (IOException e) {
-					log.error("发送消息失败，Session ID: {}", session.getId(), e);
-				}
-			}
-		}
 	}
 
 	@Override
@@ -82,6 +65,24 @@ public class Mqtt2WebSocket extends TextWebSocketHandler {
 		try {
 			session.close(CloseStatus.SERVER_ERROR);
 		} catch (IOException ignored) {
+		}
+	}
+
+	/**
+	 * 广播消息给所有客户端
+	 */
+	public static void broadcast(String message) {
+		if (sessions.isEmpty()) {
+			return;
+		}
+		for (WebSocketSession session : sessions) {
+			if (session.isOpen()) {
+				try {
+					session.sendMessage(new TextMessage(message));
+				} catch (IOException e) {
+					log.error("发送消息失败，Session ID: {}", session.getId(), e);
+				}
+			}
 		}
 	}
 }

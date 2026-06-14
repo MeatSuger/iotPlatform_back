@@ -15,7 +15,7 @@ public class DeviceStatus {
 	private String deviceId;            // 设备编号
 	private Long ownerId;               // 所有者ID
 	private String status;              // 设备状态
-	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "GMT+8")
+	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
 	@TableField(fill = FieldFill.INSERT_UPDATE)
 	private LocalDateTime lastActiveTime; // 最后活跃时间
 	private List<SensorData> sensors;   // 传感器数据列表

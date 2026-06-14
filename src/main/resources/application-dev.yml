@@ -28,6 +28,12 @@ spring:
         preparedStatementCacheQueries: 256
         preparedStatementCacheSizeMiB: 5
         tcpKeepAlive: true
+  jackson:
+    time-zone: GMT+8
+    date-format: yyyy-MM-dd HH:mm:ss
+    serialization:
+      write-dates-as-timestamps: false
+      write-dates-with-zone-id: false
   data:
     redis:
       database: 0
@@ -77,7 +83,7 @@ springdoc:
 iot:
   mqtt:
     enabled: true
-    broker-url: tcp://127.0.0.1:1883
+    broker-url: tcp://47.99.74.160:1883
     client-id: iot-platform-backend-dev
     username: dev_mqtt_user
     password: dev_mqtt_password

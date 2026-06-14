@@ -18,22 +18,14 @@ import java.util.regex.Pattern;
  */
 public class DeviceUtil {
 
-	/**
-	 * 设备在线状态值
-	 */
-	public static final String DEVICE_ONLINE_STATUS = "ONLINE";
-	/**
-	 * 心跳建议间隔（秒）
-	 */
-	public static final long HEARTBEAT_INTERVAL_SECONDS = 60L;
+	private DeviceUtil() {
+		throw new IllegalStateException("Utility class");
+	}
+
 	/**
 	 * Sa-Token 设备登录体系（与用户体系隔离）
 	 */
 	private static final StpLogic DEVICE_STP;
-	/**
-	 * 设备ID规则：6位十六进制（兼容大小写）
-	 */
-	private static final Pattern DEVICE_ID_PATTERN = Pattern.compile("^[a-fA-F0-9]{6}$");
 
 	static {
 		DEVICE_STP = new StpLogic("device");
@@ -46,16 +38,28 @@ public class DeviceUtil {
 				.setTokenStyle("uuid"));
 	}
 
-	private DeviceUtil() {
-		throw new IllegalStateException("Utility class");
-	}
-
 	/**
 	 * 获取设备 StpLogic 实例
 	 */
 	public static StpLogic getDeviceStp() {
 		return DEVICE_STP;
 	}
+
+
+	/**
+	 * 设备在线状态值
+	 */
+	public static final String DEVICE_ONLINE_STATUS = "ONLINE";
+
+	/**
+	 * 心跳建议间隔（秒）
+	 */
+	public static final long HEARTBEAT_INTERVAL_SECONDS = 60L;
+
+	/**
+	 * 设备ID规则：6位十六进制（兼容大小写）
+	 */
+	private static final Pattern DEVICE_ID_PATTERN = Pattern.compile("^[a-fA-F0-9]{6}$");
 
 	/**
 	 * 规范化设备ID（去空白 + 小写）

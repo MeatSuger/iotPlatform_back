@@ -26,11 +26,12 @@ import java.util.Objects;
 @Slf4j
 @Service
 public class InfluxDBServiceImpl implements InfluxDBService {
-	private final WriteApiBlocking writeApi;
 	@Resource
 	private InfluxDBClient influxDBClient;
+
 	@Resource
 	private InfluxDBConfig influxDBConfig;
+	private final WriteApiBlocking writeApi;
 
 
 	public InfluxDBServiceImpl(InfluxDBClient influxDBClient) {

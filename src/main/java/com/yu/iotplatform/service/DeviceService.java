@@ -10,8 +10,9 @@ public interface DeviceService extends IService<Device> {
 
 	/**
 	 * 注册后缓存设备
+	 *
 	 */
-	void cacheDevice(Device device);
+	Device cacheDevice(Device device);
 
 	/**
 	 * 删除时清除设备缓存

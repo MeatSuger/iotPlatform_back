@@ -1,6 +1,6 @@
 package com.yu.iotplatform.config;
 
-import com.yu.iotplatform.entity.mqtt.Mqtt2WebSocket;
+import com.yu.iotplatform.handler.Mqtt2WebSocketHandler;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
@@ -12,9 +12,9 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 public class WebSocketConfig implements WebSocketConfigurer {
 
 
-	private final Mqtt2WebSocket mqttWebSocketHandler;
+	private final Mqtt2WebSocketHandler mqttWebSocketHandler;
 
-	public WebSocketConfig(Mqtt2WebSocket mqttWebSocketHandler) {
+	public WebSocketConfig(Mqtt2WebSocketHandler mqttWebSocketHandler) {
 		this.mqttWebSocketHandler = mqttWebSocketHandler;
 	}
 

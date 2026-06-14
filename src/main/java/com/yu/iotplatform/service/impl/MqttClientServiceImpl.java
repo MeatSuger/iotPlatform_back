@@ -2,7 +2,11 @@ package com.yu.iotplatform.service.impl;
 
 import com.alibaba.fastjson2.JSON;
 import com.yu.iotplatform.entity.MqttPublishLog;
-import com.yu.iotplatform.entity.mqtt.*;
+import com.yu.iotplatform.entity.mqtt.MqttClientStatus;
+import com.yu.iotplatform.entity.mqtt.MqttMessageView;
+import com.yu.iotplatform.entity.mqtt.MqttPublishRequest;
+import com.yu.iotplatform.entity.mqtt.MqttSubscribeRequest;
+import com.yu.iotplatform.handler.Mqtt2WebSocketHandler;
 import com.yu.iotplatform.service.MqttClientService;
 import com.yu.iotplatform.service.MqttPublishLogService;
 import jakarta.annotation.PreDestroy;
@@ -17,7 +21,10 @@ import org.springframework.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
@@ -60,8 +67,7 @@ public class MqttClientServiceImpl implements MqttClientService {
 	private volatile String activeBrokerUrl;
 	private volatile String activeClientId;
 
-	public MqttClientServiceImpl(MqttPublishLogService mqttPublishLogService,
-								 StringRedisTemplate stringRedisTemplate) {
+	public MqttClientServiceImpl(MqttPublishLogService mqttPublishLogService, StringRedisTemplate stringRedisTemplate) {
 		this.mqttPublishLogService = mqttPublishLogService;
 		this.stringRedisTemplate = stringRedisTemplate;
 	}
@@ -133,20 +139,17 @@ public class MqttClientServiceImpl implements MqttClientService {
 
 			@Override
 			public void messageArrived(String topic, MqttMessage message) {
-				MqttMessageView view = MqttMessageView.builder()
-						.topic(topic)
-						.payload(new String(message.getPayload(), StandardCharsets.UTF_8))
-						.qos(message.getQos())
-						.retained(message.isRetained())
-						.duplicate(message.isDuplicate())
-						.receivedAt(LocalDateTime.now())
-						.build();
+				MqttMessageView view = MqttMessageView.of(topic,
+						new String(message.getPayload(), StandardCharsets.UTF_8),
+						message.getQos(),
+						message.isRetained(),
+						message.isDuplicate());
 				messageBuffer.addLast(view);
 				while (messageBuffer.size() > MAX_BUFFERED_MESSAGES) {
 					messageBuffer.pollFirst();
 				}
 				String json = JSON.toJSONString(view);
-				Mqtt2WebSocket.broadcast(json);
+				Mqtt2WebSocketHandler.broadcast(json);
 			}
 
 			@Override
@@ -167,13 +170,13 @@ public class MqttClientServiceImpl implements MqttClientService {
 	@Override
 	public synchronized MqttClientStatus subscribe(MqttSubscribeRequest request) {
 		ensureConnected();
-		if (request == null || !StringUtils.hasText(request.getTopic())) {
+		if (request == null || !StringUtils.hasText(request.topic())) {
 			throw new IllegalArgumentException("订阅topic不能为空");
 		}
-		int qos = normalizeQos(request.getQos());
+		int qos = normalizeQos(request.qos());
 		try {
-			client.subscribe(request.getTopic(), qos);
-			subscriptions.put(request.getTopic(), qos);
+			client.subscribe(request.topic(), qos);
+			subscriptions.put(request.topic(), qos);
 			return status();
 		} catch (MqttException e) {
 			throw new IllegalStateException("订阅失败: " + e.getMessage(), e);
@@ -198,21 +201,21 @@ public class MqttClientServiceImpl implements MqttClientService {
 	@Override
 	public synchronized void publish(MqttPublishRequest request) {
 		ensureConnected();
-		if (request == null || !StringUtils.hasText(request.getTopic())) {
+		if (request == null || !StringUtils.hasText(request.topic())) {
 			throw new IllegalArgumentException("发布topic不能为空");
 		}
 		try {
-			String payload = request.getPayload() == null ? "" : request.getPayload();
-			int qos = normalizeQos(request.getQos());
-			boolean retained = request.getRetained() != null && request.getRetained();
+			String payload = request.payload() == null ? "" : request.payload();
+			int qos = normalizeQos(request.qos());
+			boolean retained = request.retained() != null && request.retained();
 
 			MqttMessage message = new MqttMessage();
 			message.setPayload(payload.getBytes(StandardCharsets.UTF_8));
 			message.setQos(qos);
 			message.setRetained(retained);
-			client.publish(request.getTopic(), message);
+			client.publish(request.topic(), message);
 
-			persistPublishedMessage(request.getTopic(), payload, qos, retained);
+			persistPublishedMessage(request.topic(), payload, qos, retained);
 		} catch (MqttException e) {
 			throw new IllegalStateException("发布失败: " + e.getMessage(), e);
 		}
@@ -220,13 +223,12 @@ public class MqttClientServiceImpl implements MqttClientService {
 
 	@Override
 	public MqttClientStatus status() {
-		return MqttClientStatus.builder()
-				.connected(client != null && client.isConnected())
-				.brokerUrl(activeBrokerUrl)
-				.clientId(activeClientId)
-				.subscriptions(new LinkedHashMap<>(subscriptions))
-				.bufferedMessages(messageBuffer.size())
-				.build();
+		boolean connected = (client != null && client.isConnected());
+		if (!connected) {
+			return MqttClientStatus.disconnected();  // 无需传 brokerUrl/clientId
+		}
+		return MqttClientStatus.connected(activeBrokerUrl, activeClientId,
+				Map.copyOf(subscriptions), messageBuffer.size());
 	}
 
 	@Override

@@ -1,8 +1,12 @@
 package com.yu.iotplatform.entity.mqtt;
 
-import lombok.Data;
+import jakarta.validation.constraints.NotBlank;
 
-@Data
-public class MqttTopicRequest {
-	private String topic;
+/**
+ * 通用主题请求 DTO（用于取消订阅等）
+ */
+public record MqttTopicRequest(
+		@NotBlank(message = "topic 不能为空")
+		String topic
+) {
 }
