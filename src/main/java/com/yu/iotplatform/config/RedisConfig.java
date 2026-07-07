@@ -13,11 +13,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.cache.RedisCacheConfiguration;
+import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.serializer.Jackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
 import javax.sql.DataSource;
@@ -50,42 +53,44 @@ public class RedisConfig {
 		return new LettuceConnectionFactory(config);
 	}
 
-	@SuppressWarnings("removal")
 	@Bean
-	public RedisTemplate<String, Object> redisTemplate() {
-		RedisTemplate<String, Object> redisTemplate = new RedisTemplate<>();
-		redisTemplate.setConnectionFactory(redisConnectionFactory());
+	public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory factory) {
+		RedisTemplate<String, Object> template = new RedisTemplate<>();
+		template.setConnectionFactory(factory);
 
+		// key 序列化
+		template.setKeySerializer(new StringRedisSerializer());
+		template.setHashKeySerializer(new StringRedisSerializer());
 
-		//设置key和hash key使用字符串序列化
-		redisTemplate.setKeySerializer(new StringRedisSerializer());
-		redisTemplate.setHashKeySerializer(new StringRedisSerializer());
-
-		//设置jackson2JsonRedisSerializer作为 value 的序列化方式
-		Jackson2JsonRedisSerializer<Object> jackson2JsonRedisSerializer =
-				new Jackson2JsonRedisSerializer<>(Object.class);
+		// value 序列化：使用 GenericJackson2JsonRedisSerializer
 		ObjectMapper mapper = new ObjectMapper();
 		mapper.registerModule(new JavaTimeModule());
 		mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 		mapper.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
+		mapper.activateDefaultTyping(LaissezFaireSubTypeValidator.instance, ObjectMapper.DefaultTyping.NON_FINAL, JsonTypeInfo.As.PROPERTY);
 
+		Jackson2JsonRedisSerializer<Object> serializer = new Jackson2JsonRedisSerializer<>(mapper, mapper.constructType(Object.class));
+		template.setValueSerializer(serializer);
+		template.setHashValueSerializer(serializer);
 
-		//启用类型信息，即使list只有一个元素也能保留类型
-		mapper.activateDefaultTyping(
-				LaissezFaireSubTypeValidator.instance,
-				ObjectMapper.DefaultTyping.NON_FINAL,
-				JsonTypeInfo.As.PROPERTY
-		);
+		template.afterPropertiesSet();
+		return template;
+	}
 
-		jackson2JsonRedisSerializer.setObjectMapper(mapper);
+	@Bean
+	public RedisCacheManager redisCacheManager(RedisConnectionFactory factory) {
+		// 复用同一个 ObjectMapper（也可以直接复用上面的 mapper 实例，但为清晰单独创建）
+		ObjectMapper mapper = new ObjectMapper();
+		mapper.registerModule(new JavaTimeModule());
+		mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+		mapper.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
+		mapper.activateDefaultTyping(LaissezFaireSubTypeValidator.instance, ObjectMapper.DefaultTyping.NON_FINAL, JsonTypeInfo.As.PROPERTY);
 
+		Jackson2JsonRedisSerializer<Object> serializer = new Jackson2JsonRedisSerializer<>(mapper, mapper.constructType(Object.class));
 
-		//设置value和hash value 序列化器
-		redisTemplate.setValueSerializer(jackson2JsonRedisSerializer);
-		redisTemplate.setHashValueSerializer(jackson2JsonRedisSerializer);
+		RedisCacheConfiguration config = RedisCacheConfiguration.defaultCacheConfig().serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(serializer)).disableCachingNullValues();
 
-		return redisTemplate;
-
+		return RedisCacheManager.builder(factory).cacheDefaults(config).build();
 	}
 
 	@Bean
@@ -103,8 +108,7 @@ public class RedisConfig {
 						ps.execute();
 					}
 				}
-				log.info("PostgreSQL warmup success, openedConnections={}, elapsed={}ms",
-						opened.size(), System.currentTimeMillis() - start);
+				log.info("PostgreSQL warmup success, openedConnections={}, elapsed={}ms", opened.size(), System.currentTimeMillis() - start);
 			} catch (Exception e) {
 				throw new IllegalStateException("PostgreSQL warmup failed on startup", e);
 			} finally {

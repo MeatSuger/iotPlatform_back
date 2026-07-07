@@ -59,7 +59,7 @@ spring:
       url: http://47.99.74.160:8086
       token: edBQ1U5Vw21Yycg8_BIV2kET6X4-HW071OrYa26HnRhmi1PTeKwXVZ9esF0VIdy1wKn36-yS0Bv4uje6RT2Yfw==
       org: influxdb_yHi3BP
-      bucket: influxdb_a8C2pf
+      bucket: iot-sensor
 sa-token:
   # token 名称（同时也是 cookie 名称）
   token-name: Authorization

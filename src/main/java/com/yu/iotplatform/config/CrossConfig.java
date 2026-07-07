@@ -12,8 +12,7 @@ public class CrossConfig implements WebMvcConfigurer {
 	@Override
 	public void addCorsMappings(CorsRegistry registry) {
 		registry.addMapping("/**")
-				.allowedOrigins("https://*.meatsuger.top")
-				.allowedOrigins("http://localhost:5173")
+				.allowedOrigins("https://iot.meatsuger.top","http://localhost:5173")
 				.allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
 				.allowedHeaders("*")
 				.allowCredentials(true)
