@@ -1,0 +1,50 @@
+# ===========================================
+# IoT Platform (Go) 生产环境配置
+# ===========================================
+
+server:
+  port: 9091
+  mode: release
+
+database:
+  host: "1Panel-postgresql-atvS"
+  port: 5432
+  user: "user_TdeFN2"
+  password: "password_Ae4NhC"
+  dbname: "iotuser"
+  sslmode: "disable"
+  max-open: 32
+  max-idle: 8
+
+redis:
+  host: "1Panel-redis-143d"
+  port: 6379
+  password: "redis_DbbDB3"
+  db: 0
+  pool-size: 200
+
+influxdb:
+  url: "http://1Panel-influxdb-ks5i:8086"
+  token: "edBQ1U5Vw21Yycg8_BIV2kET6X4-HW071OrYa26HnRhmi1PTeKwXVZ9esF0VIdy1wKn36-yS0Bv4uje6RT2Yfw=="
+  org: "influxdb_yHi3BP"
+  bucket: "iot-sensor"
+
+jwt:
+  user-secret: "iot-platform-user-jwt-secret-key-2024"
+  device-secret: "iot-platform-device-jwt-secret-key-2024"
+  user-expire: 2592000    # 30天
+  device-expire: 0
+
+mqtt:
+  broker-url: "tcp://mqtt:1883"
+  client-id: "iot-platform-go-server-prod"
+  username: "prod_mqtt_user"
+  password: "prod_mqtt_password"
+  topics:
+    - "iot/+/telemetry"
+  qos: 1
+  keep-alive: 60
+
+cors:
+  allowed-origins:
+    - "https://iot.meatsuger.top"

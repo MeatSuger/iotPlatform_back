@@ -1,0 +1,19 @@
+version: "3.8"
+
+# IoT Platform Go — 单服务部署
+# 所有中间件配置（DB/Redis/InfluxDB/MQTT）通过 config.yaml 文件管理
+# 使用方式: docker compose up -d
+
+services:
+  iot-platform-go:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: iot-platform-go
+    ports:
+      - "8182:8182"
+    environment:
+      - CONFIG_PATH=config/config.yaml
+    volumes:
+      - ./config:/app/config:ro
+    restart: unless-stopped
