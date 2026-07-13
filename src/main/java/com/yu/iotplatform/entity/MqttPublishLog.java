@@ -4,7 +4,7 @@ import com.baomidou.mybatisplus.annotation.*;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 @Data
 @TableName("\"mqtt_publish_log\"")
@@ -31,6 +31,6 @@ public class MqttPublishLog {
 	private String brokerUrl;
 
 	@TableField(value = "create_time", fill = FieldFill.INSERT)
-	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
-	private LocalDateTime createTime;
+	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ssXXX", timezone = "GMT+8")
+	private OffsetDateTime createTime;
 }

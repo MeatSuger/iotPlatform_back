@@ -8,8 +8,8 @@ spring:
   datasource:
     driver-class-name: org.postgresql.Driver
     url: jdbc:postgresql://47.99.74.160:5432/iotuser
-    username: user_mBQFp4
-    password: password_5NREGY
+    username: user_TdeFN2
+    password: password_Ae4NhC
     hikari:
       pool-name: IotPlatformHikariPool-Dev
       minimum-idle: 5

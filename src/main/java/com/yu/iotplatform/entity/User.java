@@ -4,10 +4,10 @@ import com.baomidou.mybatisplus.annotation.*;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 @Data
-@TableName("\"user\"")
+@TableName("\"app_user\"")
 public class User {
 	@TableId(type = IdType.AUTO)
 	private Long id;
@@ -18,9 +18,9 @@ public class User {
 	private String passwd;
 	private String status;
 	@TableField(value = "create_time", fill = FieldFill.INSERT)
-	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
-	private LocalDateTime createTime;
+	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ssXXX", timezone = "GMT+8")
+	private OffsetDateTime createTime;
 	@TableField(value = "update_time", fill = FieldFill.UPDATE)
-	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
-	private LocalDateTime updateTime;
+	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ssXXX", timezone = "GMT+8")
+	private OffsetDateTime updateTime;
 }

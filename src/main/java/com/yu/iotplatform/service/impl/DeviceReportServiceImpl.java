@@ -20,7 +20,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -50,7 +50,7 @@ public class DeviceReportServiceImpl implements DeviceReportService {
 			return ApiResponse.fail(HttpStatus.UNAUTHORIZED.value(), "设备token无效");
 		}
 
-		LocalDateTime now = LocalDateTime.now();
+		OffsetDateTime now = OffsetDateTime.now();
 
 		DeviceStatus status = new DeviceStatus();
 		status.setDeviceId(deviceId);

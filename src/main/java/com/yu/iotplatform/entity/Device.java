@@ -4,7 +4,7 @@ import com.baomidou.mybatisplus.annotation.*;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 @Data
 @TableName("\"iot_device\"")
@@ -24,14 +24,14 @@ public class Device {
 	private Long ownerId;
 	private String status;
 
-	private LocalDateTime lastActiveTime;
+	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ssXXX", timezone = "GMT+8")
+	private OffsetDateTime lastActiveTime;
 
 	@TableField(value = "created_at", fill = FieldFill.INSERT)
-	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
-	private LocalDateTime createdAt;
+	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ssXXX", timezone = "GMT+8")
+	private OffsetDateTime createdAt;
 
 	@TableField(value = "updated_at", fill = FieldFill.UPDATE)
-	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
-	private LocalDateTime updatedAt;
+	@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ssXXX", timezone = "GMT+8")
+	private OffsetDateTime updatedAt;
 }
-

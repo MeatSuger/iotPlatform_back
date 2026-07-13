@@ -7,9 +7,9 @@ spring:
     name: IotPlatform
   datasource:
     driver-class-name: org.postgresql.Driver
-    url: jdbc:postgresql://47.99.74.160:5432/iotuser
-    username: user_mBQFp4
-    password: password_5NREGY
+    url: jdbc:postgresql://1Panel-postgresql-atvS:5432/iotuser
+    username: user_TdeFN2
+    password: password_Ae4NhC
     hikari:
       pool-name: IotPlatformHikariPool-Prod
       minimum-idle: 8
@@ -24,7 +24,7 @@ spring:
       connection-test-query: SELECT 1
       data-source-properties:
         reWriteBatchedInserts: true
-        prepareThreshold: 3
+        prepareThreshold: 10
         preparedStatementCacheQueries: 256
         preparedStatementCacheSizeMiB: 5
         tcpKeepAlive: true

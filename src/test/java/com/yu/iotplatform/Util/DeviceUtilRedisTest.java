@@ -5,14 +5,16 @@ import com.yu.iotplatform.entity.DeviceStatus;
 import com.yu.iotplatform.service.DeviceReportService;
 import com.yu.iotplatform.service.DeviceService;
 import jakarta.annotation.Resource;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@Disabled("需要 PostgreSQL / Redis 连接")
 @SpringBootTest
 @ActiveProfiles("prod")
 class DeviceUtilRedisTest {
@@ -51,7 +53,7 @@ class DeviceUtilRedisTest {
 		DeviceStatus status = new DeviceStatus();
 		status.setDeviceId(deviceId);
 		status.setStatus(DeviceUtil.DEVICE_ONLINE_STATUS);
-		status.setLastActiveTime(LocalDateTime.now());
+		status.setLastActiveTime(OffsetDateTime.now());
 
 		// 直接调用 putDeviceStatus（在实现类中，需通过接口）
 		DeviceReportService service = deviceReportService;

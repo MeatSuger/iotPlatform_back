@@ -20,7 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -305,7 +305,7 @@ public class MqttClientServiceImpl implements MqttClientService {
 		logEntry.setRetained(retained);
 		logEntry.setClientId(activeClientId);
 		logEntry.setBrokerUrl(activeBrokerUrl);
-		logEntry.setCreateTime(LocalDateTime.now());
+		logEntry.setCreateTime(OffsetDateTime.now());
 
 		try {
 			mqttPublishLogService.save(logEntry);

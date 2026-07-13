@@ -4,7 +4,7 @@ import com.yu.iotplatform.entity.Device;
 import com.yu.iotplatform.entity.DeviceStatus;
 import org.junit.jupiter.api.Test;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -43,7 +43,7 @@ class DeviceUtilTest {
 		device.setDeviceId("abc123");
 		device.setOwnerId(100L);
 		device.setStatus("ACTIVE");
-		LocalDateTime lastActiveTime = LocalDateTime.now().minusMinutes(1);
+		OffsetDateTime lastActiveTime = OffsetDateTime.now().minusMinutes(1);
 		device.setLastActiveTime(lastActiveTime);
 
 		DeviceStatus merged = DeviceUtil.mergeDeviceWithStatus(device, null);
@@ -63,10 +63,10 @@ class DeviceUtilTest {
 		device.setDeviceId("def456");
 		device.setOwnerId(200L);
 		device.setStatus("ONLINE");
-		device.setLastActiveTime(LocalDateTime.now().minusHours(2));
+		device.setLastActiveTime(OffsetDateTime.now().minusHours(2));
 
 		DeviceStatus status = new DeviceStatus();
-		LocalDateTime statusTime = LocalDateTime.now().minusMinutes(5);
+		OffsetDateTime statusTime = OffsetDateTime.now().minusMinutes(5);
 		status.setLastActiveTime(statusTime);
 
 		DeviceStatus merged = DeviceUtil.mergeDeviceWithStatus(device, status);
