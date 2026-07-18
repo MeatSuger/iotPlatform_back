@@ -4,6 +4,7 @@
 
 server:
   port: 9091
+  udp-port: 8183       # UDP 设备上报端口
   mode: release
 
 database:
@@ -29,13 +30,8 @@ influxdb:
   org: "influxdb_yHi3BP"
   bucket: "iot-sensor"
 
-jwt:
-  user-secret: "iot-platform-user-jwt-secret-key-2024"
-  device-secret: "iot-platform-device-jwt-secret-key-2024"
-  user-expire: 2592000    # 30天
-  device-expire: 0
-
 mqtt:
+  enabled: true
   broker-url: "tcp://mqtt:1883"
   client-id: "iot-platform-go-server-prod"
   username: "prod_mqtt_user"

@@ -129,25 +129,27 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 			dataGroup.GET("/list", dataCtl.ListData)
 		}
 
-		// ===== MQTT相关路由 =====
-		mqttGroup := api.Group("/mqtt")
-		{
-			// 设备认证路径（设备上报数据和心跳）
-			mqttGroup.POST("/:deviceId/Data", deviceAuth, mqttCtl.ReportData)
-			mqttGroup.POST("/:deviceId/ping", deviceAuth, mqttCtl.Heartbeat)
-			mqttGroup.POST("/:deviceId/heartbeat", deviceAuth, mqttCtl.Heartbeat)
-
-			// 用户认证路径（MQTT客户端管理）
-			clientGroup := mqttGroup.Group("/client")
-			clientGroup.Use(userAuth)
+		// ===== MQTT相关路由（enabled=false 时跳过注册） =====
+		if config.Cfg.MQTT.Enabled {
+			mqttGroup := api.Group("/mqtt")
 			{
-				clientGroup.POST("/connect", mqttCtl.Connect)
-				clientGroup.POST("/disconnect", mqttCtl.Disconnect)
-				clientGroup.POST("/subscribe", mqttCtl.Subscribe)
-				clientGroup.POST("/unsubscribe", mqttCtl.Unsubscribe)
-				clientGroup.POST("/publish", mqttCtl.Publish)
-				clientGroup.GET("/status", mqttCtl.Status)
-				clientGroup.GET("/messages", mqttCtl.Messages)
+				// 设备认证路径（设备上报数据和心跳）
+				mqttGroup.POST("/:deviceId/Data", deviceAuth, mqttCtl.ReportData)
+				mqttGroup.POST("/:deviceId/ping", deviceAuth, mqttCtl.Heartbeat)
+				mqttGroup.POST("/:deviceId/heartbeat", deviceAuth, mqttCtl.Heartbeat)
+
+				// 用户认证路径（MQTT客户端管理）
+				clientGroup := mqttGroup.Group("/client")
+				clientGroup.Use(userAuth)
+				{
+					clientGroup.POST("/connect", mqttCtl.Connect)
+					clientGroup.POST("/disconnect", mqttCtl.Disconnect)
+					clientGroup.POST("/subscribe", mqttCtl.Subscribe)
+					clientGroup.POST("/unsubscribe", mqttCtl.Unsubscribe)
+					clientGroup.POST("/publish", mqttCtl.Publish)
+					clientGroup.GET("/status", mqttCtl.Status)
+					clientGroup.GET("/messages", mqttCtl.Messages)
+				}
 			}
 		}
 	}

@@ -26,7 +26,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -44,6 +43,7 @@ import (
 	"github.com/yu/iot-platform-go/entity"
 	"github.com/yu/iot-platform-go/middleware"
 	"github.com/yu/iot-platform-go/router"
+	"github.com/yu/iot-platform-go/server"
 	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -128,45 +128,8 @@ func main() {
 	svcs := components.Services
 	wsHandler := components.WsHandler
 
-	// 设置设备 Token 校验器（用于设备 WebSocket 实时下放）
-	wsHandler.SetDeviceTokenValidator(func(token string) (string, error) {
-		loginID, err := deviceMgr.GetLoginID(token)
-		if err != nil {
-			return "", err
-		}
-		return loginID, nil
-	})
-		// 设置设备 WebSocket 上行消息处理器（传感器数据 / ACK / 心跳）
-		wsHandler.SetDeviceMessageHandler(func(deviceID, token string, message []byte) {
-			var envelope struct {
-				Type    string              `json:"type"`
-				Sensors []entity.SensorData `json:"sensors"`
-				CmdID   uint                `json:"cmdId"`
-			}
-			if err := json.Unmarshal(message, &envelope); err != nil {
-				zap.S().Warnf("[DeviceWS] 消息解析失败 [device=%s]: %v", deviceID, err)
-				return
-			}
-
-			ctx := context.Background()
-			switch envelope.Type {
-			case "data":
-				dto := entity.DeviceStatusDTO{Sensors: envelope.Sensors}
-				if err := svcs.Report.ReportStatus(ctx, deviceID, token, dto); err != nil {
-					zap.S().Warnf("[DeviceWS] 传感器数据上报失败 [device=%s]: %v", deviceID, err)
-				}
-			case "ping":
-				if err := svcs.Report.Heartbeat(ctx, deviceID, token); err != nil {
-					zap.S().Warnf("[DeviceWS] 心跳处理失败 [device=%s]: %v", deviceID, err)
-				}
-			case "ack":
-				if err := svcs.Downlink.AckCmd(ctx, envelope.CmdID); err != nil {
-					zap.S().Warnf("[DeviceWS] ACK处理失败 [device=%s, cmd=%d]: %v", deviceID, envelope.CmdID, err)
-				}
-			default:
-				zap.S().Warnf("[DeviceWS] 未知消息类型 [device=%s, type=%s]", deviceID, envelope.Type)
-			}
-		})
+	// 配置设备 WebSocket（Token 校验 + 上行消息处理）
+	wsHandler.SetupDeviceWS(deviceMgr, svcs.Report, svcs.Downlink)
 
 	influxSvc := svcs.InfluxDB
 	mqttClientSvc := svcs.MQTT
@@ -189,20 +152,31 @@ func main() {
 	}
 	cancel()
 
-	// 9. 可选：自动连接MQTT
-	if cfg.MQTT.BrokerURL != "" {
+	// 9. 可选：自动连接MQTT（enabled=false 时跳过）
+	if cfg.MQTT.Enabled && cfg.MQTT.BrokerURL != "" {
 		go func() {
 			time.Sleep(2 * time.Second)
 			if err := mqttClientSvc.Connect(); err != nil {
 				zap.L().Warn("[Main] MQTT自动连接失败（可通过API手动连接）", zap.Error(err))
 			}
 		}()
+	} else {
+		zap.L().Info("[Main] MQTT 已禁用")
 	}
 
 	// 10. 设置路由
 	r := router.Setup(svcs, wsHandler, saginPlugin)
 
-	// 11. 启动HTTP服务器
+	// 11. 启动 UDP 设备上报服务（udp-port > 0 时启用）
+	var udpSrv *server.UDPServer
+	if cfg.Server.UDPPort > 0 {
+		udpSrv = server.NewUDPServer(svcs.Report)
+		if err := udpSrv.Start(cfg.Server.UDPPort); err != nil {
+			zap.L().Warn("[Main] UDP启动失败", zap.Error(err))
+		}
+	}
+
+	// 12. 启动HTTP服务器
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	srv := &http.Server{
 		Addr:    addr,
@@ -216,13 +190,19 @@ func main() {
 		}
 	}()
 
-	// 12. 优雅关闭
+	// 13. 优雅关闭
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	zap.L().Info("[Main] 正在关闭服务器...")
 
-	mqttClientSvc.Disconnect()
+	if cfg.MQTT.Enabled {
+		mqttClientSvc.Disconnect()
+	}
+
+	if udpSrv != nil {
+		udpSrv.Stop()
+	}
 
 	ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShutdown()

@@ -21,6 +21,7 @@ type Config struct {
 // ServerConfig 服务器配置
 type ServerConfig struct {
 	Port        int    `mapstructure:"port"`
+	UDPPort     int    `mapstructure:"udp-port"` // UDP 设备上报端口，0=禁用
 	ContextPath string `mapstructure:"context-path"`
 	Mode        string `mapstructure:"mode"` // debug, release, test
 }
@@ -106,6 +107,7 @@ type InfluxDBConfig struct {
 
 // MQTTConfig MQTT配置
 type MQTTConfig struct {
+	Enabled   bool     `mapstructure:"enabled"`
 	BrokerURL string   `mapstructure:"broker-url"`
 	ClientID  string   `mapstructure:"client-id"`
 	Username  string   `mapstructure:"username"`
