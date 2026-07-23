@@ -26,6 +26,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -130,6 +131,36 @@ func main() {
 
 	// 配置设备 WebSocket（Token 校验 + 上行消息处理）
 	wsHandler.SetupDeviceWS(deviceMgr, svcs.Report, svcs.Downlink)
+
+	// 配置设备→Owner 解析器（用于 WebSocket 消息转发和上下线通知）
+	wsHandler.SetOwnerResolver(func(deviceID string) (uint, error) {
+		device, err := svcs.Device.GetByDeviceID(context.Background(), deviceID)
+		if err != nil {
+			return 0, err
+		}
+		return device.OwnerID, nil
+	})
+
+	// 配置用户管理端命令下发处理器（WebSocket 直接下发命令到设备）
+	wsHandler.SetUserCommandHandler(func(ownerID uint, deviceID string, cmdType string, payload json.RawMessage) (uint, error) {
+		// 校验设备归属
+		device, err := svcs.Device.GetByDeviceID(context.Background(), deviceID)
+		if err != nil {
+			return 0, fmt.Errorf("设备不存在")
+		}
+		if device.OwnerID != ownerID {
+			return 0, fmt.Errorf("无权操作该设备")
+		}
+		// 入队 + WebSocket 实时推送（EnqueueCmd 内部已通知 owner）
+		cmd, err := svcs.Downlink.EnqueueCmd(context.Background(), deviceID, entity.DownlinkCmdRequest{
+			Type:    cmdType,
+			Payload: payload,
+		})
+		if err != nil {
+			return 0, err
+		}
+		return cmd.ID, nil
+	})
 
 	influxSvc := svcs.InfluxDB
 	mqttClientSvc := svcs.MQTT

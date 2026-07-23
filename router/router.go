@@ -80,6 +80,9 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 		api.GET("/ws/device", func(c *gin.Context) {
 			wsHandler.HandleDevice(c.Writer, c.Request)
 		})
+		api.GET("/ws/user", func(c *gin.Context) {
+			wsHandler.HandleUser(c.Writer, c.Request)
+		})
 
 		// ===== 用户相关路由 =====
 		userGroup := api.Group("/user")

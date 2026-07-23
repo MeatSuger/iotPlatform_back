@@ -73,7 +73,6 @@ func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req e
 
 	// 3. 尝试 WebSocket 实时推送
 	if s.wsHub != nil {
-		// json.RawMessage 在 map[string]interface{} 中会被序列化为 base64，需先解码
 		var payloadObj interface{}
 		json.Unmarshal(req.Payload, &payloadObj)
 
@@ -81,7 +80,7 @@ func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req e
 			"type":      "cmd",
 			"id":        cmd.ID,
 			"cmdType":   cmd.Type,
-			"payload":   payloadObj, // 解码后为真实 JSON 对象
+			"payload":   payloadObj,
 			"createdAt": cmd.CreatedAt.Format(common.DateTimeFormatWithZone),
 		})
 		s.wsHub.SendToDevice(deviceID, msg)
@@ -142,4 +141,24 @@ func (s *DownlinkService) AckCmd(ctx context.Context, cmdID uint) error {
 	}
 	zap.S().Infof("[Downlink] 设备已确认 [cmd=%d]", cmdID)
 	return nil
+}
+
+// NotifyOwnerCmd 命令下发后，通知该设备 owner 的管理端（WebSocket 实时推送）
+func (s *DownlinkService) NotifyOwnerCmd(deviceID string, cmd *entity.DownlinkCmd) {
+	if s.wsHub == nil {
+		return
+	}
+	// 解码 payload
+	var payloadObj interface{}
+	json.Unmarshal([]byte(cmd.Payload), &payloadObj)
+	msg, _ := json.Marshal(map[string]interface{}{
+		"type":      "cmdSent",
+		"deviceId":  deviceID,
+		"cmdId":     cmd.ID,
+		"cmdType":   cmd.Type,
+		"payload":   payloadObj,
+		"status":    cmd.Status,
+		"createdAt": cmd.CreatedAt.Format(common.DateTimeFormatWithZone),
+	})
+	s.wsHub.SendToDeviceOwner(deviceID, msg)
 }
