@@ -2,7 +2,7 @@
 # IoT Platform (Go) Makefile
 # ===========================================
 
-.PHONY: build dev deps clean push
+.PHONY: build dev deps clean push swagger
 
 # 变量
 APP_NAME   = iot-platform
@@ -26,7 +26,7 @@ GOFLAGS    = -ldflags="$(LDFLAGS)" -trimpath
 
 dev:
 	@echo "→ 启动隧道..."
-	@bash ./tunnel.sh on
+	@bash ./scripts/tunnel.sh on
 	@echo "→ 启动 air 热重载..."
 	air -c .air.toml
 
@@ -41,7 +41,7 @@ build:
 	$(GO) test -count=1 ./...
 	@echo "→ 编译 Linux amd64 (static)..."
 	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(APP_NAME) .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./cmd/iot-platform
 	@ls -lh $(BUILD_DIR)/$(APP_NAME)
 	@echo "✓ 编译完成"
 
@@ -60,6 +60,13 @@ deps:
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f coverage.out coverage.html
+
+# ===========================================
+# Swagger
+# ===========================================
+
+swagger:
+	cd cmd/iot-platform && swag init -d . -g main.go --output ../../api/swagger
 
 # ===========================================
 # 推送
