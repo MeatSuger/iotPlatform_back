@@ -32,6 +32,12 @@ coverage.html
 # ===========================================
 vendor/
 
+# Ent 生成代码（仅 schema 提交）
+internal/ent/*.go
+internal/ent/*/
+!internal/ent/schema/
+!internal/ent/generate.go
+
 # ===========================================
 # 环境 & 敏感配置
 # ===========================================
