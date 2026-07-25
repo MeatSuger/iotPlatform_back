@@ -1,0 +1,27 @@
+# golangci-lint 配置
+# https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 3m
+
+  # 跳过生成的 Ent 代码
+  skip-dirs:
+    - internal/ent
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+issues:
+  exclude-dirs:
+    - internal/ent
+
+  # 排除规则
+  exclude:
+    # Ent 生成的 scanWithInterceptors 显式类型参数
+    - "unnecessary type arguments"

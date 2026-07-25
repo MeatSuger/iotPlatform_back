@@ -74,6 +74,9 @@ func TestSnapshotIsIndependent(t *testing.T) {
 
 	snapshot := s.Snapshot()
 	snapshot.Connected = false
+	if snapshot.Connected {
+		t.Error("Snapshot Connected should be false after modification")
+	}
 	snapshot.Subscriptions["iot/other"] = 2
 
 	if !s.IsConnected() {

@@ -33,7 +33,7 @@ func (r *DeviceRepo) Create(ctx context.Context, device *ent.Device) (*ent.Devic
 		Save(ctx)
 }
 
-func (r *DeviceRepo) GetByID(ctx context.Context, id uint) (*ent.Device, error) {
+func (r *DeviceRepo) GetByID(ctx context.Context, id int) (*ent.Device, error) {
 	return r.client.Device.Get(ctx, id)
 }
 
@@ -54,7 +54,7 @@ func (r *DeviceRepo) Update(ctx context.Context, device *ent.Device) error {
 		Exec(ctx)
 }
 
-func (r *DeviceRepo) Delete(ctx context.Context, id uint) error {
+func (r *DeviceRepo) Delete(ctx context.Context, id int) error {
 	return r.client.Device.DeleteOneID(id).Exec(ctx)
 }
 

@@ -4,6 +4,9 @@ import (
 	"time"
 
 	"entgo.io/ent"
+	"entgo.io/ent/dialect"
+	"entgo.io/ent/dialect/entsql"
+	"entgo.io/ent/schema"
 	"entgo.io/ent/schema/field"
 	"entgo.io/ent/schema/index"
 )
@@ -11,6 +14,12 @@ import (
 // DownlinkCmd 下放命令实体，对应表 iot_downlink_cmd
 type DownlinkCmd struct {
 	ent.Schema
+}
+
+func (DownlinkCmd) Annotations() []schema.Annotation {
+	return []schema.Annotation{
+		entsql.Table("iot_downlink_cmd"),
+	}
 }
 
 func (DownlinkCmd) Fields() []ent.Field {
@@ -30,9 +39,10 @@ func (DownlinkCmd) Fields() []ent.Field {
 			StructTag(`json:"-"`),
 		field.String("status").
 			MaxLen(20).
-			Default("pending").
+			Default("pending").Optional().
 			StructTag(`json:"status"`),
 		field.Time("created_at").
+			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}).
 			Default(time.Now).
 			StructTag(`json:"createdAt"`),
 	}
@@ -44,6 +54,3 @@ func (DownlinkCmd) Indexes() []ent.Index {
 	}
 }
 
-func (DownlinkCmd) Table() string {
-	return "iot_downlink_cmd"
-}

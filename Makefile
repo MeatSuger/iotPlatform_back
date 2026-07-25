@@ -37,6 +37,8 @@ dev:
 build:
 	@echo "→ 格式化..."
 	$(GO) fmt ./...
+	@echo "→ 生成 Ent 代码..."
+	$(GO) generate ./internal/ent
 	@echo "→ 测试..."
 	$(GO) test -count=1 ./...
 	@echo "→ 编译 Linux amd64 (static)..."

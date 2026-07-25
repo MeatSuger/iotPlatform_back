@@ -263,10 +263,8 @@ func (h *WsHandler) readUserPump(client *Client) {
 // replyOwner 向 owner 所有管理端广播消息
 func (h *WsHandler) replyOwner(ownerID uint, msgType string, data map[string]interface{}, errMsg string) {
 	resp := map[string]interface{}{"type": msgType}
-	if data != nil {
-		for k, v := range data {
-			resp[k] = v
-		}
+	for k, v := range data {
+		resp[k] = v
 	}
 	if errMsg != "" {
 		resp["error"] = errMsg
