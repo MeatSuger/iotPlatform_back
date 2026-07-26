@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yu/iot-platform-go/internal/ent"
-	"github.com/yu/iot-platform-go/internal/middleware"
-	"github.com/yu/iot-platform-go/internal/repository"
-	"github.com/yu/iot-platform-go/pkg/cache"
-	"github.com/yu/iot-platform-go/pkg/util"
+	"iot-platform.local/internal/ent"
+	"iot-platform.local/internal/middleware"
+	"iot-platform.local/internal/repository"
+	"iot-platform.local/pkg/cache"
+	"iot-platform.local/pkg/util"
 )
 
 // DeviceService 设备服务

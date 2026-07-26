@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	sagin "github.com/sa-tokens/sa-token-go/integrations/gin"
 	"github.com/sa-tokens/sa-token-go/stputil"
-	"github.com/yu/iot-platform-go/pkg/common"
+	"iot-platform.local/pkg/common"
 )
 
 // 设备 Manager（非全局，单独持有）

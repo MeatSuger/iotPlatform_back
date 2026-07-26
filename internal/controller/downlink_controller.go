@@ -5,10 +5,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/yu/iot-platform-go/internal/middleware"
-	"github.com/yu/iot-platform-go/internal/service"
-	"github.com/yu/iot-platform-go/pkg/common"
-	"github.com/yu/iot-platform-go/pkg/util"
+	"iot-platform.local/internal/middleware"
+	"iot-platform.local/internal/service"
+	"iot-platform.local/pkg/common"
+	"iot-platform.local/pkg/util"
 )
 
 // DownlinkController 下放控制器

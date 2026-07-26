@@ -4,10 +4,10 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/yu/iot-platform-go/internal/model"
-	"github.com/yu/iot-platform-go/internal/service"
-	"github.com/yu/iot-platform-go/pkg/common"
-	"github.com/yu/iot-platform-go/pkg/util"
+	"iot-platform.local/internal/model"
+	"iot-platform.local/internal/service"
+	"iot-platform.local/pkg/common"
+	"iot-platform.local/pkg/util"
 )
 
 // DataController 数据控制器

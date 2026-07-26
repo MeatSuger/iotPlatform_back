@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 
-	"github.com/yu/iot-platform-go/internal/ent"
-	"github.com/yu/iot-platform-go/internal/repository"
+	"iot-platform.local/internal/ent"
+	"iot-platform.local/internal/repository"
 )
 
 // MqttPublishLogService MQTT发布日志服务

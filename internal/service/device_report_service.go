@@ -6,12 +6,12 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/yu/iot-platform-go/internal/middleware"
-	"github.com/yu/iot-platform-go/internal/model"
-	"github.com/yu/iot-platform-go/internal/repository"
-	"github.com/yu/iot-platform-go/pkg/cache"
-	"github.com/yu/iot-platform-go/pkg/common"
-	"github.com/yu/iot-platform-go/pkg/util"
+	"iot-platform.local/internal/middleware"
+	"iot-platform.local/internal/model"
+	"iot-platform.local/internal/repository"
+	"iot-platform.local/pkg/cache"
+	"iot-platform.local/pkg/common"
+	"iot-platform.local/pkg/util"
 )
 
 // DeviceReportService 设备数据上报服务

@@ -87,7 +87,7 @@ func FailWithData(c *gin.Context, code int, msg string, data interface{}) {
 
 // Error 返回服务器内部错误
 func Error(c *gin.Context, msg string) {
-	c.JSON(http.StatusInternalServerError, ApiResponse{
+	c.JSON(http.StatusOK, ApiResponse{
 		Code:    CodeServerError,
 		Message: msg,
 		Data:    nil,

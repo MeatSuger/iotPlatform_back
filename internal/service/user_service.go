@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/sa-tokens/sa-token-go/stputil"
-	"github.com/yu/iot-platform-go/internal/ent"
-	"github.com/yu/iot-platform-go/internal/repository"
-	"github.com/yu/iot-platform-go/pkg/common"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
+	"iot-platform.local/internal/ent"
+	"iot-platform.local/internal/repository"
+	"iot-platform.local/pkg/common"
 )
 
 // UserService 用户服务

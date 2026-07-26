@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/yu/iot-platform-go/internal/ent"
-	entdevice "github.com/yu/iot-platform-go/internal/ent/device"
+	"iot-platform.local/internal/ent"
+	entdevice "iot-platform.local/internal/ent/device"
 )
 
 // DeviceRepo 设备数据访问

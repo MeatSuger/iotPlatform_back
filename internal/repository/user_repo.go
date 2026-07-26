@@ -3,8 +3,8 @@ package repository
 import (
 	"context"
 
-	"github.com/yu/iot-platform-go/internal/ent"
-	entuser "github.com/yu/iot-platform-go/internal/ent/user"
+	"iot-platform.local/internal/ent"
+	entuser "iot-platform.local/internal/ent/user"
 )
 
 // UserRepo 用户数据访问

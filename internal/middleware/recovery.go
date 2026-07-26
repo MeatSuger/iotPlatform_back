@@ -4,8 +4,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/yu/iot-platform-go/pkg/common"
 	"go.uber.org/zap"
+	"iot-platform.local/pkg/common"
 )
 
 // Recovery 全局异常恢复中间件
@@ -28,7 +28,7 @@ func Recovery() gin.HandlerFunc {
 				}
 
 				// 默认500错误
-				c.JSON(http.StatusInternalServerError, common.ApiResponse{
+				c.JSON(http.StatusOK, common.ApiResponse{
 					Code:    common.CodeServerError,
 					Message: "服务器内部错误",
 					Data:    nil,

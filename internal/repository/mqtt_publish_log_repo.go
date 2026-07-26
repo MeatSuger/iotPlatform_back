@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/yu/iot-platform-go/internal/ent"
+	"iot-platform.local/internal/ent"
 )
 
 // MqttPublishLogRepo MQTT发布日志数据访问

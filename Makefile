@@ -6,7 +6,7 @@
 
 # 变量
 APP_NAME   = iot-platform
-BUILD_DIR  = ./builds
+BUILD_DIR  = ./build
 GO         = go
 SSH_HOST  ?= aliyun-ubuntu
 REMOTE_DIR ?= /home/ubuntu/iotPlatform_back

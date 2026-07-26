@@ -9,12 +9,12 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/yu/iot-platform-go/internal/ent"
-	mqttEntity "github.com/yu/iot-platform-go/internal/model/mqtt"
-	"github.com/yu/iot-platform-go/internal/repository"
-	"github.com/yu/iot-platform-go/internal/websocket"
-	"github.com/yu/iot-platform-go/pkg/cache"
-	"github.com/yu/iot-platform-go/pkg/config"
+	"iot-platform.local/internal/ent"
+	mqttEntity "iot-platform.local/internal/model/mqtt"
+	"iot-platform.local/internal/repository"
+	"iot-platform.local/internal/websocket"
+	"iot-platform.local/pkg/cache"
+	"iot-platform.local/pkg/config"
 )
 
 // MqttClientService MQTT客户端服务

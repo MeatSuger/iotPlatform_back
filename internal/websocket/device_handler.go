@@ -7,7 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/yu/iot-platform-go/internal/model"
+	"iot-platform.local/internal/model"
 )
 
 // DeviceTokenProvider 设备 Token → deviceID 查询接口（由 main 中 sa-token deviceMgr 实现）

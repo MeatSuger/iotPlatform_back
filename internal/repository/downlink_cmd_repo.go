@@ -3,8 +3,8 @@ package repository
 import (
 	"context"
 
-	"github.com/yu/iot-platform-go/internal/ent"
-	entcmd "github.com/yu/iot-platform-go/internal/ent/downlinkcmd"
+	"iot-platform.local/internal/ent"
+	entcmd "iot-platform.local/internal/ent/downlinkcmd"
 )
 
 // DownlinkCmdRepo 下放命令数据访问

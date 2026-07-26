@@ -8,12 +8,12 @@ import (
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
-	_ "github.com/yu/iot-platform-go/api/swagger" // Swagger 生成的文档
-	"github.com/yu/iot-platform-go/internal/controller"
-	"github.com/yu/iot-platform-go/internal/middleware"
-	"github.com/yu/iot-platform-go/internal/service"
-	"github.com/yu/iot-platform-go/internal/websocket"
-	"github.com/yu/iot-platform-go/pkg/config"
+	_ "iot-platform.local/api/swagger" // Swagger 生成的文档
+	"iot-platform.local/internal/controller"
+	"iot-platform.local/internal/middleware"
+	"iot-platform.local/internal/service"
+	"iot-platform.local/internal/websocket"
+	"iot-platform.local/pkg/config"
 )
 
 // Services 服务集合（用于依赖注入）

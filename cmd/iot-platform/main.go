@@ -4,7 +4,7 @@
 // @termsOfService  http://swagger.io/terms/
 
 // @contact.name   API Support
-// @contact.email support@iot-platform.local
+// @contact.email support@iot-platform.local.local
 
 // @license.name MIT
 // @license.url  https://opensource.org/licenses/MIT
@@ -40,14 +40,14 @@ import (
 	sagin "github.com/sa-tokens/sa-token-go/integrations/gin"
 	saredis "github.com/sa-tokens/sa-token-go/storage/redis"
 	"github.com/sa-tokens/sa-token-go/stputil"
-	"github.com/yu/iot-platform-go/internal/ent"
-	"github.com/yu/iot-platform-go/internal/middleware"
-	"github.com/yu/iot-platform-go/internal/router"
-	"github.com/yu/iot-platform-go/internal/server"
-	"github.com/yu/iot-platform-go/internal/service"
-	"github.com/yu/iot-platform-go/pkg/common"
-	"github.com/yu/iot-platform-go/pkg/config"
 	"go.uber.org/zap"
+	"iot-platform.local/internal/ent"
+	"iot-platform.local/internal/middleware"
+	"iot-platform.local/internal/router"
+	"iot-platform.local/internal/server"
+	"iot-platform.local/internal/service"
+	"iot-platform.local/pkg/common"
+	"iot-platform.local/pkg/config"
 
 	_ "github.com/lib/pq"
 )

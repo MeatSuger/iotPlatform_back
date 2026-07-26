@@ -8,7 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/yu/iot-platform-go/internal/middleware"
+	"iot-platform.local/internal/middleware"
 )
 
 func TestDeviceIDAuthMiddleware(t *testing.T) {

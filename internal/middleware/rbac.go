@@ -4,7 +4,7 @@ import (
 	"github.com/casbin/casbin/v2"
 	"github.com/casbin/casbin/v2/model"
 	"github.com/gin-gonic/gin"
-	"github.com/yu/iot-platform-go/pkg/common"
+	"iot-platform.local/pkg/common"
 )
 
 // casbinEnforcer 全局 Casbin 执行器

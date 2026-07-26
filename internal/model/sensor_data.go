@@ -3,7 +3,7 @@ package entity
 import (
 	"time"
 
-	"github.com/yu/iot-platform-go/pkg/common"
+	"iot-platform.local/pkg/common"
 )
 
 // SensorData 传感器数据（DTO）

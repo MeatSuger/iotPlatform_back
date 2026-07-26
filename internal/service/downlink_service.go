@@ -9,11 +9,11 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
-	mqttEntity "github.com/yu/iot-platform-go/internal/model/mqtt"
+	mqttEntity "iot-platform.local/internal/model/mqtt"
 
-	"github.com/yu/iot-platform-go/internal/ent"
-	"github.com/yu/iot-platform-go/internal/repository"
-	"github.com/yu/iot-platform-go/internal/websocket"
+	"iot-platform.local/internal/ent"
+	"iot-platform.local/internal/repository"
+	"iot-platform.local/internal/websocket"
 )
 
 const (

@@ -12,7 +12,7 @@ const docTemplate = `{
         "termsOfService": "http://swagger.io/terms/",
         "contact": {
             "name": "API Support",
-            "email": "support@iot-platform.local"
+            "email": "support@iot-platform.local.local"
         },
         "license": {
             "name": "MIT",

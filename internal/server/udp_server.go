@@ -8,7 +8,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/yu/iot-platform-go/internal/model"
+	"iot-platform.local/internal/model"
 )
 
 // ReportService UDP 上报所需的服务接口

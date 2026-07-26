@@ -6,13 +6,13 @@ package main
 import (
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
-	"github.com/yu/iot-platform-go/internal/ent"
-	"github.com/yu/iot-platform-go/internal/repository"
-	"github.com/yu/iot-platform-go/internal/router"
-	"github.com/yu/iot-platform-go/internal/service"
-	"github.com/yu/iot-platform-go/internal/websocket"
-	"github.com/yu/iot-platform-go/pkg/cache"
-	"github.com/yu/iot-platform-go/pkg/config"
+	"iot-platform.local/internal/ent"
+	"iot-platform.local/internal/repository"
+	"iot-platform.local/internal/router"
+	"iot-platform.local/internal/service"
+	"iot-platform.local/internal/websocket"
+	"iot-platform.local/pkg/cache"
+	"iot-platform.local/pkg/config"
 )
 
 // AppComponents Wire 聚合结构体

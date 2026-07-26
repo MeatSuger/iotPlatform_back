@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/gorilla/websocket"
-	mqttEntity "github.com/yu/iot-platform-go/internal/model/mqtt"
+	mqttEntity "iot-platform.local/internal/model/mqtt"
 )
 
 // MqttPublisher WebSocket需要的MQTT发布能力（接口解耦，避免循环依赖）

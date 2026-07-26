@@ -4,12 +4,12 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/yu/iot-platform-go/internal/middleware"
-	"github.com/yu/iot-platform-go/internal/model"
-	mqttEntity "github.com/yu/iot-platform-go/internal/model/mqtt"
-	"github.com/yu/iot-platform-go/internal/service"
-	"github.com/yu/iot-platform-go/pkg/common"
-	"github.com/yu/iot-platform-go/pkg/util"
+	"iot-platform.local/internal/middleware"
+	"iot-platform.local/internal/model"
+	mqttEntity "iot-platform.local/internal/model/mqtt"
+	"iot-platform.local/internal/service"
+	"iot-platform.local/pkg/common"
+	"iot-platform.local/pkg/util"
 )
 
 // MqttController MQTT控制器

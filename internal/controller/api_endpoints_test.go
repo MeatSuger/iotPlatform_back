@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/yu/iot-platform-go/pkg/common"
+	"iot-platform.local/pkg/common"
 )
 
 // ========================================
@@ -293,7 +293,7 @@ func TestMqttClientStatus_JSON(t *testing.T) {
 	status := map[string]interface{}{
 		"connected":            true,
 		"brokerURL":            "tcp://mqtt:1883",
-		"clientID":             "iot-platform-go",
+		"clientID":             "iot-platform.local-go",
 		"subscriptionCount":    3,
 		"reconnectCount":       0,
 		"lastConnectedTime":    "2025-07-26T00:00:00+08:00",

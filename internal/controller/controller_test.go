@@ -14,9 +14,9 @@ import (
 	"github.com/sa-tokens/sa-token-go/stputil"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/yu/iot-platform-go/internal/middleware"
-	"github.com/yu/iot-platform-go/internal/service"
-	"github.com/yu/iot-platform-go/pkg/common"
+	"iot-platform.local/internal/middleware"
+	"iot-platform.local/internal/service"
+	"iot-platform.local/pkg/common"
 )
 
 // ========================================

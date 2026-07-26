@@ -9,8 +9,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/yu/iot-platform-go/internal/middleware"
-	"github.com/yu/iot-platform-go/pkg/common"
+	"iot-platform.local/internal/middleware"
+	"iot-platform.local/pkg/common"
 )
 
 // ========================================
