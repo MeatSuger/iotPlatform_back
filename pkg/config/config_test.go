@@ -10,12 +10,12 @@ import (
 
 func TestDatabaseConfig_DSN(t *testing.T) {
 	db := DatabaseConfig{
-		Host:    "localhost",
-		Port:    5432,
-		User:    "postgres",
+		Host:     "localhost",
+		Port:     5432,
+		User:     "postgres",
 		Password: "secret",
-		DBName:  "iot_platform",
-		SSLMode: "disable",
+		DBName:   "iot_platform",
+		SSLMode:  "disable",
 	}
 	dsn := db.DSN()
 	assert.Contains(t, dsn, "host=localhost")

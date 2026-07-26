@@ -8,7 +8,6 @@ import (
 	"entgo.io/ent/dialect/entsql"
 	"entgo.io/ent/schema"
 	"entgo.io/ent/schema/field"
-	"entgo.io/ent/schema/index"
 )
 
 // Device 设备实体，对应表 iot_device
@@ -24,10 +23,11 @@ func (Device) Annotations() []schema.Annotation {
 
 func (Device) Fields() []ent.Field {
 	return []ent.Field{
-		field.String("device_id").
+		field.String("id").
+			StorageKey("device_id").
 			MaxLen(50).
 			NotEmpty().
-			Unique().
+			Immutable().
 			StructTag(`json:"deviceId"`),
 		field.String("device_name").
 			MaxLen(100).
@@ -88,7 +88,5 @@ func (Device) Fields() []ent.Field {
 }
 
 func (Device) Indexes() []ent.Index {
-	return []ent.Index{
-		index.Fields("device_id").Unique(),
-	}
+	return nil
 }

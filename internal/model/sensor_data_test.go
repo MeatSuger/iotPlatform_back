@@ -61,7 +61,7 @@ func TestSensorData_MarshalJSON(t *testing.T) {
 
 func TestDeviceStatus_Fields(t *testing.T) {
 	status := DeviceStatus{
-		ID:             1,
+		ID:             "abc123",
 		DeviceID:       "abc123",
 		OwnerID:        100,
 		Status:         "ONLINE",
@@ -70,7 +70,7 @@ func TestDeviceStatus_Fields(t *testing.T) {
 			{Name: "temp", Type: "number", Value: 25.0},
 		},
 	}
-	assert.Equal(t, 1, status.ID)
+	assert.Equal(t, "abc123", status.ID)
 	assert.Equal(t, "abc123", status.DeviceID)
 	assert.Equal(t, uint(100), status.OwnerID)
 	assert.Equal(t, "ONLINE", status.Status)

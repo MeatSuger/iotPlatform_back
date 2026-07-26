@@ -19,7 +19,7 @@ func NewDeviceRepo(client *ent.Client) *DeviceRepo {
 
 func (r *DeviceRepo) Create(ctx context.Context, device *ent.Device) (*ent.Device, error) {
 	return r.client.Device.Create().
-		SetDeviceID(device.DeviceID).
+		SetID(device.ID).
 		SetDeviceName(device.DeviceName).
 		SetDeviceType(device.DeviceType).
 		SetFirmwareVersion(device.FirmwareVersion).
@@ -33,12 +33,12 @@ func (r *DeviceRepo) Create(ctx context.Context, device *ent.Device) (*ent.Devic
 		Save(ctx)
 }
 
-func (r *DeviceRepo) GetByID(ctx context.Context, id int) (*ent.Device, error) {
+func (r *DeviceRepo) GetByID(ctx context.Context, id string) (*ent.Device, error) {
 	return r.client.Device.Get(ctx, id)
 }
 
 func (r *DeviceRepo) GetByDeviceID(ctx context.Context, deviceID string) (*ent.Device, error) {
-	return r.client.Device.Query().Where(entdevice.DeviceIDEQ(deviceID)).First(ctx)
+	return r.client.Device.Query().Where(entdevice.IDEQ(deviceID)).First(ctx)
 }
 
 func (r *DeviceRepo) Update(ctx context.Context, device *ent.Device) error {
@@ -54,7 +54,7 @@ func (r *DeviceRepo) Update(ctx context.Context, device *ent.Device) error {
 		Exec(ctx)
 }
 
-func (r *DeviceRepo) Delete(ctx context.Context, id int) error {
+func (r *DeviceRepo) Delete(ctx context.Context, id string) error {
 	return r.client.Device.DeleteOneID(id).Exec(ctx)
 }
 
@@ -67,14 +67,14 @@ func (r *DeviceRepo) ListByOwnerID(ctx context.Context, ownerID uint) ([]*ent.De
 
 func (r *DeviceRepo) UpdateStatus(ctx context.Context, deviceID, status string) error {
 	return r.client.Device.Update().
-		Where(entdevice.DeviceIDEQ(deviceID)).
+		Where(entdevice.IDEQ(deviceID)).
 		SetStatus(status).
 		Exec(ctx)
 }
 
 func (r *DeviceRepo) UpdateLastActive(ctx context.Context, deviceID, status string) error {
 	return r.client.Device.Update().
-		Where(entdevice.DeviceIDEQ(deviceID)).
+		Where(entdevice.IDEQ(deviceID)).
 		SetStatus(status).
 		SetLastActiveTime(time.Now()).
 		Exec(ctx)

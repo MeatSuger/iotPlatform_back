@@ -104,7 +104,7 @@ func (ctl *DeviceController) GetDeviceData(c *gin.Context) {
 	status, _ := ctl.deviceReportSvc.GetDeviceStatus(c.Request.Context(), deviceID)
 
 	// 合并返回
-	result := util.MergeDeviceWithStatus(device.DeviceID, device.DeviceName, device.OwnerID, device.Status, device.LastActiveTime)
+	result := util.MergeDeviceWithStatus(device.ID, device.DeviceName, device.OwnerID, device.Status, device.LastActiveTime)
 	result["id"] = device.ID
 	result["deviceType"] = device.DeviceType
 	result["firmwareVersion"] = device.FirmwareVersion

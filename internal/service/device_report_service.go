@@ -76,7 +76,7 @@ func (s *DeviceReportService) ReportStatus(ctx context.Context, deviceID, token 
 	// 缓存
 	deviceStatus := entity.DeviceStatus{
 		ID:             device.ID,
-		DeviceID:       deviceID,
+		DeviceID:       device.ID,
 		OwnerID:        device.OwnerID,
 		Status:         "ONLINE",
 		LastActiveTime: common.DateTimeFrom(now),
@@ -138,7 +138,7 @@ func (s *DeviceReportService) GetDeviceStatus(ctx context.Context, deviceID stri
 	}
 	return &entity.DeviceStatus{
 		ID:             device.ID,
-		DeviceID:       device.DeviceID,
+		DeviceID:       device.ID,
 		OwnerID:        device.OwnerID,
 		Status:         device.Status,
 		LastActiveTime: common.DateTimeFrom(device.LastActiveTime),

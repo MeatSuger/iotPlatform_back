@@ -52,7 +52,7 @@ func (s *DeviceService) Register(ctx context.Context, ownerID uint, req DeviceRe
 		}
 
 		_, err = s.repo.Create(ctx, &ent.Device{
-			DeviceID:        deviceID,
+			ID:              deviceID,
 			DeviceName:      req.DeviceName,
 			DeviceType:      req.DeviceType,
 			FirmwareVersion: req.FirmwareVersion,

@@ -16,7 +16,7 @@ type SensorData struct {
 
 // DeviceStatus 设备状态（DTO）
 type DeviceStatus struct {
-	ID             int             `json:"id"`
+	ID             string          `json:"id"`
 	DeviceID       string          `json:"deviceId"`
 	OwnerID        uint            `json:"ownerId"`
 	Status         string          `json:"status"`
