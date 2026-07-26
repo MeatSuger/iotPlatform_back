@@ -52,4 +52,3 @@ func (MqttPublishLog) Fields() []ent.Field {
 			StructTag(`json:"createTime"`),
 	}
 }
-

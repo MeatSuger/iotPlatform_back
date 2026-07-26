@@ -53,4 +53,3 @@ func (DownlinkCmd) Indexes() []ent.Index {
 		index.Fields("device_id"),
 	}
 }
-

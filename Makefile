@@ -6,11 +6,11 @@
 
 # 变量
 APP_NAME   = iot-platform
-BUILD_DIR  = ./build
+BUILD_DIR  = ./builds
 GO         = go
-SSH_HOST  ?= aliyun
-REMOTE_DIR ?= /home/ubuntu/iot-api-go
-REMOTE_BIN ?= $(REMOTE_DIR)/$(APP_NAME)
+SSH_HOST  ?= aliyun-ubuntu
+REMOTE_DIR ?= /home/ubuntu/iotPlatform_back
+REMOTE_BIN ?= $(REMOTE_DIR)/build/$(APP_NAME)
 
 VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 TIMESTAMP := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
@@ -75,7 +75,8 @@ swagger:
 # ===========================================
 
 push: build
-	@echo "→ 上传到 $(SSH_HOST):$(REMOTE_BIN)..."
+	@echo "→ 上传到 $(SSH_HOST):$(REMOTE_DIR)..."
 	scp $(BUILD_DIR)/$(APP_NAME) $(SSH_HOST):$(REMOTE_BIN).new
+	scp -r configs $(SSH_HOST):$(REMOTE_DIR)/
 	ssh $(SSH_HOST) 'mv $(REMOTE_BIN).new $(REMOTE_BIN) && chmod +x $(REMOTE_BIN)'
 	@echo "✓ 推送完成"

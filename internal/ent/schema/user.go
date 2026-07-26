@@ -77,4 +77,3 @@ func (User) Indexes() []ent.Index {
 		index.Fields("account").Unique(),
 	}
 }
-
