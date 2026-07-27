@@ -80,3 +80,12 @@ push: build
 	scp -r configs $(SSH_HOST):$(REMOTE_DIR)/
 	ssh $(SSH_HOST) 'mv $(REMOTE_BIN).new $(REMOTE_BIN) && chmod +x $(REMOTE_BIN)'
 	@echo "✓ 推送完成"
+
+# ===========================================
+# 部署
+# ===========================================
+
+deploy: push
+	@echo "→ 上传部署文件..."
+	scp -r deployments $(SSH_HOST):$(REMOTE_DIR)/
+	@echo "✓ 部署文件已同步"

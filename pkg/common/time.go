@@ -13,10 +13,10 @@ type DateTime struct {
 }
 
 const (
-	// DateTimeFormat 输出格式（无时区，用于 DB 和控制器响应拼接）
+	// DateTimeFormat DB 解析格式（无时区，PostgreSQL 返回格式）
 	DateTimeFormat = "2006-01-02 15:04:05"
-	// DateTimeFormatWithZone JSON 序列化格式（带时区偏移）
-	DateTimeFormatWithZone = "2006-01-02 15:04:05-07:00"
+	// DateTimeFormatWithZone JSON / API 输出格式（RFC 3339 / ISO 8601）
+	DateTimeFormatWithZone = "2006-01-02T15:04:05.000-07:00"
 )
 
 // DateTimeNow 返回当前时间
@@ -46,13 +46,15 @@ func (dt *DateTime) UnmarshalJSON(data []byte) error {
 	}
 	s = s[1 : len(s)-1] // 去除引号
 
-	// 按优先级尝试解析
+	// RFC 3339 优先，空格格式向下兼容
 	layouts := []string{
-		DateTimeFormatWithZone,      // "2006-01-02 15:04:05-07:00"
-		DateTimeFormat,              // "2006-01-02 15:04:05"
-		"2006-01-02 15:04:05 -0700", // 空格分隔偏移
-		time.RFC3339,                // "2006-01-02T15:04:05Z07:00"
-		"2006-01-02T15:04:05.000",   // ISO 毫秒无时区
+		DateTimeFormatWithZone,          // "2006-01-02T15:04:05.000-07:00"
+		time.RFC3339,                    // "2006-01-02T15:04:05Z07:00"
+		"2006-01-02T15:04:05.000",       // 毫秒无时区
+		"2006-01-02 15:04:05.000-07:00", // 旧格式（毫秒 + 时区 + 空格）
+		"2006-01-02 15:04:05-07:00",     // 旧格式（无毫秒 + 时区）
+		DateTimeFormat,                  // "2006-01-02 15:04:05"
+		"2006-01-02 15:04:05 -0700",     // 空格分隔偏移
 	}
 	for _, layout := range layouts {
 		t, err := time.Parse(layout, s)

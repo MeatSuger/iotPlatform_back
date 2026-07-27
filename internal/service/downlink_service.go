@@ -82,7 +82,7 @@ func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req D
 			"id":        cmd.ID,
 			"cmdType":   cmd.Type,
 			"payload":   payloadObj,
-			"createdAt": cmd.CreatedAt.Format("2006-01-02 15:04:05-07:00"),
+			"createdAt": cmd.CreatedAt.Format("2006-01-02T15:04:05.000-07:00"),
 		})
 		s.wsHub.SendToDevice(deviceID, msg)
 	}
@@ -135,7 +135,7 @@ func (s *DownlinkService) NotifyOwnerCmd(deviceID string, cmd *ent.DownlinkCmd) 
 		"cmdType":   cmd.Type,
 		"payload":   payloadObj,
 		"status":    cmd.Status,
-		"createdAt": cmd.CreatedAt.Format("2006-01-02 15:04:05-07:00"),
+		"createdAt": cmd.CreatedAt.Format("2006-01-02T15:04:05.000-07:00"),
 	})
 	s.wsHub.SendToDeviceOwner(deviceID, msg)
 }

@@ -86,7 +86,7 @@ func (ctl *MqttController) Heartbeat(c *gin.Context) {
 	}
 
 	common.Success(c, gin.H{
-		"serverTime":   common.DateTimeNow().Format(common.DateTimeFormat),
+		"serverTime":   common.DateTimeNow().Format(common.DateTimeFormatWithZone),
 		"nextInterval": 60,
 	})
 }

@@ -8,14 +8,12 @@ import (
 
 func TestRedisCacheConstants(t *testing.T) {
 	assert.Equal(t, "device:", PrefixDevice)
-	assert.Equal(t, "deviceStatus:", PrefixDeviceStatus)
 	assert.Equal(t, "sensorRecent:", PrefixSensorRecent)
 	assert.Equal(t, "mqtt:messages:", PrefixMQTTMessage)
 }
 
 func TestTTLConstants(t *testing.T) {
-	assert.Greater(t, TTLDevice, TTLDeviceStatus)
-	assert.Greater(t, TTLDeviceStatus, TTLSensorRecent)
+	assert.Greater(t, TTLDevice, TTLSensorRecent)
 }
 
 func TestNewRedisCache_NilClient(t *testing.T) {
@@ -32,7 +30,6 @@ func TestRedisCache_GetClient(t *testing.T) {
 // Test key generation patterns
 func TestCacheKeyPatterns(t *testing.T) {
 	assert.Equal(t, "device:abc123", PrefixDevice+"abc123")
-	assert.Equal(t, "deviceStatus:abc123", PrefixDeviceStatus+"abc123")
 	assert.Equal(t, "mqtt:messages:abc123", PrefixMQTTMessage+"abc123")
 }
 

@@ -122,7 +122,6 @@ func (s *DeviceService) Delete(ctx context.Context, deviceID string) error {
 	go func() {
 		bgCtx := context.Background()
 		s.cache.EvictDeviceCache(bgCtx, deviceID)
-		s.cache.EvictDeviceStatus(bgCtx, deviceID)
 		s.cache.EvictSensorRecentCache(bgCtx, deviceID)
 	}()
 	return nil

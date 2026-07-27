@@ -36,10 +36,12 @@ iot-back-rebuild/
 ├── cache/               # Redis 缓存抽象
 ├── common/              # 统一响应 / 错误 / 日志 / 自定义时间类型
 ├── util/                # 工具函数
-├── deploy/              # Docker Compose（MQTT Broker 等）
+├── deployments/         # Docker Compose / Dockerfile / SQL / MQTT 配置
+│   ├── app/             #   主项目 Dockerfile + docker-compose
+│   ├── mqtt/            #   MQTT Broker
+│   └── sql/             #   数据库初始化 SQL
 ├── go.mod / go.sum      # Go 模块
 ├── Makefile             # 构建 / 运行 / 打包
-├── Dockerfile           # 多阶段构建
 ├── tunnel.sh            # sshuttle 隧道（本地开发连接远程 Docker 服务）
 ├── API.md               # 完整 API 文档
 └── README.md            # 本文件
@@ -86,13 +88,16 @@ make run-prod
 
 ```bash
 # 编译 Linux 二进制
-make build-linux
+make build
 
 # 构建 Docker 镜像
-docker build -t iot-platform .
+docker build -f deployments/app/Dockerfile -t iot-platform .
 
-# 使用 docker-compose 一键启动所有服务
-docker compose up -d
+# 使用 docker-compose 一键启动
+docker compose -f deployments/app/docker-compose.yml up -d
+
+# 或使用 Makefile 一键部署到远程服务器
+make deploy SSH_HOST=your-server
 ```
 
 ---
@@ -101,15 +106,12 @@ docker compose up -d
 
 ```bash
 make dev          # 启动隧道 + 热重载（air）
-make run          # 直接运行
-make run-prod     # 生产配置运行
-make build        # 编译当前平台
-make build-linux  # 交叉编译 Linux amd64
-make test         # 运行测试
-make fmt          # 格式化代码
-make vet          # 静态分析
+make build        # 编译 Linux amd64 + 格式化 + 测试
+make deps         # 更新 Go 依赖
 make clean        # 清理构建产物
-make gen-wire     # 重新生成 Wire 依赖注入代码
+make swagger      # 生成 Swagger 文档
+make push         # 编译并上传到远程服务器
+make deploy       # push + 同步 deployments/ 到远程
 make gen-swagger  # 生成 Swagger 文档
 ```
 

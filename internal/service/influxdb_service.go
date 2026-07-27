@@ -3,10 +3,13 @@ package service
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
+	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
+	"github.com/influxdata/influxdb-client-go/v2/api"
 	"github.com/influxdata/influxdb-client-go/v2/api/write"
 )
 
@@ -15,6 +18,11 @@ type InfluxDBService struct {
 	client influxdb2.Client
 	org    string
 	bucket string
+
+	// 异步批量写入
+	writeAPI     api.WriteAPI
+	writeAPILock sync.Mutex
+	writeAPIOnce sync.Once
 }
 
 // NewInfluxDBService 创建InfluxDB服务
@@ -29,6 +37,11 @@ func NewInfluxDBService(url, token, org, bucket string) *InfluxDBService {
 
 // Close 关闭InfluxDB连接
 func (s *InfluxDBService) Close() {
+	s.writeAPILock.Lock()
+	if s.writeAPI != nil {
+		s.writeAPI.Flush()
+	}
+	s.writeAPILock.Unlock()
 	s.client.Close()
 }
 
@@ -105,7 +118,7 @@ func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID
 			"name":      record.ValueByKey("sensorName"),
 			"type":      record.ValueByKey("type"),
 			"value":     record.Value(),
-			"timestamp": record.Time().Format("2006-01-02 15:04:05"),
+			"timestamp": record.Time().Format("2006-01-02T15:04:05.000"),
 		}
 		records = append(records, row)
 	}
@@ -201,4 +214,40 @@ func (s *InfluxDBService) Ping(ctx context.Context) error {
 func (s *InfluxDBService) WritePoint(ctx context.Context, point *write.Point) error {
 	writeAPI := s.client.WriteAPIBlocking(s.org, s.bucket)
 	return writeAPI.WritePoint(ctx, point)
+}
+
+// getWriteAPI 获取或创建异步 WriteAPI（线程安全，懒初始化）
+// 异步 WriteAPI 内部有批量缓冲，自动攒批写入，远比逐条同步写入高效
+func (s *InfluxDBService) getWriteAPI() api.WriteAPI {
+	s.writeAPIOnce.Do(func() {
+		// 使用异步 WriteAPI：每 5000 条或每 1 秒自动 flush
+		s.writeAPI = s.client.WriteAPI(s.org, s.bucket)
+		// 监听异步错误
+		go func() {
+			for err := range s.writeAPI.Errors() {
+				zap.L().Warn("[InfluxDB] 异步写入错误", zap.Error(err))
+			}
+		}()
+	})
+	return s.writeAPI
+}
+
+// WriteDeviceSensorsBatch 批量异步写入传感器数据（高并发场景推荐）
+// 内部使用 InfluxDB 异步 WriteAPI，自动攒批
+// deviceID 为空时使用每个 point 自带的 DeviceID（跨设备批量场景）
+func (s *InfluxDBService) WriteDeviceSensorsBatch(deviceID string, sensors []SensorPoint) {
+	api := s.getWriteAPI()
+	for _, sensor := range sensors {
+		did := deviceID
+		if did == "" {
+			did = sensor.DeviceID
+		}
+		p := influxdb2.NewPointWithMeasurement("device_sensors").
+			AddTag("deviceID", did).
+			AddTag("sensorName", sensor.SensorName).
+			AddTag("type", sensor.Type).
+			AddField("value", sensor.Value).
+			SetTime(sensor.Timestamp)
+		api.WritePoint(p)
+	}
 }

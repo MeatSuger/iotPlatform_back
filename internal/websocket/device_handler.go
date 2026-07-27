@@ -86,7 +86,7 @@ func (h *WsHandler) SetupDeviceWS(tokenProvider DeviceTokenProvider, report Repo
 		msg, _ := json.Marshal(map[string]interface{}{
 			"type":      "deviceOnline",
 			"deviceId":  deviceID,
-			"timestamp": time.Now().Format("2006-01-02T15:04:05Z07:00"),
+			"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
 		})
 		h.hub.SendToOwner(ownerID, msg)
 	}
@@ -100,7 +100,7 @@ func (h *WsHandler) SetupDeviceWS(tokenProvider DeviceTokenProvider, report Repo
 		msg, _ := json.Marshal(map[string]interface{}{
 			"type":      "deviceOffline",
 			"deviceId":  deviceID,
-			"timestamp": time.Now().Format("2006-01-02T15:04:05Z07:00"),
+			"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
 		})
 		h.hub.SendToOwner(ownerID, msg)
 	}
@@ -136,7 +136,7 @@ func (h *WsHandler) forwardToOwner(deviceID string, rawMessage []byte) {
 	msg, _ := json.Marshal(map[string]interface{}{
 		"deviceId":  deviceID,
 		"data":      payload,
-		"timestamp": time.Now().Format("2006-01-02T15:04:05Z07:00"),
+		"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
 	})
 	h.hub.SendToOwner(ownerID, msg)
 }

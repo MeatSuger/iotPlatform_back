@@ -74,7 +74,7 @@ func (ctl *DataController) ReportData(c *gin.Context) {
 		return
 	}
 
-	common.SuccessWithMsg(c, "状态上报已接收", common.DateTimeNow().Format(common.DateTimeFormat))
+	common.SuccessWithMsg(c, "状态上报已接收", common.DateTimeNow().Format(common.DateTimeFormatWithZone))
 }
 
 // @Summary      设备心跳
@@ -99,7 +99,7 @@ func (ctl *DataController) Heartbeat(c *gin.Context) {
 	}
 
 	common.Success(c, gin.H{
-		"serverTime":   common.DateTimeNow().Format(common.DateTimeFormat),
+		"serverTime":   common.DateTimeNow().Format(common.DateTimeFormatWithZone),
 		"nextInterval": 60,
 	})
 }

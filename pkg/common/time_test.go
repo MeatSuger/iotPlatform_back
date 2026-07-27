@@ -45,13 +45,15 @@ func TestDateTime_UnmarshalJSON(t *testing.T) {
 		input   string
 		wantErr bool
 	}{
-		{"ISO format", `"2024-01-15 10:30:00+08:00"`, false},
+		{"RFC 3339 with ms + zone", `"2024-01-15T10:30:00.000+08:00"`, false},
+		{"RFC 3339 no ms", `"2024-01-15T10:30:00+08:00"`, false},
+		{"ms no zone", `"2024-01-15T10:30:00.000"`, false},
+		{"space with zone (legacy)", `"2024-01-15 10:30:00.000+08:00"`, false},
+		{"space no ms (legacy)", `"2024-01-15 10:30:00+08:00"`, false},
 		{"no timezone", `"2024-01-15 10:30:00"`, false},
-		{"RFC3339", `"2024-01-15T10:30:00+08:00"`, false},
-		{"milliseconds", `"2024-01-15T10:30:00.000"`, false},
 		{"null", `null`, false},
 		{"empty", `""`, false},
-		{"space offset", `"2024-01-15 10:30:00 +0800"`, false},
+		{"space offset (legacy)", `"2024-01-15 10:30:00 +0800"`, false},
 	}
 
 	for _, tt := range tests {
@@ -116,5 +118,5 @@ func TestDateTime_Scan(t *testing.T) {
 
 func TestDateTimeFormat(t *testing.T) {
 	assert.Equal(t, "2006-01-02 15:04:05", DateTimeFormat)
-	assert.Equal(t, "2006-01-02 15:04:05-07:00", DateTimeFormatWithZone)
+	assert.Equal(t, "2006-01-02T15:04:05.000-07:00", DateTimeFormatWithZone)
 }

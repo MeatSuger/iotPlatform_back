@@ -22,7 +22,13 @@ redis:
   port: 6379
   password: "redis_DbbDB3"
   db: 0
-  pool-size: 200
+  pool-size: 500          # 1000并发场景下增大连接池
+  min-idle-conns: 50      # 预热最小空闲连接
+  dial-timeout: 5
+  read-timeout: 3
+  write-timeout: 3
+  pool-timeout: 4
+  max-retries: 3
 
 influxdb:
   url: "http://1Panel-influxdb-ks5i:8086"

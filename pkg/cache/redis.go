@@ -17,16 +17,14 @@ type RedisCache struct {
 // 缓存键前缀（与 Java 后端保持一致）
 const (
 	PrefixDevice       = "device:"
-	PrefixDeviceStatus = "deviceStatus:"
 	PrefixSensorRecent = "sensorRecent:"
 	PrefixMQTTMessage  = "mqtt:messages:"
 )
 
 // 缓存过期时间
 const (
-	TTLDevice       = 10 * time.Minute
-	TTLDeviceStatus = 120 * time.Second
-	TTLSensorRecent = 30 * time.Second
+	TTLDevice       = 10 * time.Minute // 设备元数据
+	TTLSensorRecent = 5 * time.Minute  // 传感器最新数据（需覆盖典型上报间隔 30-60s）
 )
 
 // NewRedisCache 创建Redis缓存实例
@@ -115,28 +113,37 @@ func (c *RedisCache) EvictDeviceCache(ctx context.Context, deviceID string) erro
 	return c.Delete(ctx, PrefixDevice+deviceID)
 }
 
-// ---- 设备状态缓存便捷方法 ----
-
-// CacheDeviceStatus 缓存设备状态
-func (c *RedisCache) CacheDeviceStatus(ctx context.Context, deviceID string, status interface{}) error {
-	return c.Set(ctx, PrefixDeviceStatus+deviceID, status, TTLDeviceStatus)
-}
-
-// GetCachedDeviceStatus 获取缓存的设备状态
-func (c *RedisCache) GetCachedDeviceStatus(ctx context.Context, deviceID string, dest interface{}) error {
-	return c.Get(ctx, PrefixDeviceStatus+deviceID, dest)
-}
-
-// EvictDeviceStatus 清除设备状态缓存
-func (c *RedisCache) EvictDeviceStatus(ctx context.Context, deviceID string) error {
-	return c.Delete(ctx, PrefixDeviceStatus+deviceID)
-}
-
 // ---- 传感器近期数据缓存便捷方法 ----
+
+// CacheSensorRecent 缓存传感器近期数据（用于快速查询最新一条）
+func (c *RedisCache) CacheSensorRecent(ctx context.Context, deviceID string, data interface{}) error {
+	return c.Set(ctx, PrefixSensorRecent+deviceID+":latest", data, TTLSensorRecent)
+}
+
+// GetCachedSensorRecent 获取缓存的传感器近期数据
+func (c *RedisCache) GetCachedSensorRecent(ctx context.Context, deviceID string, dest interface{}) error {
+	return c.Get(ctx, PrefixSensorRecent+deviceID+":latest", dest)
+}
 
 // EvictSensorRecentCache 清除传感器近期缓存
 func (c *RedisCache) EvictSensorRecentCache(ctx context.Context, deviceID string) error {
-	return c.DeleteByPattern(ctx, PrefixSensorRecent+deviceID+":*")
+	// 改为精确删除，避免 SCAN 全库
+	return c.Delete(ctx, PrefixSensorRecent+deviceID+":latest")
+}
+
+// ---- 设备活跃时间防抖（Debounce） ----
+
+const (
+	PrefixDebounceActive = "debounce:active:"
+	TTLDebounceActive    = 30 * time.Second // 30s 内同一设备只写一次 PG
+)
+
+// ShouldUpdateActive 设备活跃时间防抖：返回 true 表示应该更新 PostgreSQL
+// 使用 Redis SETNX 实现：30s 内同一设备只有第一次返回 true
+func (c *RedisCache) ShouldUpdateActive(ctx context.Context, deviceID string) (bool, error) {
+	key := PrefixDebounceActive + deviceID
+	ok, err := c.client.SetNX(ctx, key, "1", TTLDebounceActive).Result()
+	return ok, err
 }
 
 // ---- MQTT消息缓存 ----
