@@ -7,7 +7,7 @@
 # 变量
 APP_NAME   = iot-platform
 BUILD_DIR  = ./build
-GO         = go
+GO         = /usr/local/go/bin/go
 SSH_HOST  ?= aliyun-ubuntu
 REMOTE_DIR ?= /home/ubuntu/iotPlatform_back
 REMOTE_BIN ?= $(REMOTE_DIR)/build/$(APP_NAME)
@@ -28,7 +28,7 @@ dev:
 	@echo "→ 启动隧道..."
 	@bash ./scripts/tunnel.sh on
 	@echo "→ 启动 air 热重载..."
-	air -c .air.toml
+	/home/yu/go/bin/air -c .air.toml
 
 # ===========================================
 # 编译

@@ -6,17 +6,17 @@
 
 ## 技术栈
 
-| 组件 | 技术 |
-|------|------|
-| 语言 | Go 1.22 |
-| Web 框架 | Gin 1.12 |
-| ORM | GORM |
-| 认证 | Sa-Token Go（Redis 会话） |
-| 数据库 | PostgreSQL 16 |
-| 缓存 | Redis 7 |
-| 时序库 | InfluxDB 2.7 |
-| MQTT | Eclipse Paho |
-| WebSocket | Gorilla WebSocket |
+| 组件      | 技术                      |
+|-----------|---------------------------|
+| 语言      | Go 1.22                   |
+| Web 框架  | Gin 1.12                  |
+| ORM       | GORM                      |
+| 认证      | Sa-Token Go（Redis 会话） |
+| 数据库    | PostgreSQL 16             |
+| 缓存      | Redis 7                   |
+| 时序库    | InfluxDB 2.7              |
+| MQTT      | Eclipse Paho              |
+| WebSocket | Gorilla WebSocket         |
 
 ---
 

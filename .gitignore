@@ -44,6 +44,7 @@ internal/ent/*/
 .env
 .env.local
 *.local.yaml
+config/config.yaml
 
 # ===========================================
 # 日志 & 临时文件
