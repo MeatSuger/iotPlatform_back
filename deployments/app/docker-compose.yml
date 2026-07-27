@@ -1,0 +1,20 @@
+version: "3.8"
+
+services:
+  iot-platform-go:
+    build:
+      context: ../..
+      dockerfile: deployments/app/Dockerfile
+    container_name: iot-platform-go
+    environment:
+      - CONFIG_PATH=configs/config.prod.yaml
+    networks:
+      - 1panel-network
+    volumes:
+      - ../../configs:/app/configs:ro
+      - ../../build/iot-platform:/app/iot-platform:ro
+    restart: unless-stopped
+
+networks:
+  1panel-network:
+    external: true
