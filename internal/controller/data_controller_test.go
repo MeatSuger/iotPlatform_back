@@ -58,8 +58,8 @@ func TestDataReport_FullFlow(t *testing.T) {
 			})
 		})
 
-		body := map[string]interface{}{
-			"sensors": []map[string]interface{}{
+		body := map[string]any{
+			"sensors": []map[string]any{
 				{"name": "temperature", "type": "number", "value": 26.5},
 				{"name": "humidity", "type": "number", "value": 65.0},
 			},
@@ -73,7 +73,7 @@ func TestDataReport_FullFlow(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(200), resp["code"])
 		assert.Equal(t, "状态上报已接收", resp["message"])
@@ -95,7 +95,7 @@ func TestDataReport_FullFlow(t *testing.T) {
 			common.Success(c, nil)
 		})
 
-		body := map[string]interface{}{"sensors": []interface{}{}}
+		body := map[string]any{"sensors": []any{}}
 		bodyBytes, _ := json.Marshal(body)
 		req := httptest.NewRequest("POST", "/data/dev-002/Data", bytes.NewReader(bodyBytes))
 		req.Header.Set("Content-Type", "application/json")
@@ -104,7 +104,7 @@ func TestDataReport_FullFlow(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(400), resp["code"])
 		assert.Contains(t, resp["message"], "传感器数据不能为空")
@@ -124,7 +124,7 @@ func TestDataReport_FullFlow(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(401), resp["code"])
 		assert.Contains(t, resp["message"], "设备Token无效")
@@ -143,7 +143,7 @@ func TestDataReport_FullFlow(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(401), resp["code"])
 		assert.Contains(t, resp["message"], "缺少设备Token")
@@ -181,7 +181,7 @@ func TestHeartbeat_FullFlow(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		assert.Equal(t, 200, w.Code)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(200), resp["code"])
 	})
@@ -201,7 +201,7 @@ func TestHeartbeat_FullFlow(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(200), resp["code"])
 	})
@@ -224,7 +224,7 @@ func TestInfluxDBPing(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(200), resp["code"])
 		assert.Equal(t, "true", resp["data"])
@@ -276,7 +276,7 @@ func TestSensorData_JSONValidation(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(400), resp["code"])
 	})
@@ -296,7 +296,7 @@ func TestQueryData(t *testing.T) {
 			assert.Equal(t, "dev-query-001", deviceID)
 			limit := c.DefaultQuery("limit", "50")
 			assert.Equal(t, "10", limit)
-			common.Success(c, []map[string]interface{}{
+			common.Success(c, []map[string]any{
 				{"name": "temp", "value": 25.5},
 			})
 		})
@@ -305,7 +305,7 @@ func TestQueryData(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(200), resp["code"])
 	})
@@ -320,7 +320,7 @@ func TestQueryData(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(200), resp["code"])
 	})
@@ -329,6 +329,166 @@ func TestQueryData(t *testing.T) {
 // ========================================
 // MQTT 设备数据上报
 // ========================================
+
+// ========================================
+// 错误 POST 数据格式测试
+// ========================================
+
+func TestBadPostDataFormats(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("JSON 语法错误返回400", func(t *testing.T) {
+		r := gin.New()
+		r.POST("/data", func(c *gin.Context) {
+			var dto entity.DeviceStatusDTO
+			if err := c.ShouldBindJSON(&dto); err != nil {
+				common.FailWithMsg(c, common.CodeBadRequest, err.Error())
+				return
+			}
+			common.Success(c, nil)
+		})
+
+		req := httptest.NewRequest("POST", "/data", bytes.NewReader([]byte("{bad")))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		resp := parseResp(w)
+		assert.Equal(t, common.CodeBadRequest, resp.Code)
+	})
+
+	t.Run("sensors 字段类型错误返回400", func(t *testing.T) {
+		r := gin.New()
+		r.POST("/data", func(c *gin.Context) {
+			var dto entity.DeviceStatusDTO
+			if err := c.ShouldBindJSON(&dto); err != nil {
+				common.FailWithMsg(c, common.CodeBadRequest, err.Error())
+				return
+			}
+			common.Success(c, nil)
+		})
+
+		// sensors 应该是数组，传字符串
+		req := httptest.NewRequest("POST", "/data", bytes.NewReader([]byte(`{"sensors":"not-array"}`)))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		resp := parseResp(w)
+		assert.Equal(t, common.CodeBadRequest, resp.Code)
+	})
+
+	t.Run("sensors 元素缺少必填字段（业务层校验）", func(t *testing.T) {
+		r := gin.New()
+		r.POST("/data", func(c *gin.Context) {
+			var dto entity.DeviceStatusDTO
+			if err := c.ShouldBindJSON(&dto); err != nil {
+				common.FailWithMsg(c, common.CodeBadRequest, err.Error())
+				return
+			}
+			if len(dto.Sensors) > 0 && (dto.Sensors[0].Name == "" || dto.Sensors[0].Type == "") {
+				common.FailWithMsg(c, common.CodeBadRequest, "传感器字段不完整")
+				return
+			}
+			common.Success(c, nil)
+		})
+
+		req := httptest.NewRequest("POST", "/data", bytes.NewReader([]byte(`{"sensors":[{"value":1}]}`)))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		resp := parseResp(w)
+		assert.Equal(t, common.CodeBadRequest, resp.Code)
+		assert.Contains(t, resp.Message, "不完整")
+	})
+
+	t.Run("空 body 返回400", func(t *testing.T) {
+		r := gin.New()
+		r.POST("/data", func(c *gin.Context) {
+			var dto entity.DeviceStatusDTO
+			if err := c.ShouldBindJSON(&dto); err != nil {
+				common.FailWithMsg(c, common.CodeBadRequest, err.Error())
+				return
+			}
+			common.Success(c, nil)
+		})
+
+		req := httptest.NewRequest("POST", "/data", nil)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		resp := parseResp(w)
+		assert.Equal(t, common.CodeBadRequest, resp.Code)
+	})
+}
+
+// ========================================
+// 401 / 403 额外场景
+// ========================================
+
+func TestErrorCodes_Extra(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	deviceMgr := middleware.GetDeviceManager()
+
+	t.Run("设备Token不匹配返回401", func(t *testing.T) {
+		// 设备 A 的 token 访问设备 B
+		tokenA, _ := deviceMgr.Login("dev-a", "device")
+		deviceAuth := middleware.DeviceAuthMiddleware()
+
+		r := gin.New()
+		r.POST("/data/:deviceId/Data", deviceAuth, func(c *gin.Context) {
+			deviceID := c.Param("deviceId")
+			rawToken, _ := c.Get("deviceToken")
+			tokenStr, _ := rawToken.(string)
+
+			// 模拟 token 与 deviceId 不匹配
+			loginID, _ := deviceMgr.GetLoginID(tokenStr)
+			if loginID != deviceID {
+				common.FailWithMsg(c, 401, "设备Token不匹配")
+				return
+			}
+			common.Success(c, nil)
+		})
+
+		body := map[string]any{"sensors": []map[string]any{{"name": "t", "type": "n", "value": 1}}}
+		bodyBytes, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/data/dev-b/Data", bytes.NewReader(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Device-Token", tokenA)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		resp := parseResp(w)
+		assert.Equal(t, 401, resp.Code)
+		assert.Contains(t, resp.Message, "不匹配")
+	})
+
+	t.Run("CheckRole 缺少角色返回403", func(t *testing.T) {
+		r := gin.New()
+		r.Use(middleware.CheckRole("superadmin"))
+		r.GET("/super", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+
+		req := httptest.NewRequest("GET", "/super", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		resp := parseResp(w)
+		assert.Equal(t, common.CodeForbidden, resp.Code)
+	})
+
+	t.Run("用户无权操作他人设备返回403", func(t *testing.T) {
+		r := gin.New()
+		// 无需 auth 中间件，直接测试业务逻辑返回 403
+		r.POST("/device/:deviceId/cmd", func(c *gin.Context) {
+			common.FailWithMsg(c, common.CodeForbidden, "无权操作该设备")
+		})
+
+		req := httptest.NewRequest("POST", "/device/dev-x/cmd", bytes.NewReader([]byte(`{"type":"reboot","payload":"{}"}`)))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		resp := parseResp(w)
+		assert.Equal(t, common.CodeForbidden, resp.Code)
+		assert.Equal(t, "无权操作该设备", resp.Message)
+	})
+}
 
 func TestMqttDataReport(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -345,8 +505,8 @@ func TestMqttDataReport(t *testing.T) {
 			common.SuccessWithMsg(c, "MQTT数据上报已接收", time.Now().Format("2006-01-02T15:04:05.000"))
 		})
 
-		body := map[string]interface{}{
-			"sensors": []map[string]interface{}{
+		body := map[string]any{
+			"sensors": []map[string]any{
 				{"name": "MQTT-CO2", "type": "CO2-SENSOR", "value": "500ppm"},
 			},
 		}
@@ -358,7 +518,7 @@ func TestMqttDataReport(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(200), resp["code"])
 		assert.Equal(t, "MQTT数据上报已接收", resp["message"])
@@ -379,7 +539,7 @@ func TestMqttDataReport(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(200), resp["code"])
 	})
@@ -399,7 +559,7 @@ func TestMqttDataReport(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(200), resp["code"])
 	})

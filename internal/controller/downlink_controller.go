@@ -25,12 +25,12 @@ func NewDownlinkController(downlinkSvc *service.DownlinkService, deviceSvc *serv
 	}
 }
 
-// @Summary      向设备下发命令
+// PostCmd @Summary      向设备下发命令
 // @Tags         device
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        deviceId  path      string                     true  "设备ID"
-// @Param        body      body      service.DownlinkCmdRequest  true  "命令内容"
+// @Param        body      service.DownlinkCmdRequest  true  "命令内容"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
 // @Security     UserAuth
@@ -70,10 +70,10 @@ func (ctl *DownlinkController) PostCmd(c *gin.Context) {
 	})
 }
 
-// @Summary      设备拉取待消费命令
+// GetCmd @Summary      设备拉取待消费命令
 // @Tags         device
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        deviceId  path      string  true  "设备ID"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
@@ -92,9 +92,9 @@ func (ctl *DownlinkController) GetCmd(c *gin.Context) {
 	common.Success(c, cmds)
 }
 
-// parsePayload 将 JSON 字符串解析为 interface{}，保持 JSON 结构输出
-func parsePayload(raw string) interface{} {
-	var v interface{}
+// parsePayload 将 JSON 字符串解析为 any，保持 JSON 结构输出
+func parsePayload(raw string) any {
+	var v any
 	if err := json.Unmarshal([]byte(raw), &v); err != nil {
 		return raw // 解析失败则返回原始字符串
 	}

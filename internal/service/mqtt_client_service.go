@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go.uber.org/zap"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"iot-platform.local/internal/ent"
@@ -89,7 +90,10 @@ func (s *MqttClientService) Connect() error {
 		if qos == 0 {
 			qos = 1
 		}
-		s.doSubscribe(topic, qos)
+		err := s.doSubscribe(topic, qos)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -208,7 +212,7 @@ func (s *MqttClientService) doSubscribe(topic string, qos byte) error {
 }
 
 // onConnect 连接成功回调
-func (s *MqttClientService) onConnect(client mqtt.Client) {
+func (s *MqttClientService) onConnect(mqtt.Client) {
 	zap.S().Info("[MQTT] 连接建立")
 
 	// 重新订阅之前的主题
@@ -218,19 +222,22 @@ func (s *MqttClientService) onConnect(client mqtt.Client) {
 		if qos == 0 {
 			qos = 1
 		}
-		s.doSubscribe(topic, qos)
+		err := s.doSubscribe(topic, qos)
+		if err != nil {
+			return
+		}
 	}
 }
 
 // onConnectionLost 连接丢失回调
-func (s *MqttClientService) onConnectionLost(client mqtt.Client, err error) {
+func (s *MqttClientService) onConnectionLost(_ mqtt.Client, err error) {
 	zap.S().Infof("[MQTT] 连接丢失: %v", err)
 	s.status.SetConnected(false)
 	s.status.IncrementReconnect()
 }
 
 // onMessageReceived 消息接收回调
-func (s *MqttClientService) onMessageReceived(client mqtt.Client, msg mqtt.Message) {
+func (s *MqttClientService) onMessageReceived(_ mqtt.Client, msg mqtt.Message) {
 	view := mqttEntity.NewMessageView(
 		msg.Topic(),
 		string(msg.Payload()),

@@ -27,7 +27,7 @@ func Recovery() gin.HandlerFunc {
 					return
 				}
 
-				// 默认500错误
+				// 默认500 错误
 				c.JSON(http.StatusOK, common.ApiResponse{
 					Code:    common.CodeServerError,
 					Message: "服务器内部错误",

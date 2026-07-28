@@ -24,10 +24,10 @@ func NewDataController(deviceReportSvc *service.DeviceReportService, influxSvc *
 	}
 }
 
-// @Summary      InfluxDB连通性检查
+// Ping @Summary      InfluxDB连通性检查
 // @Tags         data
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
 // @Router       /api/data/ping [post]
@@ -40,11 +40,11 @@ func (ctl *DataController) Ping(c *gin.Context) {
 	common.Success(c, "true")
 }
 
-// @Summary      上报传感器数据
+// ReportData @Summary      上报传感器数据
 // @Tags         data
-// @Accept       json
-// @Produce      json
-// @Param        body      body      entity.DeviceStatusDTO  true  "传感器数据"
+// @Accept       JSON
+// @Produce      JSON
+// @Param        body      entity.DeviceStatusDTO  true  "传感器数据"
 // @Param        deviceId  path      string                  true  "设备ID"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
@@ -77,10 +77,10 @@ func (ctl *DataController) ReportData(c *gin.Context) {
 	common.SuccessWithMsg(c, "状态上报已接收", common.DateTimeNow().Format(common.DateTimeFormatWithZone))
 }
 
-// @Summary      设备心跳
+// Heartbeat @Summary      设备心跳
 // @Tags         data
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        deviceId  path      string  true  "设备ID"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
@@ -104,10 +104,10 @@ func (ctl *DataController) Heartbeat(c *gin.Context) {
 	})
 }
 
-// @Summary      查询设备传感器数据
+// QueryData @Summary      查询设备传感器数据
 // @Tags         data
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        deviceId  path      string  true   "设备ID"
 // @Param        limit     query     int     false  "数量限制"
 // @Success      200       {object}  common.ApiResponse
@@ -128,10 +128,10 @@ func (ctl *DataController) QueryData(c *gin.Context) {
 	common.Success(c, records)
 }
 
-// @Summary      通用数据查询入口
+// ListData @Summary      通用数据查询入口
 // @Tags         data
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
 // @Router       /api/data/list [get]

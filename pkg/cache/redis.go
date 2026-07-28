@@ -48,7 +48,7 @@ func (c *RedisCache) Close() error {
 }
 
 // Set 设置缓存
-func (c *RedisCache) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
+func (c *RedisCache) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("序列化缓存值失败: %w", err)
@@ -57,7 +57,7 @@ func (c *RedisCache) Set(ctx context.Context, key string, value interface{}, ttl
 }
 
 // Get 获取缓存
-func (c *RedisCache) Get(ctx context.Context, key string, dest interface{}) error {
+func (c *RedisCache) Get(ctx context.Context, key string, dest any) error {
 	data, err := c.client.Get(ctx, key).Bytes()
 	if err != nil {
 		return err
@@ -99,12 +99,12 @@ func (c *RedisCache) Exists(ctx context.Context, keys ...string) (int64, error) 
 // ---- 设备缓存便捷方法 ----
 
 // CacheDevice 缓存设备信息
-func (c *RedisCache) CacheDevice(ctx context.Context, deviceID string, device interface{}) error {
+func (c *RedisCache) CacheDevice(ctx context.Context, deviceID string, device any) error {
 	return c.Set(ctx, PrefixDevice+deviceID, device, TTLDevice)
 }
 
 // GetCachedDevice 获取缓存的设备信息
-func (c *RedisCache) GetCachedDevice(ctx context.Context, deviceID string, dest interface{}) error {
+func (c *RedisCache) GetCachedDevice(ctx context.Context, deviceID string, dest any) error {
 	return c.Get(ctx, PrefixDevice+deviceID, dest)
 }
 
@@ -116,12 +116,12 @@ func (c *RedisCache) EvictDeviceCache(ctx context.Context, deviceID string) erro
 // ---- 传感器近期数据缓存便捷方法 ----
 
 // CacheSensorRecent 缓存传感器近期数据（用于快速查询最新一条）
-func (c *RedisCache) CacheSensorRecent(ctx context.Context, deviceID string, data interface{}) error {
+func (c *RedisCache) CacheSensorRecent(ctx context.Context, deviceID string, data any) error {
 	return c.Set(ctx, PrefixSensorRecent+deviceID+":latest", data, TTLSensorRecent)
 }
 
 // GetCachedSensorRecent 获取缓存的传感器近期数据
-func (c *RedisCache) GetCachedSensorRecent(ctx context.Context, deviceID string, dest interface{}) error {
+func (c *RedisCache) GetCachedSensorRecent(ctx context.Context, deviceID string, dest any) error {
 	return c.Get(ctx, PrefixSensorRecent+deviceID+":latest", dest)
 }
 
@@ -131,25 +131,10 @@ func (c *RedisCache) EvictSensorRecentCache(ctx context.Context, deviceID string
 	return c.Delete(ctx, PrefixSensorRecent+deviceID+":latest")
 }
 
-// ---- 设备活跃时间防抖（Debounce） ----
-
-const (
-	PrefixDebounceActive = "debounce:active:"
-	TTLDebounceActive    = 30 * time.Second // 30s 内同一设备只写一次 PG
-)
-
-// ShouldUpdateActive 设备活跃时间防抖：返回 true 表示应该更新 PostgreSQL
-// 使用 Redis SETNX 实现：30s 内同一设备只有第一次返回 true
-func (c *RedisCache) ShouldUpdateActive(ctx context.Context, deviceID string) (bool, error) {
-	key := PrefixDebounceActive + deviceID
-	ok, err := c.client.SetNX(ctx, key, "1", TTLDebounceActive).Result()
-	return ok, err
-}
-
 // ---- MQTT消息缓存 ----
 
 // LPushMQTTMessage 将MQTT消息推入列表
-func (c *RedisCache) LPushMQTTMessage(ctx context.Context, deviceID string, msg interface{}) error {
+func (c *RedisCache) LPushMQTTMessage(ctx context.Context, deviceID string, msg any) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err

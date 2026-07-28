@@ -27,9 +27,19 @@ func TestDateTime_MarshalJSON(t *testing.T) {
 
 	b, err := json.Marshal(dt)
 	assert.NoError(t, err)
-	// Should contain date time with timezone offset
-	assert.Contains(t, string(b), "2024-01-15")
-	assert.Contains(t, string(b), "10:30:00")
+	// 精确格式：RFC 3339，T 分隔，3 位毫秒，时区偏移
+	assert.Regexp(t, `^"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}"$`, string(b))
+}
+
+func TestDateTime_MarshalJSON_Format(t *testing.T) {
+	// 测试时间格式精确到毫秒，T 分隔
+	tm := time.Date(2026, 7, 13, 15, 25, 33, 25000000, time.FixedZone("CST", 8*3600))
+	dt := DateTimeFrom(tm)
+
+	b, err := json.Marshal(dt)
+	assert.NoError(t, err)
+	// 精确格式：T 分隔 + 3 位毫秒 + 时区
+	assert.Regexp(t, `"2026-07-13T15:25:33\.025[+-]\d{2}:\d{2}"`, string(b))
 }
 
 func TestDateTime_MarshalJSON_Zero(t *testing.T) {
@@ -93,7 +103,7 @@ func TestDateTime_Value(t *testing.T) {
 func TestDateTime_Scan(t *testing.T) {
 	tests := []struct {
 		name    string
-		value   interface{}
+		value   any
 		wantErr bool
 	}{
 		{"time.Time", time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC), false},

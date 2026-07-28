@@ -83,7 +83,7 @@ func (h *WsHandler) SetupDeviceWS(tokenProvider DeviceTokenProvider, report Repo
 				zap.S().Warnf("[DeviceWS] 更新设备上线状态失败 [device=%s]: %v", deviceID, err)
 			}
 		}
-		msg, _ := json.Marshal(map[string]interface{}{
+		msg, _ := json.Marshal(map[string]any{
 			"type":      "deviceOnline",
 			"deviceId":  deviceID,
 			"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
@@ -97,7 +97,7 @@ func (h *WsHandler) SetupDeviceWS(tokenProvider DeviceTokenProvider, report Repo
 				zap.S().Warnf("[DeviceWS] 更新设备下线状态失败 [device=%s]: %v", deviceID, err)
 			}
 		}
-		msg, _ := json.Marshal(map[string]interface{}{
+		msg, _ := json.Marshal(map[string]any{
 			"type":      "deviceOffline",
 			"deviceId":  deviceID,
 			"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
@@ -129,11 +129,11 @@ func (h *WsHandler) forwardToOwner(deviceID string, rawMessage []byte) {
 	}
 
 	// 包装为统一格式，方便前端区分不同设备
-	var payload interface{}
+	var payload any
 	if err := json.Unmarshal(rawMessage, &payload); err != nil {
 		payload = string(rawMessage)
 	}
-	msg, _ := json.Marshal(map[string]interface{}{
+	msg, _ := json.Marshal(map[string]any{
 		"deviceId":  deviceID,
 		"data":      payload,
 		"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),

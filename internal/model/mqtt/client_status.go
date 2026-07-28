@@ -1,6 +1,7 @@
 package mqtt
 
 import (
+	"maps"
 	"sync"
 	"time"
 )
@@ -101,9 +102,7 @@ func (s *MqttClientStatus) Snapshot() MqttClientStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	subs := make(map[string]byte, len(s.Subscriptions))
-	for k, v := range s.Subscriptions {
-		subs[k] = v
-	}
+	maps.Copy(subs, s.Subscriptions)
 	return MqttClientStatus{
 		Connected:             s.Connected,
 		BrokerURL:             s.BrokerURL,

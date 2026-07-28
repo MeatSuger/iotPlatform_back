@@ -56,12 +56,12 @@ func TestMain(m *testing.M) {
 // ========================================
 
 type testResp struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    any    `json:"data"`
 }
 
-func newJSONReq(method, path string, body interface{}, headers map[string]string) *http.Request {
+func newJSONReq(method, path string, body any, headers map[string]string) *http.Request {
 	var b []byte
 	if body != nil {
 		b, _ = json.Marshal(body)
@@ -393,7 +393,7 @@ func TestLoginResponse_Serialization(t *testing.T) {
 	b, err := json.Marshal(resp)
 	assert.NoError(t, err)
 
-	var m map[string]interface{}
+	var m map[string]any
 	err = json.Unmarshal(b, &m)
 	assert.NoError(t, err)
 
@@ -414,8 +414,8 @@ func TestLoginResponse_Serialization(t *testing.T) {
 // ========================================
 
 func TestDataReport_RequestBody(t *testing.T) {
-	body := map[string]interface{}{
-		"sensors": []map[string]interface{}{
+	body := map[string]any{
+		"sensors": []map[string]any{
 			{"name": "temperature", "type": "number", "value": 26.5},
 			{"name": "humidity", "type": "number", "value": 65.0},
 			{"name": "co2", "type": "CO2-SENSOR", "value": "400ppm"},
@@ -426,17 +426,17 @@ func TestDataReport_RequestBody(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 验证反序列化
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	err = json.Unmarshal(b, &parsed)
 	assert.NoError(t, err)
 
-	sensors, ok := parsed["sensors"].([]interface{})
+	sensors, ok := parsed["sensors"].([]any)
 	assert.True(t, ok)
 	assert.Len(t, sensors, 3)
 
 	// 验证每个传感器格式
 	for _, s := range sensors {
-		sensor, ok := s.(map[string]interface{})
+		sensor, ok := s.(map[string]any)
 		assert.True(t, ok)
 		assert.Contains(t, sensor, "name")
 		assert.Contains(t, sensor, "type")

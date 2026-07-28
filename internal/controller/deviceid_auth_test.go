@@ -36,7 +36,7 @@ func TestDeviceIDAuthMiddleware(t *testing.T) {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest("GET", "/device/abc/test", nil)
 		r.ServeHTTP(w, req)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(400), resp["code"])
 		assert.Contains(t, resp["message"], "格式无效")

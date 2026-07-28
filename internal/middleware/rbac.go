@@ -42,10 +42,22 @@ func InitEnforcer() (*casbin.Enforcer, error) {
 	}
 
 	// 默认策略：admin 拥有所有权限
-	enforcer.AddPolicy("admin", "/*", ".*")
-	enforcer.AddPolicy("super-admin", "/*", ".*")
-	enforcer.AddPolicy("user", "/api/user/*", "GET|POST|PUT")
-	enforcer.AddPolicy("user", "/api/device/*", "GET")
+	_, err = enforcer.AddPolicy("admin", "/*", ".*")
+	if err != nil {
+		return nil, err
+	}
+	_, err = enforcer.AddPolicy("super-admin", "/*", ".*")
+	if err != nil {
+		return nil, err
+	}
+	_, err = enforcer.AddPolicy("user", "/api/user/*", "GET|POST|PUT")
+	if err != nil {
+		return nil, err
+	}
+	_, err = enforcer.AddPolicy("user", "/api/device/*", "GET")
+	if err != nil {
+		return nil, err
+	}
 
 	casbinEnforcer = enforcer
 	return enforcer, nil

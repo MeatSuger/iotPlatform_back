@@ -22,7 +22,7 @@ func TestDeviceList(t *testing.T) {
 
 	r := gin.New()
 	r.GET("/device/list", func(c *gin.Context) {
-		common.Success(c, []map[string]interface{}{
+		common.Success(c, []map[string]any{
 			{"id": 1, "deviceId": "a1b2c3", "deviceName": "ESP32-01", "deviceType": "sensor", "status": "ONLINE"},
 			{"id": 2, "deviceId": "d4e5f6", "deviceName": "ESP32-02", "deviceType": "actuator", "status": "OFFLINE"},
 		})
@@ -48,12 +48,12 @@ func TestDeviceDetail(t *testing.T) {
 	r.GET("/device/:deviceId/Data", func(c *gin.Context) {
 		did := c.Param("deviceId")
 		assert.Equal(t, "a1b2c3", did)
-		common.Success(c, map[string]interface{}{
+		common.Success(c, map[string]any{
 			"id": 1, "deviceId": "a1b2c3", "deviceName": "ESP32-01",
 			"deviceType": "sensor", "firmwareVersion": "1.0.0",
 			"ipAddress": "192.168.1.100", "macAddress": "AA:BB:CC:DD:EE:FF",
 			"location": "机房A", "ownerId": 1, "status": "ONLINE",
-			"sensors": []map[string]interface{}{
+			"sensors": []map[string]any{
 				{"name": "temperature", "type": "number", "value": 26.5},
 			},
 		})
@@ -101,7 +101,7 @@ func TestUserProfile(t *testing.T) {
 
 	r := gin.New()
 	r.GET("/user/profile", func(c *gin.Context) {
-		common.Success(c, map[string]interface{}{
+		common.Success(c, map[string]any{
 			"id": 1, "account": "admin", "name": "管理员",
 			"email": "admin@example.com", "role": "admin", "status": "active",
 		})
@@ -127,8 +127,8 @@ func TestUserPage(t *testing.T) {
 		assert.Equal(t, "0", c.DefaultQuery("pageNum", "0"))
 		assert.Equal(t, "5", c.DefaultQuery("pageSize", "10"))
 		assert.Equal(t, "admin", c.Query("name"))
-		common.Success(c, map[string]interface{}{
-			"records": []map[string]interface{}{
+		common.Success(c, map[string]any{
+			"records": []map[string]any{
 				{"id": 1, "account": "admin", "name": "管理员", "role": "admin"},
 			},
 			"total": 1, "size": 5, "current": 0, "pages": 1,
@@ -138,7 +138,7 @@ func TestUserPage(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("GET", "/user/page?pageNum=0&pageSize=5&name=admin", nil))
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	assert.Equal(t, float64(200), resp["code"])
 }
@@ -155,7 +155,7 @@ func TestUserDelete(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("POST", "/user/delete?id=2", nil))
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	assert.Equal(t, float64(200), resp["code"])
 	assert.Equal(t, "删除成功", resp["message"])
@@ -188,12 +188,12 @@ func TestDownlinkCmdTypes(t *testing.T) {
 					common.FailWithMsg(c, common.CodeBadRequest, err.Error())
 					return
 				}
-				common.SuccessWithMsg(c, "命令已下发", map[string]interface{}{
+				common.SuccessWithMsg(c, "命令已下发", map[string]any{
 					"id": 1, "type": tc.cmdType,
 				})
 			})
 
-			body, _ := json.Marshal(map[string]interface{}{
+			body, _ := json.Marshal(map[string]any{
 				"type":    tc.cmdType,
 				"payload": json.RawMessage(tc.payload),
 			})
@@ -203,7 +203,7 @@ func TestDownlinkCmdTypes(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			r.ServeHTTP(w, req)
 
-			var resp map[string]interface{}
+			var resp map[string]any
 			json.Unmarshal(w.Body.Bytes(), &resp)
 			assert.Equal(t, float64(200), resp["code"])
 			assert.Equal(t, "命令已下发", resp["message"])
@@ -221,7 +221,7 @@ func TestDevicePollCmd(t *testing.T) {
 	r := gin.New()
 	r.GET("/device/:deviceId/cmd", func(c *gin.Context) {
 		assert.Equal(t, "dev-001", c.Param("deviceId"))
-		common.Success(c, []map[string]interface{}{
+		common.Success(c, []map[string]any{
 			{"id": 1, "type": "config", "payload": json.RawMessage(`{"interval":60}`), "createdAt": "2025-07-26T00:00:00+08:00"},
 			{"id": 2, "type": "control", "payload": json.RawMessage(`{"action":"reboot"}`), "createdAt": "2025-07-26T01:00:00+08:00"},
 		})
@@ -276,7 +276,7 @@ func TestSensorDataFormats(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var dto struct {
-				Sensors []map[string]interface{} `json:"sensors"`
+				Sensors []map[string]any `json:"sensors"`
 			}
 			err := json.Unmarshal([]byte(tt.json), &dto)
 			assert.NoError(t, err)
@@ -290,7 +290,7 @@ func TestSensorDataFormats(t *testing.T) {
 // ========================================
 
 func TestMqttClientStatus_JSON(t *testing.T) {
-	status := map[string]interface{}{
+	status := map[string]any{
 		"connected":            true,
 		"brokerURL":            "tcp://mqtt:1883",
 		"clientID":             "iot-platform.local-go",
@@ -303,7 +303,7 @@ func TestMqttClientStatus_JSON(t *testing.T) {
 	b, err := json.Marshal(status)
 	assert.NoError(t, err)
 
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	json.Unmarshal(b, &parsed)
 	assert.True(t, parsed["connected"].(bool))
 	assert.Equal(t, "tcp://mqtt:1883", parsed["brokerURL"])
@@ -317,8 +317,8 @@ func TestDownlinkFullFlow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	// 模拟存储（内存队列）
-	cmdQueue := make([]map[string]interface{}, 0)
-	body, _ := json.Marshal(map[string]interface{}{
+	cmdQueue := make([]map[string]any, 0)
+	body, _ := json.Marshal(map[string]any{
 		"type": "control", "payload": json.RawMessage(`{"action":"reboot"}`),
 	})
 
@@ -327,7 +327,7 @@ func TestDownlinkFullFlow(t *testing.T) {
 	r1.POST("/device/:deviceId/cmd", func(c *gin.Context) {
 		var req map[string]json.RawMessage
 		c.ShouldBindJSON(&req)
-		cmd := map[string]interface{}{
+		cmd := map[string]any{
 			"id":       len(cmdQueue) + 1,
 			"deviceId": c.Param("deviceId"),
 			"type":     string(req["type"]),
@@ -354,7 +354,7 @@ func TestDownlinkFullFlow(t *testing.T) {
 	r2.ServeHTTP(w2, httptest.NewRequest("GET", "/device/dev-001/cmd", nil))
 
 	var resp struct {
-		Data []map[string]interface{} `json:"data"`
+		Data []map[string]any `json:"data"`
 	}
 	json.Unmarshal(w2.Body.Bytes(), &resp)
 	assert.Len(t, resp.Data, 1)
@@ -363,7 +363,7 @@ func TestDownlinkFullFlow(t *testing.T) {
 }
 
 // newJSONBody 构造带 JSON body 的请求
-func newJSONBody(t *testing.T, method, path string, body interface{}) (*httptest.ResponseRecorder, *gin.Engine) {
+func newJSONBody(t *testing.T, method, path string, body any) (*httptest.ResponseRecorder, *gin.Engine) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	return httptest.NewRecorder(), gin.New()

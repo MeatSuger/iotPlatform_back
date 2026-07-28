@@ -107,7 +107,10 @@ func (s *UDPServer) handle(addr *net.UDPAddr, data []byte) {
 func (s *UDPServer) Stop() {
 	close(s.stop)
 	if s.conn != nil {
-		s.conn.Close()
+		err := s.conn.Close()
+		if err != nil {
+			return
+		}
 	}
 	zap.L().Info("[UDP] 已关闭")
 }

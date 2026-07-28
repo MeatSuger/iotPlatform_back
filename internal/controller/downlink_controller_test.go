@@ -56,7 +56,7 @@ func TestDownlink_PostCmd(t *testing.T) {
 
 		// 无 TokenInterceptor → userAuth 读不到 token → 401
 		// 这里只测试路由可达性
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.True(t, resp["code"] != nil)
 	})
@@ -73,7 +73,7 @@ func TestDownlink_PostCmd(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(401), resp["code"])
 	})
@@ -91,7 +91,7 @@ func TestDownlink_GetCmd(t *testing.T) {
 		r.GET("/device/:deviceId/cmd", deviceAuth, func(c *gin.Context) {
 			deviceID := c.Param("deviceId")
 			assert.Equal(t, "dev-poll-001", deviceID)
-			common.Success(c, []map[string]interface{}{
+			common.Success(c, []map[string]any{
 				{"id": 1, "type": "config", "payload": `{"interval":60}`},
 			})
 		})
@@ -102,7 +102,7 @@ func TestDownlink_GetCmd(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(200), resp["code"])
 	})
@@ -118,7 +118,7 @@ func TestDownlink_GetCmd(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.Equal(t, float64(401), resp["code"])
 	})

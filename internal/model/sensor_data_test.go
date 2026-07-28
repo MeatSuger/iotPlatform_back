@@ -59,6 +59,52 @@ func TestSensorData_MarshalJSON(t *testing.T) {
 	assert.Contains(t, string(b), `"value":26.5`)
 }
 
+func TestSensorData_MarshalJSON_ZeroTimestamp(t *testing.T) {
+	s := SensorData{
+		Name:  "test",
+		Type:  "data",
+		Value: 100,
+	}
+	b, err := json.Marshal(s)
+	assert.NoError(t, err)
+	// 零值时间戳应被修正为当前时间，不应该是 0001-01-01
+	assert.NotContains(t, string(b), "0001-01-01")
+}
+
+func TestSensorData_MarshalJSON_Milliseconds(t *testing.T) {
+	s := SensorData{
+		Name:      "hum",
+		Type:      "int",
+		Value:     60,
+		Timestamp: time.Date(2026, 7, 13, 15, 25, 33, 25000000, time.FixedZone("CST", 8*3600)),
+	}
+	b, err := json.Marshal(s)
+	assert.NoError(t, err)
+	// timestamp 字段应为 RFC 3339 + 3 位毫秒
+	assert.Regexp(t, `"timestamp":"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}"`, string(b))
+}
+
+func TestSensorData_MarshalJSON_FormatNoZero(t *testing.T) {
+	// 正常时间戳不应出现 0001 年
+	s := SensorData{
+		Name:      "temp",
+		Type:      "float",
+		Value:     25.0,
+		Timestamp: time.Now(),
+	}
+	b, err := json.Marshal(s)
+	assert.NoError(t, err)
+	assert.NotContains(t, string(b), "0001-01-01")
+}
+
+func TestSensorData_UnmarshalJSON_FixesZero(t *testing.T) {
+	// 零值时间戳会在 UnmarshalJSON 中被修正为当前时间
+	var s SensorData
+	err := json.Unmarshal([]byte(`{"name":"t","type":"n","value":1,"timestamp":"0001-01-01T00:00:00Z"}`), &s)
+	assert.NoError(t, err)
+	assert.False(t, s.Timestamp.IsZero())
+}
+
 func TestDeviceStatus_Fields(t *testing.T) {
 	status := DeviceStatus{
 		ID:             "abc123",

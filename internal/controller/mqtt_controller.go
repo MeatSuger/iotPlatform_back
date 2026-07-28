@@ -32,11 +32,11 @@ func NewMqttController(
 	}
 }
 
-// @Summary      MQTT方式上报传感器数据
-// @Tags         mqtt
-// @Accept       json
-// @Produce      json
-// @Param        body      body      entity.DeviceStatusDTO  true  "传感器数据"
+// ReportData @Summary      MQTT方式上报传感器数据
+// @Tags         MQTT
+// @Accept       JSON
+// @Produce      JSON
+// @Param        body      entity.DeviceStatusDTO  true  "传感器数据"
 // @Param        deviceId  path      string                  true  "设备ID"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
@@ -63,10 +63,10 @@ func (ctl *MqttController) ReportData(c *gin.Context) {
 	common.SuccessWithMsg(c, "状态上报已接收", nil)
 }
 
-// @Summary      MQTT方式心跳
+// Heartbeat @Summary      MQTT方式心跳
 // @Tags         mqtt
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        deviceId  path      string  true  "设备ID"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
@@ -91,10 +91,10 @@ func (ctl *MqttController) Heartbeat(c *gin.Context) {
 	})
 }
 
-// @Summary      连接MQTT Broker
+// Connect @Summary      连接MQTT Broker
 // @Tags         mqtt
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
@@ -108,10 +108,10 @@ func (ctl *MqttController) Connect(c *gin.Context) {
 	common.SuccessWithMsg(c, "MQTT连接成功", nil)
 }
 
-// @Summary      断开MQTT连接
+// Disconnect @Summary      断开MQTT连接
 // @Tags         mqtt
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
@@ -122,10 +122,10 @@ func (ctl *MqttController) Disconnect(c *gin.Context) {
 	common.SuccessWithMsg(c, "MQTT已断开", nil)
 }
 
-// @Summary      订阅主题
+// Subscribe @Summary      订阅主题
 // @Tags         mqtt
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        body  body      mqttEntity.SubscribeRequest  true  "订阅请求参数"
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
@@ -147,10 +147,10 @@ func (ctl *MqttController) Subscribe(c *gin.Context) {
 	common.SuccessWithMsg(c, "订阅成功", gin.H{"topic": req.Topic})
 }
 
-// @Summary      取消订阅
+// Unsubscribe @Summary      取消订阅
 // @Tags         mqtt
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        body  body      mqttEntity.TopicRequest  true  "取消订阅请求参数"
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
@@ -172,10 +172,10 @@ func (ctl *MqttController) Unsubscribe(c *gin.Context) {
 	common.SuccessWithMsg(c, "取消订阅成功", nil)
 }
 
-// @Summary      发布消息
+// Publish @Summary      发布消息
 // @Tags         mqtt
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        body  body      mqttEntity.PublishRequest  true  "发布消息请求参数"
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
@@ -197,10 +197,10 @@ func (ctl *MqttController) Publish(c *gin.Context) {
 	common.SuccessWithMsg(c, "发布成功", nil)
 }
 
-// @Summary      获取MQTT客户端状态
+// Status @Summary      获取MQTT客户端状态
 // @Tags         mqtt
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
@@ -211,10 +211,10 @@ func (ctl *MqttController) Status(c *gin.Context) {
 	common.Success(c, status)
 }
 
-// @Summary      获取最近的MQTT消息
+// Messages @Summary      获取最近的MQTT消息
 // @Tags         mqtt
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        limit  query     int     false  "数量限制"
 // @Success      200    {object}  common.ApiResponse
 // @Failure      400    {object}  common.ApiResponse

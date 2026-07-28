@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"strconv"
 	"time"
@@ -222,7 +223,7 @@ func (h *WsHandler) readUserPump(client *Client) {
 		// 有 deviceId + type + payload → 下发命令（格式对齐 HTTP DownlinkCmdRequest + deviceId）
 		if envelope.DeviceID != "" && envelope.Type != "" && envelope.Payload != nil {
 			if h.onUserCommand == nil {
-				h.replyOwner(client.OwnerID, "error", map[string]interface{}{"deviceId": envelope.DeviceID}, "命令下发未启用")
+				h.replyOwner(client.OwnerID, "error", map[string]any{"deviceId": envelope.DeviceID}, "命令下发未启用")
 				continue
 			}
 
@@ -230,7 +231,7 @@ func (h *WsHandler) readUserPump(client *Client) {
 			if err != nil {
 				zap.S().Warnf("[UserWS] 命令下发失败 [user=%d, device=%s, type=%s]: %v",
 					client.OwnerID, envelope.DeviceID, envelope.Type, err)
-				h.replyOwner(client.OwnerID, "cmdAck", map[string]interface{}{
+				h.replyOwner(client.OwnerID, "cmdAck", map[string]any{
 					"deviceId": envelope.DeviceID,
 					"cmdType":  envelope.Type,
 					"success":  false,
@@ -241,7 +242,7 @@ func (h *WsHandler) readUserPump(client *Client) {
 
 			zap.S().Infof("[UserWS] 命令已下发 [user=%d, device=%s, type=%s, cmdID=%d]",
 				client.OwnerID, envelope.DeviceID, envelope.Type, cmdID)
-			h.replyOwner(client.OwnerID, "cmdAck", map[string]interface{}{
+			h.replyOwner(client.OwnerID, "cmdAck", map[string]any{
 				"deviceId": envelope.DeviceID,
 				"cmdType":  envelope.Type,
 				"cmdId":    cmdID,
@@ -261,11 +262,9 @@ func (h *WsHandler) readUserPump(client *Client) {
 }
 
 // replyOwner 向 owner 所有管理端广播消息
-func (h *WsHandler) replyOwner(ownerID uint, msgType string, data map[string]interface{}, errMsg string) {
-	resp := map[string]interface{}{"type": msgType}
-	for k, v := range data {
-		resp[k] = v
-	}
+func (h *WsHandler) replyOwner(ownerID uint, msgType string, data map[string]any, errMsg string) {
+	resp := map[string]any{"type": msgType}
+	maps.Copy(resp, data)
 	if errMsg != "" {
 		resp["error"] = errMsg
 	}
@@ -445,7 +444,7 @@ func (h *WsHandler) writePump(client *Client) {
 
 			// 批量发送队列中的消息
 			n := len(client.Send)
-			for i := 0; i < n; i++ {
+			for range n {
 				w.Write([]byte("\n"))
 				w.Write(<-client.Send)
 			}

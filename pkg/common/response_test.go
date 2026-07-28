@@ -150,7 +150,7 @@ func TestApiResponse_Serialization(t *testing.T) {
 	resp := ApiResponse{
 		Code:    200,
 		Message: "success",
-		Data:    map[string]interface{}{"id": 1},
+		Data:    map[string]any{"id": 1},
 	}
 	b, err := json.Marshal(resp)
 	assert.NoError(t, err)

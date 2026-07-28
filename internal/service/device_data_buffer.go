@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
@@ -130,7 +131,7 @@ func (b *DeviceDataBuffer) drain(ctx context.Context) {
 		count := b.batchSize
 		results, err := b.rdb.RPopCount(ctx, b.bufferKey, count).Result()
 		if err != nil {
-			if err != redis.Nil {
+			if !errors.Is(err, redis.Nil) {
 				zap.L().Warn("[DataBuffer] RPOP 失败", zap.Error(err))
 			}
 			return

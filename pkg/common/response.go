@@ -9,9 +9,9 @@ import (
 
 // ApiResponse 统一API响应结构
 type ApiResponse struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    any    `json:"data"`
 }
 
 // 通用响应码
@@ -41,7 +41,7 @@ func getMsg(code int) string {
 }
 
 // Success 返回成功响应
-func Success(c *gin.Context, data interface{}) {
+func Success(c *gin.Context, data any) {
 	c.JSON(http.StatusOK, ApiResponse{
 		Code:    CodeSuccess,
 		Message: "success",
@@ -50,7 +50,7 @@ func Success(c *gin.Context, data interface{}) {
 }
 
 // SuccessWithMsg 返回自定义消息的成功响应
-func SuccessWithMsg(c *gin.Context, msg string, data interface{}) {
+func SuccessWithMsg(c *gin.Context, msg string, data any) {
 	c.JSON(http.StatusOK, ApiResponse{
 		Code:    CodeSuccess,
 		Message: msg,
@@ -77,7 +77,7 @@ func FailWithMsg(c *gin.Context, code int, msg string) {
 }
 
 // FailWithData 返回带数据的失败响应
-func FailWithData(c *gin.Context, code int, msg string, data interface{}) {
+func FailWithData(c *gin.Context, code int, msg string, data any) {
 	c.JSON(http.StatusOK, ApiResponse{
 		Code:    code,
 		Message: msg,
@@ -96,7 +96,7 @@ func Error(c *gin.Context, msg string) {
 
 // Respond 统一响应辅助函数：自动识别 AppError 并提取对应的业务码
 // 使用方式：common.Respond(c, data, err) 替代手动 if err != nil { ... }
-func Respond(c *gin.Context, data interface{}, err error) {
+func Respond(c *gin.Context, data any, err error) {
 	if err != nil {
 		var appErr *AppError
 		if errors.As(err, &appErr) {

@@ -50,7 +50,7 @@ type SensorPoint struct {
 	DeviceID   string
 	SensorName string
 	Type       string
-	Value      interface{}
+	Value      any
 	Timestamp  time.Time
 }
 
@@ -88,7 +88,7 @@ func (s *InfluxDBService) WriteDeviceSensorsAsync(deviceID string, sensors []Sen
 }
 
 // QueryRecentDeviceSensors 查询设备最近的传感器数据（默认近 7 天）
-func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID string, limit int) ([]map[string]interface{}, error) {
+func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID string, limit int) ([]map[string]any, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -110,11 +110,11 @@ func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID
 		return nil, fmt.Errorf("查询传感器数据失败: %w", err)
 	}
 
-	var records []map[string]interface{}
+	var records []map[string]any
 	for result.Next() {
 		record := result.Record()
 		// 字段名对齐 API 文档：name, type, value, timestamp
-		row := map[string]interface{}{
+		row := map[string]any{
 			"name":      record.ValueByKey("sensorName"),
 			"type":      record.ValueByKey("type"),
 			"value":     record.Value(),
@@ -131,7 +131,7 @@ func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID
 }
 
 // QueryDeviceSensorsByTime 按时间范围查询传感器数据
-func (s *InfluxDBService) QueryDeviceSensorsByTime(ctx context.Context, deviceID, sensorName string, start, end time.Time) ([]map[string]interface{}, error) {
+func (s *InfluxDBService) QueryDeviceSensorsByTime(ctx context.Context, deviceID, sensorName string, start, end time.Time) ([]map[string]any, error) {
 	queryAPI := s.client.QueryAPI(s.org)
 	flux := fmt.Sprintf(`
 		from(bucket: "%s")
@@ -147,10 +147,10 @@ func (s *InfluxDBService) QueryDeviceSensorsByTime(ctx context.Context, deviceID
 		return nil, fmt.Errorf("查询传感器数据失败: %w", err)
 	}
 
-	var records []map[string]interface{}
+	var records []map[string]any
 	for result.Next() {
 		record := result.Record()
-		row := map[string]interface{}{
+		row := map[string]any{
 			"time":  record.Time(),
 			"value": record.Value(),
 		}
@@ -236,7 +236,7 @@ func (s *InfluxDBService) getWriteAPI() api.WriteAPI {
 // 内部使用 InfluxDB 异步 WriteAPI，自动攒批
 // deviceID 为空时使用每个 point 自带的 DeviceID（跨设备批量场景）
 func (s *InfluxDBService) WriteDeviceSensorsBatch(deviceID string, sensors []SensorPoint) {
-	api := s.getWriteAPI()
+	_api := s.getWriteAPI()
 	for _, sensor := range sensors {
 		did := deviceID
 		if did == "" {
@@ -248,6 +248,6 @@ func (s *InfluxDBService) WriteDeviceSensorsBatch(deviceID string, sensors []Sen
 			AddTag("type", sensor.Type).
 			AddField("value", sensor.Value).
 			SetTime(sensor.Timestamp)
-		api.WritePoint(p)
+		_api.WritePoint(p)
 	}
 }

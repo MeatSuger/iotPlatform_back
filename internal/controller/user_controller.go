@@ -22,11 +22,11 @@ func NewUserController(userSvc *service.UserService) *UserController {
 	return &UserController{userSvc: userSvc}
 }
 
-// @Summary      用户注册
+// Register @Summary      用户注册
 // @Tags         users, public
-// @Accept       json
-// @Produce      json
-// @Param        body  body      service.RegisterRequest  true  "注册请求参数"
+// @Accept       JSON
+// @Produce      JSON
+// @Param        body      service.RegisterRequest  true  "注册请求参数"
 // @Success      200   {object}  common.ApiResponse{data=ent.User}
 // @Failure      400   {object}  common.ApiResponse
 // @Router       /api/user/register [post]
@@ -47,11 +47,11 @@ func (ctl *UserController) Register(c *gin.Context) {
 	common.SuccessWithMsg(c, "注册成功", nil)
 }
 
-// @Summary      用户登录
+// Login @Summary      用户登录
 // @Tags         users, public
-// @Accept       json
-// @Produce      json
-// @Param        body  body      service.LoginRequest  true  "登录请求参数"
+// @Accept       JSON
+// @Produce      JSON
+// @Param        body      service.LoginRequest  true  "登录请求参数"
 // @Success      200   {object}  common.ApiResponse{data=service.LoginResponse}
 // @Failure      400   {object}  common.ApiResponse
 // @Router       /api/user/login [post]
@@ -92,10 +92,10 @@ func (ctl *UserController) Login(c *gin.Context) {
 	common.SuccessWithMsg(c, "登录成功", resp)
 }
 
-// @Summary      检查登录状态
+// IsLogin @Summary      检查登录状态
 // @Tags         users, public
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
 // @Router       /api/user/isLogin [get]
@@ -119,10 +119,10 @@ func (ctl *UserController) IsLogin(c *gin.Context) {
 	})
 }
 
-// @Summary      退出登录
+// Logout @Summary      退出登录
 // @Tags         users
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
@@ -138,11 +138,11 @@ func (ctl *UserController) Logout(c *gin.Context) {
 	common.SuccessWithMsg(c, "退出登录成功", nil)
 }
 
-// @Summary      更新用户信息
+// Update @Summary      更新用户信息
 // @Tags         users
-// @Accept       json
-// @Produce      json
-// @Param        body  body      ent.User  true  "用户信息"
+// @Accept       JSON
+// @Produce      JSON
+// @Param        body      ent.User  true  "用户信息"
 // @Success      200   {object}  common.ApiResponse{data=ent.User}
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
@@ -194,10 +194,10 @@ func (ctl *UserController) Update(c *gin.Context) {
 	common.Success(c, existing)
 }
 
-// @Summary      获取用户信息
+// GetProfile @Summary      获取用户信息
 // @Tags         users
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        id    query     int     false  "用户ID"
 // @Success      200   {object}  common.ApiResponse{data=ent.User}
 // @Failure      400   {object}  common.ApiResponse
@@ -242,10 +242,10 @@ func (ctl *UserController) GetProfile(c *gin.Context) {
 	common.Success(c, user)
 }
 
-// @Summary      列出所有用户
+// List @Summary      列出所有用户
 // @Tags         users
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Success      200   {object}  common.ApiResponse{data=[]ent.User}
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
@@ -260,14 +260,14 @@ func (ctl *UserController) List(c *gin.Context) {
 	common.Success(c, users)
 }
 
-// @Summary      分页查询用户
+// Page @Summary      分页查询用户
 // @Tags         users
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        pageNum  query     int     false  "页码（从0开始）"
 // @Param        pageSize query     int     false  "每页数量"
 // @Param        name     query     string  false  "用户名"
-// @Success      200      {object}  common.ApiResponse{data=map[string]interface{}}
+// @Success      200      {object}  common.ApiResponse{data=map[string]any}
 // @Failure      400      {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/user/page [get]
@@ -298,10 +298,10 @@ func (ctl *UserController) Page(c *gin.Context) {
 	})
 }
 
-// @Summary      删除用户
+// Delete @Summary      删除用户
 // @Tags         users
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        id    query     int     true   "用户ID"
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse

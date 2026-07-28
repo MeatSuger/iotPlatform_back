@@ -9,7 +9,7 @@ import (
 // mockReportService for testing
 type mockReportService struct{}
 
-func (m *mockReportService) ReportStatus(ctx interface{}, deviceID, token string, dto interface{}) error {
+func (m *mockReportService) ReportStatus(ctx any, deviceID, token string, dto any) error {
 	return nil
 }
 

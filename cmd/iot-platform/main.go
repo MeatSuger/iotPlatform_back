@@ -27,6 +27,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -59,7 +60,10 @@ func main() {
 		configPath = "configs/config.yaml"
 	}
 	if err := config.Load(configPath); err != nil {
-		fmt.Fprintf(os.Stderr, "[Main] 配置加载失败: %v\n", err)
+		_, err := fmt.Fprintf(os.Stderr, "[Main] 配置加载失败: %v\n", err)
+		if err != nil {
+			return
+		}
 		os.Exit(1)
 	}
 	cfg := config.Cfg
@@ -75,7 +79,12 @@ func main() {
 	if err != nil {
 		zap.L().Fatal("[Main] 数据库连接失败", zap.Error(err))
 	}
-	defer entClient.Close()
+	defer func(entClient *ent.Client) {
+		err := entClient.Close()
+		if err != nil {
+
+		}
+	}(entClient)
 	zap.L().Info("[Main] PostgreSQL 连接成功（Ent）")
 
 	// 4. 连接Redis
@@ -83,7 +92,12 @@ func main() {
 	if err != nil {
 		zap.L().Fatal("[Main] Redis连接失败", zap.Error(err))
 	}
-	defer rdb.Close()
+	defer func(rdb *redis.Client) {
+		err := rdb.Close()
+		if err != nil {
+
+		}
+	}(rdb)
 
 	zap.L().Info("[Main] Redis 连接成功")
 
@@ -158,6 +172,13 @@ func main() {
 		return cmd.ID, nil
 	})
 
+	// 7.5 初始化 Redis 设备数据缓冲器（支撑 1000+ 并发上报）
+	dataBuffer := service.NewDeviceDataBuffer(rdb, svcs.Report)
+	dataBuffer.Start()
+	defer dataBuffer.Stop()
+	svcs.Report.SetBuffer(dataBuffer)
+	zap.L().Info("[Main] Redis 设备数据缓冲器已启用")
+
 	influxSvc := svcs.InfluxDB
 	mqttClientSvc := svcs.MQTT
 
@@ -211,7 +232,7 @@ func main() {
 
 	go func() {
 		zap.L().Info("[Main] 服务器启动", zap.String("addr", addr))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			zap.L().Fatal("[Main] 服务器启动失败", zap.Error(err))
 		}
 	}()
@@ -281,7 +302,7 @@ func initRedis(cfg *config.Config) (*redis.Client, error) {
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("Redis连接失败: %w", err)
+		return nil, fmt.Errorf("redis连接失败: %w", err)
 	}
 
 	return rdb, nil

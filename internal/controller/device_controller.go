@@ -22,11 +22,11 @@ func NewDeviceController(deviceSvc *service.DeviceService, deviceReportSvc *serv
 	}
 }
 
-// @Summary      注册设备
+// Register @Summary      注册设备
 // @Tags         devices
-// @Accept       json
-// @Produce      json
-// @Param        body  body      service.DeviceRegisterRequest  true  "设备注册请求参数"
+// @Accept       JSON
+// @Produce      JSON
+// @Param        body      service.DeviceRegisterRequest  true  "设备注册请求参数"
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
@@ -53,10 +53,10 @@ func (ctl *DeviceController) Register(c *gin.Context) {
 	common.Success(c, resp)
 }
 
-// @Summary      查询用户设备列表
+// List @Summary      查询用户设备列表
 // @Tags         devices
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
@@ -74,10 +74,10 @@ func (ctl *DeviceController) List(c *gin.Context) {
 	common.Success(c, devices)
 }
 
-// @Summary      获取设备详情
+// GetDeviceData @Summary      获取设备详情
 // @Tags         devices
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        deviceId  path  string  true  "设备ID"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
@@ -124,11 +124,11 @@ func (ctl *DeviceController) GetDeviceData(c *gin.Context) {
 	common.Success(c, result)
 }
 
-// @Summary      获取设备Token
+// GetDeviceToken @Summary      获取设备Token
 // @Description  使用设备6位hex ID认证（路径参数），无需额外Token
 // @Tags         devices
-// @Accept       json
-// @Produce      json
+// @Accept       JSON
+// @Produce      JSON
 // @Param        deviceId  path  string  true  "设备ID（6位hex）"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
@@ -153,7 +153,7 @@ func (ctl *DeviceController) GetDeviceToken(c *gin.Context) {
 	})
 }
 
-// @Summary      删除设备
+// Delete @Summary      删除设备
 // @Tags         devices
 // @Accept       json
 // @Produce      json

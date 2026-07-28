@@ -39,8 +39,8 @@ func GenerateShortDeviceID() string {
 
 // MergeDeviceWithStatus 将设备信息合并到状态对象中
 // 返回一个包含设备基本信息和状态的map
-func MergeDeviceWithStatus(deviceID, deviceName string, ownerID uint, status string, lastActiveTime interface{}) map[string]interface{} {
-	result := map[string]interface{}{
+func MergeDeviceWithStatus(deviceID, deviceName string, ownerID uint, status string, lastActiveTime any) map[string]any {
+	result := map[string]any{
 		"deviceId":   deviceID,
 		"deviceName": deviceName,
 		"ownerId":    ownerID,

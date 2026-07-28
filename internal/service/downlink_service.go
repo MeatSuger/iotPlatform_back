@@ -75,9 +75,12 @@ func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req D
 
 	// WebSocket 实时推送
 	if s.wsHub != nil {
-		var payloadObj interface{}
-		json.Unmarshal([]byte(cmd.Payload), &payloadObj)
-		msg, _ := json.Marshal(map[string]interface{}{
+		var payloadObj any
+		err := json.Unmarshal([]byte(cmd.Payload), &payloadObj)
+		if err != nil {
+			return nil, err
+		}
+		msg, _ := json.Marshal(map[string]any{
 			"type":      "cmd",
 			"id":        cmd.ID,
 			"cmdType":   cmd.Type,
@@ -108,7 +111,10 @@ func (s *DownlinkService) PollCmd(ctx context.Context, deviceID string) ([]Downl
 		}
 	}
 	if len(ids) > 0 {
-		s.cmdRepo.MarkSent(ctx, ids)
+		err := s.cmdRepo.MarkSent(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return cmds, nil
 }
@@ -126,9 +132,12 @@ func (s *DownlinkService) NotifyOwnerCmd(deviceID string, cmd *ent.DownlinkCmd) 
 	if s.wsHub == nil {
 		return
 	}
-	var payloadObj interface{}
-	json.Unmarshal([]byte(cmd.Payload), &payloadObj)
-	msg, _ := json.Marshal(map[string]interface{}{
+	var payloadObj any
+	err := json.Unmarshal([]byte(cmd.Payload), &payloadObj)
+	if err != nil {
+		return
+	}
+	msg, _ := json.Marshal(map[string]any{
 		"type":      "cmdSent",
 		"deviceId":  deviceID,
 		"cmdId":     cmd.ID,
@@ -140,7 +149,7 @@ func (s *DownlinkService) NotifyOwnerCmd(deviceID string, cmd *ent.DownlinkCmd) 
 	s.wsHub.SendToDeviceOwner(deviceID, msg)
 }
 
-func (s *DownlinkService) PublishViaMQTT(deviceID, cmdType, payload string) mqttEntity.PublishRequest {
+func (s *DownlinkService) PublishViaMQTT(deviceID, payload string) mqttEntity.PublishRequest {
 	qos := 1
 	return mqttEntity.PublishRequest{
 		Topic:   fmt.Sprintf("device/%s/cmd", deviceID),

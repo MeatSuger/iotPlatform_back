@@ -78,21 +78,24 @@ func (s *DeviceReportService) ReportStatus(ctx context.Context, deviceID, token 
 	// 3. 更新 Device 缓存中的运行时状态（Status + LastActiveTime），不再另存 DeviceStatus
 	device.Status = "ONLINE"
 	device.LastActiveTime = now
-	s.cache.CacheDevice(ctx, deviceID, device)
+	err = s.cache.CacheDevice(ctx, deviceID, device)
+	if err != nil {
+		return err
+	}
 
 	// 同时缓存最新传感器数据（用于快速查询）
-	s.cache.CacheSensorRecent(ctx, deviceID, dto.Sensors)
-
-	// 4. 防抖更新 PostgreSQL（30s 内同一设备只写一次）
-	shouldUpdate, _ := s.cache.ShouldUpdateActive(ctx, deviceID)
-	if shouldUpdate {
-		go func() {
-			bgCtx := context.Background()
-			if err := s.deviceRepo.UpdateLastActive(bgCtx, deviceID, "ONLINE"); err != nil {
-				zap.S().Warnf("[DeviceReport] 更新活跃时间失败 [device=%s]: %v", deviceID, err)
-			}
-		}()
+	err = s.cache.CacheSensorRecent(ctx, deviceID, dto.Sensors)
+	if err != nil {
+		return err
 	}
+
+	// 4. 异步更新 PostgreSQL 状态 + 活跃时间
+	go func() {
+		bgCtx := context.Background()
+		if err := s.deviceRepo.UpdateLastActive(bgCtx, deviceID, "ONLINE"); err != nil {
+			zap.S().Warnf("[DeviceReport] 更新活跃时间失败 [device=%s]: %v", deviceID, err)
+		}
+	}()
 
 	// 5. 推入 Redis 缓冲队列 → 后台 worker 批量写 InfluxDB
 	if s.buffer != nil {
@@ -114,11 +117,11 @@ func (s *DeviceReportService) ReportStatus(ctx context.Context, deviceID, token 
 		if err := s.buffer.Enqueue(ctx, report); err != nil {
 			zap.S().Warnf("[DeviceReport] 入队失败 [device=%s]: %v", deviceID, err)
 			// 降级：同步写入 InfluxDB
-			s.writeSensorsSync(ctx, deviceID, dto)
+			s.writeSensorsSync(deviceID, dto)
 		}
 	} else {
 		// 无缓冲器：同步写入（兼容旧逻辑）
-		s.writeSensorsSync(ctx, deviceID, dto)
+		s.writeSensorsSync(deviceID, dto)
 	}
 
 	zap.S().Infof("[DeviceReport] 设备 %s 上报 %d 条传感器数据", deviceID, len(dto.Sensors))
@@ -126,7 +129,7 @@ func (s *DeviceReportService) ReportStatus(ctx context.Context, deviceID, token 
 }
 
 // writeSensorsSync 同步写入传感器数据到 InfluxDB（降级路径）
-func (s *DeviceReportService) writeSensorsSync(ctx context.Context, deviceID string, dto entity.DeviceStatusDTO) {
+func (s *DeviceReportService) writeSensorsSync(deviceID string, dto entity.DeviceStatusDTO) {
 	sensorPoints := make([]SensorPoint, len(dto.Sensors))
 	for i, sensor := range dto.Sensors {
 		ts := sensor.Timestamp
@@ -150,7 +153,7 @@ func (s *DeviceReportService) writeSensorsSync(ctx context.Context, deviceID str
 // ============================================================
 
 // FlushReports 批量写入传感器数据到 InfluxDB
-func (s *DeviceReportService) FlushReports(ctx context.Context, reports []BufferedReport) error {
+func (s *DeviceReportService) FlushReports(_ context.Context, reports []BufferedReport) error {
 	if len(reports) == 0 {
 		return nil
 	}
@@ -203,19 +206,19 @@ func (s *DeviceReportService) Heartbeat(ctx context.Context, deviceID, token str
 	if err == nil {
 		device.Status = "ONLINE"
 		device.LastActiveTime = now
-		s.cache.CacheDevice(ctx, deviceID, device)
+		err := s.cache.CacheDevice(ctx, deviceID, device)
+		if err != nil {
+			return err
+		}
 	}
 
-	// 防抖更新 PostgreSQL（30s 内同一设备只写一次）
-	shouldUpdate, _ := s.cache.ShouldUpdateActive(ctx, deviceID)
-	if shouldUpdate {
-		go func() {
-			bgCtx := context.Background()
-			if err := s.deviceRepo.UpdateLastActive(bgCtx, deviceID, "ONLINE"); err != nil {
-				zap.S().Warnf("[DeviceReport] 心跳更新活跃时间失败 [device=%s]: %v", deviceID, err)
-			}
-		}()
-	}
+	// 异步更新 PostgreSQL 状态 + 活跃时间
+	go func() {
+		bgCtx := context.Background()
+		if err := s.deviceRepo.UpdateLastActive(bgCtx, deviceID, "ONLINE"); err != nil {
+			zap.S().Warnf("[DeviceReport] 心跳更新活跃时间失败 [device=%s]: %v", deviceID, err)
+		}
+	}()
 
 	zap.S().Infof("[DeviceReport] 设备 %s 心跳", deviceID)
 	return nil
@@ -232,7 +235,10 @@ func (s *DeviceReportService) GetDeviceStatus(ctx context.Context, deviceID stri
 
 	// 从传感器缓存获取最新数据（SensorData.UnmarshalJSON 自动修正零值时间戳）
 	var sensors []entity.SensorData
-	s.cache.GetCachedSensorRecent(ctx, deviceID, &sensors)
+	err = s.cache.GetCachedSensorRecent(ctx, deviceID, &sensors)
+	if err != nil {
+		return nil, err
+	}
 
 	return &entity.DeviceStatus{
 		ID:             device.ID,

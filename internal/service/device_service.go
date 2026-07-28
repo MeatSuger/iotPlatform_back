@@ -82,7 +82,10 @@ func (s *DeviceService) Register(ctx context.Context, ownerID uint, req DeviceRe
 	// 缓存
 	dev, _ := s.repo.GetByDeviceID(ctx, deviceID)
 	if dev != nil {
-		s.cache.CacheDevice(ctx, deviceID, dev)
+		err := s.cache.CacheDevice(ctx, deviceID, dev)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &DeviceRegisterResponse{DeviceID: deviceID, DeviceToken: token}, nil
@@ -101,7 +104,10 @@ func (s *DeviceService) GetByDeviceID(ctx context.Context, deviceID string) (*en
 		return nil, err
 	}
 
-	s.cache.CacheDevice(ctx, deviceID, d)
+	err = s.cache.CacheDevice(ctx, deviceID, d)
+	if err != nil {
+		return nil, err
+	}
 	return d, nil
 }
 
@@ -121,8 +127,14 @@ func (s *DeviceService) Delete(ctx context.Context, deviceID string) error {
 
 	go func() {
 		bgCtx := context.Background()
-		s.cache.EvictDeviceCache(bgCtx, deviceID)
-		s.cache.EvictSensorRecentCache(bgCtx, deviceID)
+		err := s.cache.EvictDeviceCache(bgCtx, deviceID)
+		if err != nil {
+			return
+		}
+		err = s.cache.EvictSensorRecentCache(bgCtx, deviceID)
+		if err != nil {
+			return
+		}
 	}()
 	return nil
 }

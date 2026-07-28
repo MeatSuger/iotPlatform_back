@@ -29,7 +29,7 @@ func DateTimeFrom(t time.Time) DateTime {
 	return DateTime{Time: t}
 }
 
-// MarshalJSON JSON 序列化（本地时区 + 偏移标记）
+// MarshalJSON JSON 序列化（必须值接收器：遮蔽嵌入的 time.Time.MarshalJSON）
 func (dt DateTime) MarshalJSON() ([]byte, error) {
 	if dt.IsZero() {
 		return []byte("null"), nil
@@ -37,7 +37,7 @@ func (dt DateTime) MarshalJSON() ([]byte, error) {
 	return fmt.Appendf(nil, `"%s"`, dt.Time.Local().Format(DateTimeFormatWithZone)), nil
 }
 
-// UnmarshalJSON JSON 反序列化（兼容多种格式）
+// UnmarshalJSON JSON 反序列化
 func (dt *DateTime) UnmarshalJSON(data []byte) error {
 	s := string(data)
 	if s == "null" || s == `""` {
@@ -66,7 +66,7 @@ func (dt *DateTime) UnmarshalJSON(data []byte) error {
 	return fmt.Errorf("DateTime.UnmarshalJSON: 无法解析时间 %q", s)
 }
 
-// Value 实现 driver.Valuer（GORM 写入 DB）
+// Value 实现 driver.Valuer（必须值接收器：遮蔽嵌入的 time.Time.Value）
 func (dt DateTime) Value() (driver.Value, error) {
 	if dt.IsZero() {
 		return nil, nil
@@ -75,7 +75,7 @@ func (dt DateTime) Value() (driver.Value, error) {
 }
 
 // Scan 实现 sql.Scanner（GORM 从 DB 读取）
-func (dt *DateTime) Scan(value interface{}) error {
+func (dt *DateTime) Scan(value any) error {
 	if value == nil {
 		dt.Time = time.Time{}
 		return nil

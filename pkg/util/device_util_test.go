@@ -50,7 +50,7 @@ func TestIsValidDeviceID_ShouldValidateHex6(t *testing.T) {
 }
 
 func TestGenerateShortDeviceID_ShouldBeLowerHexWithLength6(t *testing.T) {
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		id := GenerateShortDeviceID()
 		if len(id) != 6 {
 			t.Errorf("GenerateShortDeviceID() length = %d, want 6", len(id))
