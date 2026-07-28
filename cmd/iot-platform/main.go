@@ -43,6 +43,7 @@ import (
 	"github.com/sa-tokens/sa-token-go/stputil"
 	"go.uber.org/zap"
 	"iot-platform.local/internal/ent"
+	"iot-platform.local/internal/ent/user"
 	"iot-platform.local/internal/middleware"
 	"iot-platform.local/internal/router"
 	"iot-platform.local/internal/server"
@@ -190,6 +191,11 @@ func main() {
 	}
 	zap.L().Info("[Main] 数据库迁移完成（Ent）")
 
+	// 修复历史数据的零值时间戳（DB 直插或旧代码产生的 0001-01-01）
+	if err := repairZeroTimestamps(entClient); err != nil {
+		zap.L().Warn("[Main] 修复用户零值时间戳失败", zap.Error(err))
+	}
+
 	// 9. 检查InfluxDB连通性
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := influxSvc.Ping(ctx); err != nil {
@@ -306,4 +312,16 @@ func initRedis(cfg *config.Config) (*redis.Client, error) {
 	}
 
 	return rdb, nil
+}
+
+// repairZeroTimestamps 修复历史数据中零值时间戳（0001-01-01），统一设为当前时间
+func repairZeroTimestamps(client *ent.Client) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	return client.User.Update().
+		Where(user.CreateTimeLT(time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC))).
+		SetCreateTime(time.Now()).
+		SetUpdateTime(time.Now()).
+		Exec(ctx)
 }

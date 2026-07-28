@@ -54,10 +54,10 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 	r.Use(cors.New(corsCfg))
 
 	// 中间件快捷变量
-	userAuth := middleware.AuthMiddleware()             // 用户 Sa-Token 认证
-	deviceAuth := middleware.DeviceAuthMiddleware()     // 设备 Sa-Token 认证（保留用于兼容）
-	deviceIdAuth := middleware.DeviceIDAuthMiddleware() // 设备 6位hex ID 认证（无需额外Token）
-	requireLogin := middleware.RequireLogin()
+	userAuth := middleware.AuthMiddleware()                                         // 用户 Sa-Token 认证
+	deviceAuth := middleware.DeviceAuthMiddleware()                                 // 设备 Sa-Token 认证（保留用于兼容）
+	deviceIdAuth := middleware.DeviceIDAuthMiddleware()                             // 设备 6位hex ID 认证（无需额外Token）
+	requireAdmin := middleware.CheckRole(service.RoleSuperAdmin, service.RoleAdmin) // 管理员角色校验（sa-token-go）
 
 	// 控制器
 	userCtl := controller.NewUserController(svcs.User)
@@ -96,8 +96,8 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 			userGroup.POST("/logout", userAuth, userCtl.Logout)
 			userGroup.PUT("", userAuth, userCtl.Update)
 			userGroup.GET("/profile", userAuth, userCtl.GetProfile)
-			userGroup.GET("/list", userAuth, requireLogin, userCtl.List)
-			userGroup.GET("/page", userAuth, requireLogin, userCtl.Page)
+			userGroup.GET("/list", userAuth, requireAdmin, userCtl.List)
+			userGroup.GET("/page", userAuth, requireAdmin, userCtl.Page)
 			userGroup.POST("/delete", userAuth, userCtl.Delete)
 		}
 

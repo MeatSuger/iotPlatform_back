@@ -45,7 +45,6 @@ func (r *UserRepo) Update(ctx context.Context, user *ent.User) error {
 		SetEmail(user.Email).
 		SetRole(user.Role).
 		SetStatus(user.Status).
-		SetUpdateTime(user.UpdateTime).
 		Exec(ctx)
 }
 

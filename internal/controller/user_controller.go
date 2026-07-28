@@ -172,7 +172,13 @@ func (ctl *UserController) Update(c *gin.Context) {
 		return
 	}
 
-	// 合并更新
+	// account 是登录凭证，不允许修改（显式拒绝，避免前端误以为修改成功）
+	if req.Account != "" && req.Account != existing.Account {
+		common.FailWithMsg(c, common.CodeBadRequest, "账号不可修改")
+		return
+	}
+
+	// 合并更新（仅开放 Name/Email/Age/Status，Account/Role 等字段不可通过此接口变更）
 	if req.Name != "" {
 		existing.Name = req.Name
 	}

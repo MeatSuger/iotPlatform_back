@@ -125,9 +125,12 @@ func (s *UserService) Login(ctx context.Context, req LoginRequest) (*LoginRespon
 	}
 	_ = stputil.SetRoles(loginID, []string{role})
 
-	expireSeconds := int64(2592000)
+	expireSeconds := int64(60 * 60 * 24)
 	zap.S().Infof("[User] 账号 %s (ID=%d, role=%s) 登录成功", user.Account, user.ID, role)
-
+	user.UpdateTime = time.Now()
+	if err := s.repo.Update(ctx, user); err != nil {
+		zap.S().Warnf("[User] 更新用户登录时间失败: %v", err)
+	}
 	return &LoginResponse{
 		TokenName:            "Authorization",
 		TokenValue:           token,

@@ -143,7 +143,9 @@ func isValidDeviceID(id string) bool {
 	return true
 }
 
-// CheckRole 角色检查中间件
+// CheckRole 角色检查中间件（基于 sa-token-go 角色体系）
+// 登录时 UserService.Login 已通过 stputil.SetRoles 写入数据库中的 user.role，
+// 这里直接复用 sa-token-go 的 CheckRoleOr 校验（任一角色匹配即放行）
 func CheckRole(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := getToken(c)
@@ -152,15 +154,12 @@ func CheckRole(roles ...string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		loginID, _ := stputil.GetLoginID(token)
-		for _, r := range roles {
-			if stputil.HasRole(loginID, r) {
-				c.Next()
-				return
-			}
+		if err := stputil.CheckRoleOr(token, roles); err != nil {
+			common.FailWithMsg(c, common.CodeForbidden, "无权限执行此操作")
+			c.Abort()
+			return
 		}
-		common.FailWithMsg(c, common.CodeForbidden, "无权限执行此操作")
-		c.Abort()
+		c.Next()
 	}
 }
 
@@ -236,6 +235,7 @@ func getToken(c *gin.Context) string {
 	return GetToken(c)
 }
 
+// parseUint 字符串转 uint（用于从 query/param 解析 ID，失败返回 0）
 func parseUint(s string) uint {
 	if s == "" {
 		return 0
