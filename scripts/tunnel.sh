@@ -13,6 +13,7 @@ declare -A CONTAINERS=(
     ["1Panel-postgresql-atvS"]=5432
     ["1Panel-redis-143d"]=6379
     ["1Panel-influxdb-ks5i"]=8086
+    ["mqtt"]=1883	
 )
 
 RED='\033[0;31m'

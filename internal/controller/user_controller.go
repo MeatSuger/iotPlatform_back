@@ -111,11 +111,17 @@ func (ctl *UserController) IsLogin(c *gin.Context) {
 	}
 
 	loginID, _ := stputil.GetLoginID(token)
+	num, err := strconv.ParseUint(loginID, 10, 64)
+	if err != nil {
+		return
+	}
+	user, _ := ctl.userSvc.GetByID(c.Request.Context(), uint(num))
 	common.SuccessWithMsg(c, "已登录", gin.H{
 		"isLogin":     true,
 		"loginId":     loginID,
 		"loginType":   "login",
 		"loginDevice": "default-device",
+		"user":        user,
 	})
 }
 
