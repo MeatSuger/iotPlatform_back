@@ -181,7 +181,6 @@ func main() {
 	zap.L().Info("[Main] Redis 设备数据缓冲器已启用")
 
 	influxSvc := svcs.InfluxDB
-	mqttClientSvc := svcs.MQTT
 
 	defer influxSvc.Close()
 
@@ -205,20 +204,15 @@ func main() {
 	}
 	cancel()
 
-	// 10. MQTT
-	if cfg.MQTT.Enabled && cfg.MQTT.BrokerURL != "" {
-		go func() {
-			time.Sleep(2 * time.Second)
-			if err := mqttClientSvc.Connect(); err != nil {
-				zap.L().Warn("[Main] MQTT自动连接失败", zap.Error(err))
-			}
-		}()
-	} else {
-		zap.L().Info("[Main] MQTT 已禁用")
+	// 10. MQTT 鉴权网关（设备真 MQTT/WSS 接入：鉴权 → 透明转发到外部Broker）
+	var mqttGateway *service.MqttWsGateway
+	if cfg.MqttGateway.Enabled {
+		mqttGateway = service.NewMqttWsGateway()
+		zap.L().Info("[Main] MQTT 鉴权网关已启用（设备入口: /api/ws/mqtt/broker，转发到 " + cfg.MQTT.BrokerURL + "）")
 	}
 
 	// 11. 设置路由
-	r := router.Setup(svcs, wsHandler, saginPlugin)
+	r := router.Setup(svcs, wsHandler, saginPlugin, mqttGateway)
 
 	// 12. UDP
 	var udpSrv *server.UDPServer
@@ -249,8 +243,8 @@ func main() {
 	<-quit
 	zap.L().Info("[Main] 正在关闭服务器...")
 
-	if cfg.MQTT.Enabled {
-		mqttClientSvc.Disconnect()
+	if mqttGateway != nil {
+		zap.L().Info("[Main] MQTT 网关会话已随服务器关闭")
 	}
 	if udpSrv != nil {
 		udpSrv.Stop()

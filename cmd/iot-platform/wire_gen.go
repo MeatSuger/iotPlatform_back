@@ -32,14 +32,11 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 	deviceService := service.NewDeviceService(deviceRepo, redisCache)
 	influxDBService := provideInfluxDBService()
 	deviceReportService := service.NewDeviceReportService(deviceRepo, influxDBService, redisCache, deviceService)
-	mqttPublishLogRepo := repository.NewMqttPublishLogRepo(entClient)
 	hub := websocket.NewHub()
-	mqttClientService := service.NewMqttClientService(mqttPublishLogRepo, redisCache, hub)
-	mqttPublishLogService := service.NewMqttPublishLogService(mqttPublishLogRepo)
 	downlinkCmdRepo := repository.NewDownlinkCmdRepo(entClient)
 	downlinkService := service.NewDownlinkService(downlinkCmdRepo, deviceRepo, rdb, hub)
-	services := provideRouterServices(userService, deviceService, deviceReportService, influxDBService, mqttClientService, mqttPublishLogService, downlinkService)
-	wsHandler := websocket.NewWsHandler(hub, mqttClientService)
+	services := provideRouterServices(userService, deviceService, deviceReportService, influxDBService, downlinkService)
+	wsHandler := websocket.NewWsHandler(hub, nil) // 网关架构下不需要 MqttPublisher
 	appComponents := &AppComponents{
 		Services:  services,
 		WsHandler: wsHandler,
@@ -65,8 +62,6 @@ func provideRouterServices(
 	deviceSvc *service.DeviceService,
 	reportSvc *service.DeviceReportService,
 	influxSvc *service.InfluxDBService,
-	mqttSvc *service.MqttClientService,
-	mqttLogSvc *service.MqttPublishLogService,
 	downlinkSvc *service.DownlinkService,
 ) *router.Services {
 	return &router.Services{
@@ -74,8 +69,6 @@ func provideRouterServices(
 		Device:   deviceSvc,
 		Report:   reportSvc,
 		InfluxDB: influxSvc,
-		MQTT:     mqttSvc,
-		MQTTLog:  mqttLogSvc,
 		Downlink: downlinkSvc,
 	}
 }

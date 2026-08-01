@@ -9,8 +9,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
-	mqttEntity "iot-platform.local/internal/model/mqtt"
-
 	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/repository"
 	"iot-platform.local/internal/websocket"
@@ -147,13 +145,4 @@ func (s *DownlinkService) NotifyOwnerCmd(deviceID string, cmd *ent.DownlinkCmd) 
 		"createdAt": cmd.CreatedAt.Format("2006-01-02T15:04:05.000-07:00"),
 	})
 	s.wsHub.SendToDeviceOwner(deviceID, msg)
-}
-
-func (s *DownlinkService) PublishViaMQTT(deviceID, payload string) mqttEntity.PublishRequest {
-	qos := 1
-	return mqttEntity.PublishRequest{
-		Topic:   fmt.Sprintf("device/%s/cmd", deviceID),
-		Qos:     &qos,
-		Payload: payload,
-	}
 }

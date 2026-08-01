@@ -30,16 +30,14 @@ influxdb:
   org: "influxdb_yHi3BP"
   bucket: "iot-sensor"
 
+# MQTT Broker 连接地址（仅此一项，供网关透明转发到外部 MQTT Docker）
 mqtt:
-  enabled: true
   broker-url: "tcp://mqtt:1883"
-  client-id: "iot-platform-go-server-prod"
-  username: "prod_mqtt_user"
-  password: "prod_mqtt_password"
-  topics:
-    - "iot/+/telemetry"
-  qos: 1
-  keep-alive: 60
+
+# MQTT 鉴权网关（胶水层）：设备 WSS 接入 → 鉴权 → 透明转发到外部 MQTT Docker
+mqtt-gateway:
+  enabled: true
+  require-auth: true
 
 cors:
   allowed-origins:

@@ -111,11 +111,7 @@ influxdb:
   org: my-org
   bucket: my-bucket
 mqtt:
-  enabled: false
-  broker-url: tcp://localhost:1883
-  client-id: test-client
-  topics: ["iot/#"]
-  qos: 1
+  broker-url: "tcp://localhost:1883"
   keep-alive: 60
 cors:
   allowed-origins: ["*"]
@@ -136,7 +132,7 @@ cors:
 	assert.Equal(t, "my-token", Cfg.InfluxDB.Token)
 	assert.Equal(t, "my-org", Cfg.InfluxDB.Org)
 	assert.Equal(t, "my-bucket", Cfg.InfluxDB.Bucket)
-	assert.False(t, Cfg.MQTT.Enabled)
+
 	assert.Equal(t, "tcp://localhost:1883", Cfg.MQTT.BrokerURL)
 }
 

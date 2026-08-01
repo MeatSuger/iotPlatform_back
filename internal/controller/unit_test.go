@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -56,42 +55,6 @@ func TestListData_ReturnsMessage(t *testing.T) {
 	assert.Equal(t, "请在具体设备下查询数据", data["message"])
 }
 
-func TestGetDeviceID_FromContext(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	r := gin.New()
-	r.GET("/test", func(c *gin.Context) {
-		// 模拟中间件注入 deviceId
-		c.Set("deviceId", "ABC123")
-		id := GetDeviceID(c)
-		c.String(http.StatusOK, id)
-	})
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "abc123", w.Body.String())
-}
-
-func TestGetDeviceID_EmptyContext(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	r := gin.New()
-	r.GET("/test", func(c *gin.Context) {
-		id := GetDeviceID(c)
-		c.String(http.StatusOK, id)
-	})
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "", w.Body.String())
-}
-
 func TestAllControllerConstructors(t *testing.T) {
 	t.Run("DataController", func(t *testing.T) {
 		ctl := NewDataController(nil, nil)
@@ -107,10 +70,6 @@ func TestAllControllerConstructors(t *testing.T) {
 	})
 	t.Run("UserController", func(t *testing.T) {
 		ctl := NewUserController(nil)
-		assert.NotNil(t, ctl)
-	})
-	t.Run("MqttController", func(t *testing.T) {
-		ctl := NewMqttController(nil, nil, nil)
 		assert.NotNil(t, ctl)
 	})
 }

@@ -22,12 +22,6 @@ func TestNewDeviceRepo(t *testing.T) {
 	assert.Nil(t, repo.client)
 }
 
-func TestNewMqttPublishLogRepo(t *testing.T) {
-	repo := NewMqttPublishLogRepo(nil)
-	assert.NotNil(t, repo)
-	assert.Nil(t, repo.client)
-}
-
 func TestNewDownlinkCmdRepo(t *testing.T) {
 	repo := NewDownlinkCmdRepo(nil)
 	assert.NotNil(t, repo)

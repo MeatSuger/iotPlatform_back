@@ -22,13 +22,11 @@ type Services struct {
 	Device   *service.DeviceService
 	Report   *service.DeviceReportService
 	InfluxDB *service.InfluxDBService
-	MQTT     *service.MqttClientService
-	MQTTLog  *service.MqttPublishLogService
 	Downlink *service.DownlinkService
 }
 
 // Setup 配置路由
-func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plugin) *gin.Engine {
+func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plugin, mqttGateway *service.MqttWsGateway) *gin.Engine {
 	// 设置Gin模式
 	if config.Cfg.Server.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
@@ -63,7 +61,6 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 	userCtl := controller.NewUserController(svcs.User)
 	deviceCtl := controller.NewDeviceController(svcs.Device, svcs.Report)
 	dataCtl := controller.NewDataController(svcs.Report, svcs.InfluxDB)
-	mqttCtl := controller.NewMqttController(svcs.MQTT, svcs.MQTTLog, svcs.Report)
 	downlinkCtl := controller.NewDownlinkController(svcs.Downlink, svcs.Device)
 
 	// API路由组（TokenInterceptor 自动从 Header/Cookie/Query 提取 token 到 context）
@@ -83,6 +80,13 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 		api.GET("/ws/user", func(c *gin.Context) {
 			wsHandler.HandleUser(c.Writer, c.Request)
 		})
+		// ===== MQTT over WebSocket（设备真 MQTT 协议接入，复用 HTTP 入口） =====
+		// 设备连接: wss://<host>/api/ws/mqtt/broker（网关只做鉴权 + 透明转发到外部 MQTT Docker）
+		if mqttGateway != nil {
+			api.GET("/ws/mqtt/broker", func(c *gin.Context) {
+				mqttGateway.HandleWebSocket(c.Writer, c.Request)
+			})
+		}
 
 		// ===== 用户相关路由 =====
 		userGroup := api.Group("/user")
@@ -130,30 +134,6 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 			// 查询数据（公开）
 			dataGroup.GET("/:deviceId/Data/list", dataCtl.QueryData)
 			dataGroup.GET("/list", dataCtl.ListData)
-		}
-
-		// ===== MQTT相关路由（enabled=false 时跳过注册） =====
-		if config.Cfg.MQTT.Enabled {
-			mqttGroup := api.Group("/mqtt")
-			{
-				// 设备认证路径（设备上报数据和心跳）
-				mqttGroup.POST("/:deviceId/Data", deviceAuth, mqttCtl.ReportData)
-				mqttGroup.POST("/:deviceId/ping", deviceAuth, mqttCtl.Heartbeat)
-				mqttGroup.POST("/:deviceId/heartbeat", deviceAuth, mqttCtl.Heartbeat)
-
-				// 用户认证路径（MQTT客户端管理）
-				clientGroup := mqttGroup.Group("/client")
-				clientGroup.Use(userAuth)
-				{
-					clientGroup.POST("/connect", mqttCtl.Connect)
-					clientGroup.POST("/disconnect", mqttCtl.Disconnect)
-					clientGroup.POST("/subscribe", mqttCtl.Subscribe)
-					clientGroup.POST("/unsubscribe", mqttCtl.Unsubscribe)
-					clientGroup.POST("/publish", mqttCtl.Publish)
-					clientGroup.GET("/status", mqttCtl.Status)
-					clientGroup.GET("/messages", mqttCtl.Messages)
-				}
-			}
 		}
 	}
 

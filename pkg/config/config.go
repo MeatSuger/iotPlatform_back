@@ -10,12 +10,13 @@ import (
 
 // Config 全局配置结构
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Redis    RedisConfig    `mapstructure:"redis"`
-	InfluxDB InfluxDBConfig `mapstructure:"influxdb"`
-	MQTT     MQTTConfig     `mapstructure:"mqtt"`
-	CORS     CORSConfig     `mapstructure:"cors"`
+	Server      ServerConfig      `mapstructure:"server"`
+	Database    DatabaseConfig    `mapstructure:"database"`
+	Redis       RedisConfig       `mapstructure:"redis"`
+	InfluxDB    InfluxDBConfig    `mapstructure:"influxdb"`
+	MQTT        MQTTConfig        `mapstructure:"mqtt"`
+	MqttGateway MqttGatewayConfig `mapstructure:"mqtt-gateway"`
+	CORS        CORSConfig        `mapstructure:"cors"`
 }
 
 // ServerConfig 服务器配置
@@ -105,16 +106,17 @@ type InfluxDBConfig struct {
 	Bucket string `mapstructure:"bucket"`
 }
 
-// MQTTConfig MQTT配置
+// MQTTConfig MQTT Broker 连接地址（供网关透明转发）
 type MQTTConfig struct {
-	Enabled   bool     `mapstructure:"enabled"`
-	BrokerURL string   `mapstructure:"broker-url"`
-	ClientID  string   `mapstructure:"client-id"`
-	Username  string   `mapstructure:"username"`
-	Password  string   `mapstructure:"password"`
-	Topics    []string `mapstructure:"topics"`
-	Qos       byte     `mapstructure:"qos"`
-	KeepAlive int      `mapstructure:"keep-alive"`
+	BrokerURL string `mapstructure:"broker-url"` // 外部 MQTT Docker 地址，如 tcp://mqtt:1883
+}
+
+// MqttGatewayConfig MQTT 鉴权网关配置（胶水层：设备 WSS 接入 → 鉴权 → 透明转发到外部 MQTT Docker）
+// 设备连接: wss://<host>/api/ws/mqtt/broker，与 HTTP 同端口
+// CONNECT 时 username=设备ID, password=设备Token
+type MqttGatewayConfig struct {
+	Enabled     bool `mapstructure:"enabled"`
+	RequireAuth bool `mapstructure:"require-auth"` // true 时校验设备 Token（username/password），false 时放行（仅转发）
 }
 
 // CORSConfig 跨域配置

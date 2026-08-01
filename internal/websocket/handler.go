@@ -10,8 +10,9 @@ import (
 	"github.com/sa-tokens/sa-token-go/stputil"
 	"go.uber.org/zap"
 
-	"github.com/gorilla/websocket"
 	mqttEntity "iot-platform.local/internal/model/mqtt"
+
+	"github.com/gorilla/websocket"
 )
 
 // MqttPublisher WebSocket需要的MQTT发布能力（接口解耦，避免循环依赖）
@@ -302,8 +303,10 @@ func (h *WsHandler) readPump(client *Client) {
 			continue
 		}
 
-		if err := h.mqttClient.Publish(req); err != nil {
-			zap.S().Infof("[WebSocket] MQTT发布失败: %v", err)
+		if h.mqttClient != nil {
+			if err := h.mqttClient.Publish(req); err != nil {
+				zap.S().Infof("[WebSocket] MQTT发布失败: %v", err)
+			}
 		}
 	}
 }
