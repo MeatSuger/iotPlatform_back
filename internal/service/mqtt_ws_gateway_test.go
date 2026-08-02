@@ -82,7 +82,7 @@ func buildConnectPacket(protocolLevel byte, clientID, username, password string)
 func TestParseConnectCredentials(t *testing.T) {
 	// MQTT 3.1.1
 	pkt311 := buildConnectPacket(4, "dev-001", "dev-001", "token-abc")
-	u, p, level, ok := parseConnectCredentials(pkt311)
+	_, u, p, level, ok := parseConnectCredentials(pkt311)
 	assert.True(t, ok)
 	assert.Equal(t, "dev-001", u)
 	assert.Equal(t, "token-abc", p)
@@ -90,18 +90,18 @@ func TestParseConnectCredentials(t *testing.T) {
 
 	// MQTT 5.0
 	pkt5 := buildConnectPacket(5, "dev-002", "dev-002", "token-xyz")
-	u, p, level, ok = parseConnectCredentials(pkt5)
+	_, u, p, level, ok = parseConnectCredentials(pkt5)
 	assert.True(t, ok)
 	assert.Equal(t, "dev-002", u)
 	assert.Equal(t, "token-xyz", p)
 	assert.Equal(t, byte(5), level)
 
 	// 非 CONNECT 包
-	_, _, _, ok = parseConnectCredentials([]byte{0x30, 0x02, 0x00, 0x00})
+	_, _, _, _, ok = parseConnectCredentials([]byte{0x30, 0x02, 0x00, 0x00})
 	assert.False(t, ok)
 
 	// 空包
-	_, _, _, ok = parseConnectCredentials(nil)
+	_, _, _, _, ok = parseConnectCredentials(nil)
 	assert.False(t, ok)
 }
 
@@ -206,7 +206,7 @@ func setupGatewayTest(t *testing.T, requireAuth bool) (*httptest.Server, *MqttWs
 	t.Cleanup(func() { config.Cfg = oldCfg })
 
 	gin.SetMode(gin.TestMode)
-	gateway := NewMqttWsGateway()
+	gateway := NewMqttWsGateway(nil)
 	e := gin.New()
 	e.GET("/api/ws/mqtt/broker", func(c *gin.Context) {
 		gateway.HandleWebSocket(c.Writer, c.Request)
@@ -215,6 +215,7 @@ func setupGatewayTest(t *testing.T, requireAuth bool) (*httptest.Server, *MqttWs
 	t.Cleanup(ts.Close)
 	return ts, gateway
 }
+
 
 func TestMqttWsGatewayBridge(t *testing.T) {
 	// 外部 broker mock
@@ -295,7 +296,7 @@ func TestMqttWsGatewayFragmentedConnect(t *testing.T) {
 	}
 
 	gin.SetMode(gin.TestMode)
-	gw := NewMqttWsGateway()
+	gw := NewMqttWsGateway(nil)
 	e := gin.New()
 	e.GET("/api/ws/mqtt/broker", func(c *gin.Context) {
 		gw.HandleWebSocket(c.Writer, c.Request)

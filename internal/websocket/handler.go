@@ -10,15 +10,8 @@ import (
 	"github.com/sa-tokens/sa-token-go/stputil"
 	"go.uber.org/zap"
 
-	mqttEntity "iot-platform.local/internal/model/mqtt"
-
 	"github.com/gorilla/websocket"
 )
-
-// MqttPublisher WebSocket需要的MQTT发布能力（接口解耦，避免循环依赖）
-type MqttPublisher interface {
-	Publish(req mqttEntity.PublishRequest) error
-}
 
 // 升级器配置
 var upgrader = websocket.Upgrader{
@@ -62,7 +55,6 @@ type UserCommandHandler func(ownerID uint, deviceID string, cmdType string, payl
 // WsHandler WebSocket处理器
 type WsHandler struct {
 	hub                 *Hub
-	mqttClient          MqttPublisher
 	validateDevToken    DevTokenValidator    // 可选，设备 WS 认证
 	onDeviceMessage     DeviceMessageHandler // 设备上行消息回调
 	resolveOwner        OwnerResolver        // 可选，设备→owner 查询
@@ -71,11 +63,8 @@ type WsHandler struct {
 }
 
 // NewWsHandler 创建WebSocket处理器
-func NewWsHandler(hub *Hub, mqttClient MqttPublisher) *WsHandler {
-	return &WsHandler{
-		hub:        hub,
-		mqttClient: mqttClient,
-	}
+func NewWsHandler(hub *Hub) *WsHandler {
+	return &WsHandler{hub: hub}
 }
 
 // SetDeviceTokenValidator 设置设备 Token 校验器（用于设备 WebSocket 端点）
@@ -288,25 +277,12 @@ func (h *WsHandler) readPump(client *Client) {
 	})
 
 	for {
-		_, message, err := client.Conn.ReadMessage()
+		_, _, err := client.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				zap.S().Infof("[WebSocket] 读取错误: %v", err)
 			}
 			break
-		}
-
-		// 解析并转发到MQTT
-		var req mqttEntity.PublishRequest
-		if err := json.Unmarshal(message, &req); err != nil {
-			zap.S().Infof("[WebSocket] JSON解析失败: %v", err)
-			continue
-		}
-
-		if h.mqttClient != nil {
-			if err := h.mqttClient.Publish(req); err != nil {
-				zap.S().Infof("[WebSocket] MQTT发布失败: %v", err)
-			}
 		}
 	}
 }

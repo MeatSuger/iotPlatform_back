@@ -9,16 +9,15 @@ import (
 
 func TestNewWsHandler(t *testing.T) {
 	hub := NewHub()
-	handler := NewWsHandler(hub, nil)
+	handler := NewWsHandler(hub)
 
 	assert.NotNil(t, handler)
 	assert.NotNil(t, handler.hub)
-	assert.Nil(t, handler.mqttClient)
 	assert.Nil(t, handler.validateDevToken)
 }
 
 func TestWsHandler_SetDeviceTokenValidator(t *testing.T) {
-	handler := NewWsHandler(NewHub(), nil)
+	handler := NewWsHandler(NewHub())
 	assert.Nil(t, handler.validateDevToken)
 
 	called := false
@@ -35,7 +34,7 @@ func TestWsHandler_SetDeviceTokenValidator(t *testing.T) {
 }
 
 func TestWsHandler_SetDeviceMessageHandler(t *testing.T) {
-	handler := NewWsHandler(NewHub(), nil)
+	handler := NewWsHandler(NewHub())
 	assert.Nil(t, handler.onDeviceMessage)
 
 	called := false
@@ -49,7 +48,7 @@ func TestWsHandler_SetDeviceMessageHandler(t *testing.T) {
 }
 
 func TestWsHandler_SetOwnerResolver(t *testing.T) {
-	handler := NewWsHandler(NewHub(), nil)
+	handler := NewWsHandler(NewHub())
 	assert.Nil(t, handler.resolveOwner)
 
 	handler.SetOwnerResolver(func(deviceID string) (uint, error) {
@@ -63,7 +62,7 @@ func TestWsHandler_SetOwnerResolver(t *testing.T) {
 }
 
 func TestWsHandler_SetUserCommandHandler(t *testing.T) {
-	handler := NewWsHandler(NewHub(), nil)
+	handler := NewWsHandler(NewHub())
 	assert.Nil(t, handler.onUserCommand)
 
 	called := false
@@ -80,7 +79,7 @@ func TestWsHandler_SetUserCommandHandler(t *testing.T) {
 }
 
 func TestWsHandler_SetDeviceStatusUpdater(t *testing.T) {
-	handler := NewWsHandler(NewHub(), nil)
+	handler := NewWsHandler(NewHub())
 	assert.Nil(t, handler.deviceStatusUpdater)
 
 	handler.SetDeviceStatusUpdater(func(deviceID, status string) error {

@@ -2,6 +2,8 @@ package service
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -14,29 +16,31 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/middleware"
+	"iot-platform.local/internal/repository"
 	"iot-platform.local/pkg/config"
 )
 
 // MqttWsGateway MQTT over WebSocket 鉴权网关（胶水层）
 //
-// 定位：只做两件事
-//  1. 鉴权：设备连 /api/ws/mqtt/broker，网关解析 CONNECT 包中的
-//     username=设备ID / password=设备Token，校验设备身份
-//  2. 透明转发：校验通过后，建立到外部 MQTT Docker 的 TCP 连接，
-//     将整个 MQTT 会话按包边界双向桥接（不解析业务协议、不维护会话状态）
+// 功能：
+//  1. 鉴权：设备 CONNECT 时校验 username=设备ID / password=设备Token
+//  2. 透明转发：鉴权通过后双向桥接到外部 Mosquitto
+//  3. 发布日志：所有 PUBLISH 帧写入 mqtt_publish_log 表
 //
 // 链路：设备 --wss--> 网关(鉴权) --tcp--> 外部 Mosquitto(1883)
 type MqttWsGateway struct {
-	brokerAddr  string // 外部 MQTT Docker 地址（host:port）
+	brokerAddr  string
 	dialTimeout time.Duration
+	logRepo     *repository.MqttPublishLogRepo
 }
 
-// NewMqttWsGateway 创建 MQTT 鉴权网关，broker 地址取自配置 mqtt.broker-url
-func NewMqttWsGateway() *MqttWsGateway {
+// NewMqttWsGateway 创建 MQTT 鉴权网关
+func NewMqttWsGateway(logRepo *repository.MqttPublishLogRepo) *MqttWsGateway {
 	addr := strings.TrimPrefix(config.Cfg.MQTT.BrokerURL, "tcp://")
 	addr = strings.TrimPrefix(addr, "ssl://")
-	return &MqttWsGateway{brokerAddr: addr, dialTimeout: 5 * time.Second}
+	return &MqttWsGateway{brokerAddr: addr, dialTimeout: 5 * time.Second, logRepo: logRepo}
 }
 
 // HandleWebSocket 处理设备经 Gin HTTP 入口进来的 MQTT-over-WebSocket 连接
@@ -52,7 +56,7 @@ func (g *MqttWsGateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) 
 	}
 	defer ws.Close()
 
-	// 1. 累积 WS 消息直到拼出完整 CONNECT 包（mqtt.js 可能分片发送：固定头一个消息、body 一个消息）
+	// 1. 累积 WS 消息直到拼出完整 CONNECT 包
 	var connectBytes []byte
 	for {
 		mt, data, err := ws.ReadMessage()
@@ -65,14 +69,14 @@ func (g *MqttWsGateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) 
 		}
 		connectBytes = append(connectBytes, data...)
 		if total, ok := mqttPacketTotalLength(connectBytes); ok && len(connectBytes) >= total {
-			connectBytes = connectBytes[:total] // 完整 CONNECT
+			connectBytes = connectBytes[:total]
 			break
 		}
 	}
 
-	// 2. 解析 CONNECT 提取设备凭证
-	deviceID, token, protocolLevel, parseOK := parseConnectCredentials(connectBytes)
-	zap.S().Debugf("[MQTT网关] 设备连接: device=%s, level=%d, parseOK=%v", deviceID, protocolLevel, parseOK)
+	// 2. 解析 CONNECT 凭证
+	clientID, deviceID, token, protocolLevel, parseOK := parseConnectCredentials(connectBytes)
+	zap.S().Debugf("[MQTT网关] 设备连接: client=%s, device=%s, level=%d, parseOK=%v", clientID, deviceID, protocolLevel, parseOK)
 
 	// 3. 鉴权
 	if config.Cfg.MqttGateway.RequireAuth {
@@ -84,7 +88,7 @@ func (g *MqttWsGateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) 
 		zap.S().Infof("[MQTT网关] 设备 %s 鉴权通过", deviceID)
 	}
 
-	// 4. 建立到外部 MQTT Docker 的 TCP 连接
+	// 4. 连接外部 broker
 	tcp, err := net.DialTimeout("tcp", g.brokerAddr, g.dialTimeout)
 	if err != nil {
 		zap.S().Warnf("[MQTT网关] 连接外部Broker失败: %s: %v", g.brokerAddr, err)
@@ -92,7 +96,7 @@ func (g *MqttWsGateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) 
 	}
 	defer tcp.Close()
 
-	// 5. 把完整 CONNECT 转发给外部 broker
+	// 5. 转发 CONNECT
 	if _, err := tcp.Write(connectBytes); err != nil {
 		zap.S().Warnf("[MQTT网关] 转发 CONNECT 失败: %v", err)
 		return
@@ -100,11 +104,12 @@ func (g *MqttWsGateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) 
 
 	zap.S().Infof("[MQTT网关] 设备 %s 已桥接到外部Broker %s", deviceID, g.brokerAddr)
 
-	// 6. 双向桥接（按 MQTT 包边界转发）
+	// 6. 双向桥接（ws→tcp 方向累积完整帧，转发前拦截 PUBLISH 写日志）
 	done := make(chan struct{}, 2)
-	// 设备 WS -> 外部 broker TCP
+
 	go func() {
 		defer func() { done <- struct{}{} }()
+		var buf []byte
 		for {
 			mt, data, err := ws.ReadMessage()
 			if err != nil {
@@ -114,13 +119,26 @@ func (g *MqttWsGateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) 
 			if mt != websocket.BinaryMessage {
 				continue
 			}
-			if _, err := tcp.Write(data); err != nil {
-				_ = tcp.Close()
-				return
+			buf = append(buf, data...)
+
+			for {
+				total, ok := mqttPacketTotalLength(buf)
+				if !ok || len(buf) < total {
+					break
+				}
+				frame := buf[:total]
+				buf = buf[total:]
+
+				g.logPublish(frame, clientID, protocolLevel)
+
+				if _, err := tcp.Write(frame); err != nil {
+					_ = tcp.Close()
+					return
+				}
 			}
 		}
 	}()
-	// 外部 broker TCP -> 设备 WS
+
 	go func() {
 		defer func() { done <- struct{}{} }()
 		reader := &mqttFrameReader{r: bufio.NewReader(tcp)}
@@ -135,11 +153,86 @@ func (g *MqttWsGateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) 
 		}
 	}()
 
-	<-done // 任一端关闭即结束
+	<-done
 	zap.S().Debugf("[MQTT网关] 设备 %s 连接结束", deviceID)
 }
 
-// authenticateDevice 校验设备凭证：username=设备ID, password=设备Token（Sa-Token）
+// logPublish 拦截 PUBLISH 帧：写入 mqtt_publish_log + 调用 onPublish 钩子
+func (g *MqttWsGateway) logPublish(frame []byte, clientID string, protocolLevel byte) {
+	if len(frame) < 2 || frame[0]&0xF0 != 0x30 {
+		return
+	}
+
+	qos := (frame[0] & 0x06) >> 1
+	retained := frame[0]&0x01 != 0
+
+	pos := 1
+	for pos < len(frame) && frame[pos]&0x80 != 0 {
+		pos++
+	}
+	pos++
+	if pos+2 > len(frame) {
+		return
+	}
+	topicLen := int(binary.BigEndian.Uint16(frame[pos : pos+2]))
+	pos += 2
+	if pos+topicLen > len(frame) {
+		return
+	}
+	topic := string(frame[pos : pos+topicLen])
+	pos += topicLen
+
+	if qos > 0 {
+		pos += 2
+	}
+
+	// MQTT 5.0: 跳过 properties
+	if protocolLevel == 5 && pos < len(frame) {
+		propLen, mul := 0, 1
+		for i := 0; i < 4 && pos < len(frame); i++ {
+			b := frame[pos]
+			propLen += int(b&0x7f) * mul
+			mul *= 128
+			pos++
+			if b&0x80 == 0 {
+				break
+			}
+		}
+		pos += propLen
+	}
+
+	payload := bytes.Trim(frame[pos:], "\x00")
+
+	// 写入 mqtt_publish_log
+	zap.S().Debugf("[MQTT网关] PUBLISH topic=%s qos=%d", topic, qos)
+	if g.logRepo != nil {
+		go func() {
+			if _, err := g.logRepo.Create(context.Background(), &ent.MqttPublishLog{
+				Topic:      topic,
+				ClientID:   clientID,
+				Payload:    string(payload),
+				Qos:        int(qos),
+				Retained:   retained,
+				BrokerURL:  config.Cfg.MQTT.BrokerURL,
+				CreateTime: time.Now(),
+			}); err != nil {
+				zap.S().Warnf("[MQTT网关] 写入发布日志失败: %v", err)
+			}
+		}()
+	}
+
+	// 用户自定解析钩子
+	g.onPublish(topic, payload)
+}
+
+// onPublish 预留：用户自行编写 PUBLISH 消息的解析与入库逻辑
+// 此时 frame 已写入 mqtt_publish_log 并转发到外部 broker
+func (g *MqttWsGateway) onPublish(topic string, payload []byte) {
+	// TODO: 用户自行编写
+}
+
+// ============ CONNECT 解析 & 鉴权 ============
+
 func authenticateDevice(deviceID, token string) bool {
 	if deviceID == "" || token == "" {
 		return false
@@ -150,49 +243,41 @@ func authenticateDevice(deviceID, token string) bool {
 		return false
 	}
 	loginID, err := deviceMgr.GetLoginID(token)
-	if err != nil || loginID != deviceID {
-		return false
-	}
-	return true
+	return err == nil && loginID == deviceID
 }
 
-// parseConnectCredentials 解析 MQTT CONNECT 包，提取 username(设备ID) / password(设备Token) 和协议版本
-func parseConnectCredentials(packet []byte) (username, password string, protocolLevel byte, ok bool) {
-	if len(packet) < 2 || packet[0] != 0x10 { // 必须是 CONNECT 包
-		return "", "", 0, false
+func parseConnectCredentials(packet []byte) (clientID, username, password string, protocolLevel byte, ok bool) {
+	if len(packet) < 2 || packet[0] != 0x10 {
+		return "", "", "", 0, false
 	}
 
-	// 跳过 fixed header + remaining length（varint）
 	pos := 1
 	for pos < len(packet) && packet[pos]&0x80 != 0 {
 		pos++
 	}
-	pos++ // 最后一个 remaining length 字节
+	pos++
 
-	// protocol name: 2B 长度 + 名称
 	if pos+2 > len(packet) {
-		return "", "", 0, false
+		return "", "", "", 0, false
 	}
 	nameLen := int(binary.BigEndian.Uint16(packet[pos : pos+2]))
 	pos += 2 + nameLen
 	if pos+4 > len(packet) {
-		return "", "", 0, false
+		return "", "", "", 0, false
 	}
 
 	protocolLevel = packet[pos]
 	flags := packet[pos+1]
-	pos += 4 // protocol level(1) + connect flags(1) + keepalive(2)
+	pos += 4
 
-	// MQTT 5.0: connect properties（varint 长度 + 内容）——在 clientId 之前
 	if protocolLevel == 5 {
 		if pos >= len(packet) {
-			return "", "", 0, false
+			return "", "", "", 0, false
 		}
-		propLen := 0
-		multiplier := 1
+		propLen, multiplier := 0, 1
 		for i := 0; i < 4; i++ {
 			if pos >= len(packet) {
-				return "", "", 0, false
+				return "", "", "", 0, false
 			}
 			b := packet[pos]
 			propLen += int(b&0x7f) * multiplier
@@ -204,80 +289,74 @@ func parseConnectCredentials(packet []byte) (username, password string, protocol
 		}
 		pos += propLen
 		if pos > len(packet) {
-			return "", "", 0, false
+			return "", "", "", 0, false
 		}
 	}
 
-	// client identifier
 	if pos+2 > len(packet) {
-		return "", "", 0, false
+		return "", "", "", 0, false
 	}
 	cidLen := int(binary.BigEndian.Uint16(packet[pos : pos+2]))
+	clientID = string(packet[pos+2 : pos+2+cidLen])
 	pos += 2 + cidLen
 
-	// will（如果有）
 	if flags&0x04 != 0 {
 		if protocolLevel == 5 {
-			// 5.0 的 will properties: 1B 长度 + 内容
 			if pos >= len(packet) {
-				return "", "", 0, false
+				return "", "", "", 0, false
 			}
 			wpLen := int(packet[pos])
 			pos += 1 + wpLen
 		}
 		if pos+2 > len(packet) {
-			return "", "", 0, false
+			return "", "", "", 0, false
 		}
-		willTopicLen := int(binary.BigEndian.Uint16(packet[pos : pos+2]))
-		pos += 2 + willTopicLen
+		wtLen := int(binary.BigEndian.Uint16(packet[pos : pos+2]))
+		pos += 2 + wtLen
 		if pos+2 > len(packet) {
-			return "", "", 0, false
+			return "", "", "", 0, false
 		}
-		willPayloadLen := int(binary.BigEndian.Uint16(packet[pos : pos+2]))
-		pos += 2 + willPayloadLen
+		wpLen := int(binary.BigEndian.Uint16(packet[pos : pos+2]))
+		pos += 2 + wpLen
 	}
 
-	// username（bit7）
 	if flags&0x80 != 0 {
 		if pos+2 > len(packet) {
-			return "", "", 0, false
+			return "", "", "", 0, false
 		}
 		ul := int(binary.BigEndian.Uint16(packet[pos : pos+2]))
 		pos += 2
 		if pos+ul > len(packet) {
-			return "", "", 0, false
+			return "", "", "", 0, false
 		}
 		username = string(packet[pos : pos+ul])
 		pos += ul
 	}
 
-	// password（bit6）
 	if flags&0x40 != 0 {
 		if pos+2 > len(packet) {
-			return "", "", 0, false
+			return "", "", "", 0, false
 		}
 		pl := int(binary.BigEndian.Uint16(packet[pos : pos+2]))
 		pos += 2
 		if pos+pl > len(packet) {
-			return "", "", 0, false
+			return "", "", "", 0, false
 		}
 		password = string(packet[pos : pos+pl])
 	}
 
-	return username, password, protocolLevel, true
+	return clientID, username, password, protocolLevel, true
 }
 
-// buildConnackReject 构造拒绝连接的 CONNACK（bad user name or password）
 func buildConnackReject(protocolLevel byte) []byte {
 	if protocolLevel == 5 {
-		// MQTT 5.0: session present(0) + reason(0x87 not authorized) + properties length(0)
 		return []byte{0x20, 0x03, 0x00, 0x87, 0x00}
 	}
-	// MQTT 3.1.1: session present(0) + return code(0x05 not authorized)
 	return []byte{0x20, 0x02, 0x00, 0x05}
 }
 
-// mqttPacketTotalLength 计算完整 MQTT 包预期大小（fixed header + remaining length + body）
+// ============ MQTT 帧工具 ============
+
 func mqttPacketTotalLength(packet []byte) (int, bool) {
 	if len(packet) < 2 || packet[0]&0xF0 == 0 {
 		return 0, false
@@ -300,22 +379,19 @@ func mqttPacketTotalLength(packet []byte) (int, bool) {
 	return 0, false
 }
 
-// mqttFrameReader 从 TCP 流按 MQTT 包边界读取完整帧（fixed header + remaining length + body）
 type mqttFrameReader struct {
 	r *bufio.Reader
 }
 
-// ReadFrame 读取一个完整 MQTT 包
 func (fr *mqttFrameReader) ReadFrame() ([]byte, error) {
 	first, err := fr.r.ReadByte()
 	if err != nil {
 		return nil, err
 	}
 
-	// remaining length（varint，最多 4 字节）
+	header := []byte{first}
 	multiplier := 1
 	remaining := 0
-	header := []byte{first}
 	for i := 0; i < 4; i++ {
 		b, err := fr.r.ReadByte()
 		if err != nil {

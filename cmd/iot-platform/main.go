@@ -45,6 +45,7 @@ import (
 	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/ent/user"
 	"iot-platform.local/internal/middleware"
+	"iot-platform.local/internal/repository"
 	"iot-platform.local/internal/router"
 	"iot-platform.local/internal/server"
 	"iot-platform.local/internal/service"
@@ -207,7 +208,8 @@ func main() {
 	// 10. MQTT 鉴权网关（设备真 MQTT/WSS 接入：鉴权 → 透明转发到外部Broker）
 	var mqttGateway *service.MqttWsGateway
 	if cfg.MqttGateway.Enabled {
-		mqttGateway = service.NewMqttWsGateway()
+		logRepo := repository.NewMqttPublishLogRepo(entClient)
+		mqttGateway = service.NewMqttWsGateway(logRepo)
 		zap.L().Info("[Main] MQTT 鉴权网关已启用（设备入口: /api/ws/mqtt/broker，转发到 " + cfg.MQTT.BrokerURL + "）")
 	}
 

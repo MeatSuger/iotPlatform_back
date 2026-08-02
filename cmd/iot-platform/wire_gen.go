@@ -36,7 +36,7 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 	downlinkCmdRepo := repository.NewDownlinkCmdRepo(entClient)
 	downlinkService := service.NewDownlinkService(downlinkCmdRepo, deviceRepo, rdb, hub)
 	services := provideRouterServices(userService, deviceService, deviceReportService, influxDBService, downlinkService)
-	wsHandler := websocket.NewWsHandler(hub, nil) // 网关架构下不需要 MqttPublisher
+	wsHandler := websocket.NewWsHandler(hub) // 网关架构下不需要 MqttPublisher
 	appComponents := &AppComponents{
 		Services:  services,
 		WsHandler: wsHandler,
