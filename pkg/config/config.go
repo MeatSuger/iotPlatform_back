@@ -111,12 +111,11 @@ type MQTTConfig struct {
 	BrokerURL string `mapstructure:"broker-url"` // 外部 MQTT Docker 地址，如 tcp://mqtt:1883
 }
 
-// MqttGatewayConfig MQTT 鉴权网关配置（胶水层：设备 WSS 接入 → 鉴权 → 透明转发到外部 MQTT Docker）
-// 设备连接: wss://<host>/api/ws/mqtt/broker，与 HTTP 同端口
-// CONNECT 时 username=设备ID, password=设备Token
-type MqttGatewayConfig struct {
-	Enabled     bool `mapstructure:"enabled"`
-	RequireAuth bool `mapstructure:"require-auth"` // true 时校验设备 Token（username/password），false 时放行（仅转发）
+// MqttGatewayConfig MQTT 桥接网关配置（胶水层：设备 WSS 接入 → 框架鉴权 → 透明转发到外部 MQTT Docker）
+// 设备连接: wss://<host>/api/ws/mqtt/broker?X-Device-Token=<token>，与 HTTP 同端口
+// 鉴权由 DeviceAuthMiddleware（Sa-Token）接管
+ type MqttGatewayConfig struct {
+	Enabled bool `mapstructure:"enabled"`
 }
 
 // CORSConfig 跨域配置

@@ -34,10 +34,9 @@ influxdb:
 mqtt:
   broker-url: "tcp://mqtt:1883"
 
-# MQTT 鉴权网关（胶水层）：设备 WSS 接入 → 鉴权 → 透明转发到外部 MQTT Docker
+# MQTT 桥接网关（胶水层）：设备 WSS 接入 → 框架鉴权（Sa-Token）→ 透明转发到外部 MQTT Docker
 mqtt-gateway:
   enabled: true
-  require-auth: true
 
 cors:
   allowed-origins:

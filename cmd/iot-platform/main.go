@@ -42,6 +42,7 @@ import (
 	saredis "github.com/sa-tokens/sa-token-go/storage/redis"
 	"github.com/sa-tokens/sa-token-go/stputil"
 	"go.uber.org/zap"
+	"iot-platform.local/internal/controller"
 	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/ent/user"
 	"iot-platform.local/internal/middleware"
@@ -205,12 +206,13 @@ func main() {
 	}
 	cancel()
 
-	// 10. MQTT 鉴权网关（设备真 MQTT/WSS 接入：鉴权 → 透明转发到外部Broker）
-	var mqttGateway *service.MqttWsGateway
+	// 10. MQTT 桥接网关（设备真 MQTT/WSS 接入：框架 Sa-Token 鉴权 → 透明转发到外部Broker）
+	// 设备入口: /api/ws/mqtt/broker，鉴权在 MQTT 协议层完成（CONNECT username/password 或 ?X-Device-Token=）
+	var mqttGateway *controller.MqttGatewayController
 	if cfg.MqttGateway.Enabled {
 		logRepo := repository.NewMqttPublishLogRepo(entClient)
-		mqttGateway = service.NewMqttWsGateway(logRepo)
-		zap.L().Info("[Main] MQTT 鉴权网关已启用（设备入口: /api/ws/mqtt/broker，转发到 " + cfg.MQTT.BrokerURL + "）")
+		mqttGateway = controller.NewMqttGatewayController(logRepo, svcs.Report)
+		zap.L().Info("[Main] MQTT 桥接网关已启用（设备入口: /api/ws/mqtt/broker，转发到 " + cfg.MQTT.BrokerURL + "）")
 	}
 
 	// 11. 设置路由

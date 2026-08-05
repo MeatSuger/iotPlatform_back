@@ -26,7 +26,7 @@ type Services struct {
 }
 
 // Setup 配置路由
-func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plugin, mqttGateway *service.MqttWsGateway) *gin.Engine {
+func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plugin, mqttGateway *controller.MqttGatewayController) *gin.Engine {
 	// 设置Gin模式
 	if config.Cfg.Server.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
@@ -81,11 +81,13 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 			wsHandler.HandleUser(c.Writer, c.Request)
 		})
 		// ===== MQTT over WebSocket（设备真 MQTT 协议接入，复用 HTTP 入口） =====
-		// 设备连接: wss://<host>/api/ws/mqtt/broker（网关只做鉴权 + 透明转发到外部 MQTT Docker）
+		// 设备连接: wss://<host>/api/ws/mqtt/broker（纯透传，不挂 HTTP 中间件）
+		// 鉴权在 MQTT 协议层完成（框架 Sa-Token）：
+		//   - 标准 MQTT 客户端：CONNECT username=设备ID / password=设备Token
+		//   - mqtt.js 等可拼 URL 的客户端：?X-Device-Token=<token>
+		// 网关负责透明转发到外部 MQTT Docker + PUBLISH 日志/入库
 		if mqttGateway != nil {
-			api.GET("/ws/mqtt/broker", func(c *gin.Context) {
-				mqttGateway.HandleWebSocket(c.Writer, c.Request)
-			})
+			api.GET("/ws/mqtt/broker", mqttGateway.HandleWebSocket)
 		}
 
 		// ===== 用户相关路由 =====

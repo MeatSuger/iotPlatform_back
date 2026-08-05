@@ -196,6 +196,12 @@ func extractDeviceToken(c *gin.Context) string {
 	return ""
 }
 
+// GetDeviceToken 提取设备 Token（Header "X-Device-Token" → Cookie → Query）
+// 与 DeviceAuthMiddleware 同一提取逻辑，供非 HTTP 入口（MQTT 网关等）复用
+func GetDeviceToken(c *gin.Context) string {
+	return extractDeviceToken(c)
+}
+
 // ========================================
 // 上下文提取器
 // ========================================

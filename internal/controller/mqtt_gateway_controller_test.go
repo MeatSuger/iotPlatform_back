@@ -1,4 +1,4 @@
-package service
+package controller
 
 import (
 	"bufio"
@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"iot-platform.local/internal/middleware"
 	"iot-platform.local/pkg/config"
 )
 
@@ -105,14 +106,6 @@ func TestParseConnectCredentials(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestBuildConnackReject(t *testing.T) {
-	v3 := buildConnackReject(4)
-	assert.Equal(t, []byte{0x20, 0x02, 0x00, 0x05}, v3) // 3.1.1: not authorized
-
-	v5 := buildConnackReject(5)
-	assert.Equal(t, []byte{0x20, 0x03, 0x00, 0x87, 0x00}, v5) // 5.0: not authorized
-}
-
 // ============ 端到端桥接测试 ============
 // mockMqttBroker 模拟外部 MQTT Docker：记录收到的帧，可按需回包
 type mockMqttBroker struct {
@@ -200,37 +193,41 @@ func (m *mockMqttBroker) writePublish(topic, payload string) {
 
 func (m *mockMqttBroker) close() { m.ln.Close() }
 
-// setupGatewayTest 起 gin + httptest + 网关
-func setupGatewayTest(t *testing.T, requireAuth bool) (*httptest.Server, *MqttWsGateway) {
+// deviceLogin 通过框架 Sa-Token（内存存储）为设备签发 Token
+func deviceLogin(t *testing.T, deviceID string) string {
+	token, err := middleware.GetDeviceManager().Login(deviceID, "device")
+	require.NoError(t, err)
+	require.NotEmpty(t, token)
+	return token
+}
+
+// setupGatewayTest 起 gin + httptest + 网关控制器（路由不挂 HTTP 中间件，纯 MQTT 透传）
+func setupGatewayTest(t *testing.T) (*httptest.Server, *MqttGatewayController) {
 	oldCfg := config.Cfg
 	t.Cleanup(func() { config.Cfg = oldCfg })
 
 	gin.SetMode(gin.TestMode)
-	gateway := NewMqttWsGateway(nil)
+	gateway := NewMqttGatewayController(nil, nil)
 	e := gin.New()
-	e.GET("/api/ws/mqtt/broker", func(c *gin.Context) {
-		gateway.HandleWebSocket(c.Writer, c.Request)
-	})
+	e.GET("/api/ws/mqtt/broker", gateway.HandleWebSocket)
 	ts := httptest.NewServer(e)
 	t.Cleanup(ts.Close)
 	return ts, gateway
 }
 
-
-func TestMqttWsGatewayBridge(t *testing.T) {
+func TestMqttGatewayControllerBridge(t *testing.T) {
 	// 外部 broker mock
 	mock := newMockMqttBroker(t)
 	defer mock.close()
 
 	config.Cfg = &config.Config{
-		MQTT: config.MQTTConfig{BrokerURL: "tcp://" + mock.addr()},
-		MqttGateway: config.MqttGatewayConfig{
-			Enabled:     true,
-			RequireAuth: false,
-		},
+		MQTT:        config.MQTTConfig{BrokerURL: "tcp://" + mock.addr()},
+		MqttGateway: config.MqttGatewayConfig{Enabled: true},
 	}
 
-	ts, _ := setupGatewayTest(t, false)
+	ts, _ := setupGatewayTest(t)
+	// 标准 MQTT 客户端：CONNECT username=设备ID / password=设备Token（框架签发的 Sa-Token）
+	token := deviceLogin(t, "dev-001")
 	wsURL := "ws" + ts.URL[len("http"):] + "/api/ws/mqtt/broker"
 
 	// 设备客户端（paho，走 ws://）
@@ -239,7 +236,7 @@ func TestMqttWsGatewayBridge(t *testing.T) {
 		AddBroker(wsURL).
 		SetClientID("test-device").
 		SetUsername("dev-001").
-		SetPassword("token-abc").
+		SetPassword(token).
 		SetDefaultPublishHandler(func(_ mqtt.Client, msg mqtt.Message) {
 			gotPub <- string(msg.Payload())
 		})
@@ -285,32 +282,135 @@ func TestMqttWsGatewayBridge(t *testing.T) {
 	}
 }
 
-// TestMqttWsGatewayFragmentedConnect 模拟 mqtt.js 分片发送 CONNECT（固定头一个 WS 消息，body 一个 WS 消息）
-func TestMqttWsGatewayFragmentedConnect(t *testing.T) {
+// TestMqttGatewayControllerAuthReject CONNECT 凭证错误：应回 CONNACK not authorized(0x05)，
+// 外部 broker 不应收到任何帧
+func TestMqttGatewayControllerAuthReject(t *testing.T) {
 	mock := newMockMqttBroker(t)
 	defer mock.close()
 
 	config.Cfg = &config.Config{
 		MQTT:        config.MQTTConfig{BrokerURL: "tcp://" + mock.addr()},
-		MqttGateway: config.MqttGatewayConfig{Enabled: true, RequireAuth: false},
+		MqttGateway: config.MqttGatewayConfig{Enabled: true},
+	}
+
+	ts, _ := setupGatewayTest(t)
+	wsURL := "ws" + ts.URL[len("http"):] + "/api/ws/mqtt/broker"
+
+	opts := mqtt.NewClientOptions().
+		AddBroker(wsURL).
+		SetClientID("bad-device").
+		SetUsername("dev-001").
+		SetPassword("wrong-token")
+	client := mqtt.NewClient(opts)
+	tok := client.Connect()
+	// Connect 应失败（网关回 CONNACK not authorized）
+	require.True(t, tok.WaitTimeout(8*time.Second))
+	require.Error(t, tok.Error())
+	defer client.Disconnect(100)
+
+	// 外部 broker 不应收到任何帧（CONNECT 未转发）
+	time.Sleep(300 * time.Millisecond)
+	assert.Empty(t, mock.received(), "鉴权失败时不应转发 CONNECT 到外部Broker")
+}
+
+// TestMqttGatewayControllerAuthViaQueryToken mqtt.js 风格：URL 携带 ?X-Device-Token=，
+// CONNECT 不带凭证也能通过鉴权并透传
+func TestMqttGatewayControllerAuthViaQueryToken(t *testing.T) {
+	mock := newMockMqttBroker(t)
+	defer mock.close()
+
+	config.Cfg = &config.Config{
+		MQTT:        config.MQTTConfig{BrokerURL: "tcp://" + mock.addr()},
+		MqttGateway: config.MqttGatewayConfig{Enabled: true},
+	}
+
+	ts, _ := setupGatewayTest(t)
+	token := deviceLogin(t, "dev-002")
+	wsURL := "ws" + ts.URL[len("http"):] + "/api/ws/mqtt/broker?X-Device-Token=" + token
+
+	opts := mqtt.NewClientOptions().
+		AddBroker(wsURL).
+		SetClientID("query-device")
+	client := mqtt.NewClient(opts)
+	tok := client.Connect()
+	require.True(t, tok.WaitTimeout(8*time.Second), "连接失败: %v", tok.Error())
+	require.NoError(t, tok.Error())
+	defer client.Disconnect(100)
+
+	// 外部 broker 收到 CONNECT（透传成功）
+	require.Eventually(t, func() bool {
+		for _, f := range mock.received() {
+			if len(f) > 0 && f[0] == 0x10 {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 50*time.Millisecond, "外部Broker未收到 CONNECT")
+}
+
+// TestMqttGatewayControllerRejectBadQueryToken URL 携带无效 Token：
+// WebSocket 可升级（不挂 HTTP 中间件），但 CONNECT 后应回 CONNACK not authorized(0x05)
+func TestMqttGatewayControllerRejectBadQueryToken(t *testing.T) {
+	mock := newMockMqttBroker(t)
+	defer mock.close()
+
+	config.Cfg = &config.Config{
+		MQTT:        config.MQTTConfig{BrokerURL: "tcp://" + mock.addr()},
+		MqttGateway: config.MqttGatewayConfig{Enabled: true},
 	}
 
 	gin.SetMode(gin.TestMode)
-	gw := NewMqttWsGateway(nil)
+	gw := NewMqttGatewayController(nil, nil)
 	e := gin.New()
-	e.GET("/api/ws/mqtt/broker", func(c *gin.Context) {
-		gw.HandleWebSocket(c.Writer, c.Request)
-	})
+	e.GET("/api/ws/mqtt/broker", gw.HandleWebSocket)
 	ts := httptest.NewServer(e)
 	defer ts.Close()
 
+	wsURL := "ws" + ts.URL[len("http"):] + "/api/ws/mqtt/broker?X-Device-Token=bogus-token"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err, "WebSocket 应可升级（透传入口不挂 HTTP 中间件）")
+	defer ws.Close()
+
+	// 发送 CONNECT（MQTT 3.1.1）
+	full := buildConnectPacket(4, "dev-x", "dev-x", "pw")
+	require.NoError(t, ws.WriteMessage(websocket.BinaryMessage, full))
+
+	// 应收到 CONNACK not authorized（0x20 0x02 0x00 0x05）
+	_, data, err := ws.ReadMessage()
+	require.NoError(t, err)
+	assert.Equal(t, []byte{0x20, 0x02, 0x00, 0x05}, data)
+
+	// 外部 broker 不应收到任何帧
+	time.Sleep(200 * time.Millisecond)
+	assert.Empty(t, mock.received(), "鉴权失败时不应转发任何帧到外部Broker")
+}
+
+// TestMqttGatewayControllerFragmentedConnect 模拟 mqtt.js 分片发送 CONNECT（固定头一个 WS 消息，body 一个 WS 消息）
+func TestMqttGatewayControllerFragmentedConnect(t *testing.T) {
+	mock := newMockMqttBroker(t)
+	defer mock.close()
+
+	config.Cfg = &config.Config{
+		MQTT:        config.MQTTConfig{BrokerURL: "tcp://" + mock.addr()},
+		MqttGateway: config.MqttGatewayConfig{Enabled: true},
+	}
+
+	gin.SetMode(gin.TestMode)
+	gw := NewMqttGatewayController(nil, nil)
+	e := gin.New()
+	e.GET("/api/ws/mqtt/broker", gw.HandleWebSocket)
+	ts := httptest.NewServer(e)
+	defer ts.Close()
+
+	// 标准 MQTT 客户端：CONNECT username=设备ID / password=设备Token（框架签发的 Sa-Token）
+	token := deviceLogin(t, "dev-003")
 	wsURL := "ws" + ts.URL[len("http"):] + "/api/ws/mqtt/broker"
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	require.NoError(t, err)
 	defer ws.Close()
 
 	// 构造完整 CONNECT（MQTT 5.0，带 username/password）
-	full := buildConnectPacket(5, "dev-003", "dev-003", "token")
+	full := buildConnectPacket(5, "dev-003", "dev-003", token)
 	hdrLen := 2 // 0x10 + 1 字节 remaining（小包）
 	frag1 := full[:hdrLen]
 	frag2 := full[hdrLen:]
@@ -348,37 +448,4 @@ func TestMqttPacketTotalLength(t *testing.T) {
 		assert.Equal(t, tt.total, total)
 		assert.Equal(t, tt.ok, ok)
 	}
-}
-
-func TestMqttWsGatewayAuthReject(t *testing.T) {
-	// 鉴权模式 + 设备 Manager 未初始化（GetDeviceManager 返回 nil）→ 所有连接应被拒
-	mock := newMockMqttBroker(t)
-	defer mock.close()
-
-	config.Cfg = &config.Config{
-		MQTT: config.MQTTConfig{BrokerURL: "tcp://" + mock.addr()},
-		MqttGateway: config.MqttGatewayConfig{
-			Enabled:     true,
-			RequireAuth: true,
-		},
-	}
-
-	ts, _ := setupGatewayTest(t, true)
-	wsURL := "ws" + ts.URL[len("http"):] + "/api/ws/mqtt/broker"
-
-	opts := mqtt.NewClientOptions().
-		AddBroker(wsURL).
-		SetClientID("test-device").
-		SetUsername("dev-001").
-		SetPassword("bad-token")
-	client := mqtt.NewClient(opts)
-	tok := client.Connect()
-	// Connect 应失败（鉴权拒绝，CONNACK not authorized）
-	require.True(t, tok.WaitTimeout(8*time.Second))
-	require.Error(t, tok.Error())
-	defer client.Disconnect(100)
-
-	// 外部 broker 不应收到任何帧（CONNECT 未转发）
-	time.Sleep(300 * time.Millisecond)
-	assert.Empty(t, mock.received(), "鉴权失败时不应转发 CONNECT 到外部Broker")
 }
