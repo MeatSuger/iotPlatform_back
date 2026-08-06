@@ -8,9 +8,10 @@
 
 | 组件      | 技术                      |
 |-----------|---------------------------|
-| 语言      | Go 1.22                   |
+| 语言      | Go 1.26                   |
 | Web 框架  | Gin 1.12                  |
-| ORM       | GORM                      |
+| ORM       | Ent (entgo.io/ent v0.14)  |
+| DI        | Google Wire               |
 | 认证      | Sa-Token Go（Redis 会话） |
 | 数据库    | PostgreSQL 16             |
 | 缓存      | Redis 7                   |
@@ -23,28 +24,40 @@
 ## 项目结构
 
 ```
-iot-back-rebuild/
-├── main.go              # 入口：加载配置 → 连接DB/Redis → Wire注入 → 启动服务
-├── config/              # 配置结构 + YAML（dev/prod）
-├── entity/              # 数据库实体 + DTO
-├── controller/          # HTTP 控制器
-├── service/             # 业务逻辑层
-├── repository/          # 数据访问层
-├── middleware/           # 认证 / 日志 / 恢复 / 鉴权
-├── router/              # 路由注册
-├── websocket/           # WebSocket Hub + Handler
-├── cache/               # Redis 缓存抽象
-├── common/              # 统一响应 / 错误 / 日志 / 自定义时间类型
-├── util/                # 工具函数
-├── deployments/         # Docker Compose / Dockerfile / SQL / MQTT 配置
-│   ├── app/             #   主项目 Dockerfile + docker-compose
-│   ├── mqtt/            #   MQTT Broker
-│   └── sql/             #   数据库初始化 SQL
-├── go.mod / go.sum      # Go 模块
-├── Makefile             # 构建 / 运行 / 打包
-├── tunnel.sh            # sshuttle 隧道（本地开发连接远程 Docker 服务）
-├── API.md               # 完整 API 文档
-└── README.md            # 本文件
+back/
+├── cmd/iot-platform/        # 入口：main.go + Wire 依赖注入
+│   ├── main.go              #   启动：加载配置 → 连接DB/Redis → Wire注入 → 启动服务
+│   ├── wire.go              #   Wire 注入声明
+│   └── wire_gen.go          #   Wire 自动生成
+├── configs/                 # YAML 配置文件（dev/prod）
+├── internal/
+│   ├── controller/          # HTTP 控制器
+│   ├── service/             # 业务逻辑层
+│   ├── repository/          # 数据访问层
+│   ├── model/               # 数据模型 / DTO
+│   ├── middleware/           # 认证 / 日志 / 恢复 / 鉴权
+│   ├── router/              # 路由注册
+│   ├── server/              # UDP 服务器
+│   ├── websocket/           # WebSocket Hub + Handler
+│   └── ent/                 # Ent ORM 生成代码（schema / client / query）
+├── pkg/
+│   ├── cache/               # Redis 缓存抽象
+│   ├── common/              # 统一响应 / 错误 / 日志 / 自定义时间类型
+│   ├── config/              # 配置结构体 + Viper 加载
+│   └── util/                # 工具函数
+├── api/swagger/             # Swagger 文档 + API.md
+├── deployments/             # Docker Compose / Dockerfile / SQL / MQTT 配置
+│   ├── app/                 #   主项目 Dockerfile + docker-compose
+│   ├── mqtt/                #   MQTT Broker (Mosquitto)
+│   └── sql/                 #   数据库初始化 SQL
+├── scripts/                 # 开发工具脚本
+│   ├── dev.sh               #   热重载启动（air）
+│   ├── tunnel.sh            #   sshuttle 隧道
+│   └── k6-test.js           #   k6 性能测试
+├── go.mod / go.sum          # Go 模块
+├── Makefile                 # 构建 / 运行 / 打包
+├── .air.toml               # air 热重载配置
+└── README.md                # 本文件
 ```
 
 ---
@@ -53,7 +66,7 @@ iot-back-rebuild/
 
 ### 前置条件
 
-- Go 1.22+
+- Go 1.26+
 - PostgreSQL 16+
 - Redis 7+
 - InfluxDB 2.7+
@@ -66,11 +79,11 @@ iot-back-rebuild/
 git clone <repo-url> && cd iot-back-rebuild
 
 # 2. 修改配置
-cp config/config.yaml config/config.local.yaml
+cp configs/config.yaml configs/config.local.yaml
 # 编辑 config.local.yaml，填入本地或远程数据库连接信息
 
 # 3. （可选）通过隧道连接远程 Docker 服务
-bash tunnel.sh on
+bash scripts/tunnel.sh on
 
 # 4. 安装依赖
 make deps
@@ -157,7 +170,7 @@ cors:
 
 ## API 文档
 
-所有接口详见 **[API.md](./API.md)**，涵盖：
+所有接口详见 **[API.md](api/swagger/API.md)**，涵盖：
 
 - 用户管理（注册/登录/CRUD）
 - 设备管理（注册/Token/增删查）
