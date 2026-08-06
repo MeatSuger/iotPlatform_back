@@ -141,15 +141,13 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 		// ===== 数据相关路由（设备Token认证） =====
 		dataGroup := api.Group("/data")
 		{
-			// InfluxDB连通性检查（公开）
-			dataGroup.POST("/ping", dataCtl.Ping)
 			// 需要设备Token认证
 			dataGroup.POST("/:deviceId/Data", deviceAuth, dataCtl.ReportData)
 			dataGroup.POST("/:deviceId/ping", deviceAuth, dataCtl.Heartbeat)
 			dataGroup.POST("/:deviceId/heartbeat", deviceAuth, dataCtl.Heartbeat)
 			// 查询数据（公开）
-			dataGroup.GET("/:deviceId/Data/list", dataCtl.QueryData)
-			dataGroup.GET("/list", dataCtl.ListData)
+			dataGroup.GET("/:deviceId/Data/list", userAuth, dataCtl.QueryData)
+			dataGroup.GET("/list", userAuth, dataCtl.ListData)
 		}
 	}
 

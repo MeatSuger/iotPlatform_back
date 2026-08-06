@@ -4,7 +4,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"iot-platform.local/internal/model"
+	entity "iot-platform.local/internal/model"
 	"iot-platform.local/internal/service"
 	"iot-platform.local/pkg/common"
 	"iot-platform.local/pkg/util"
@@ -22,22 +22,6 @@ func NewDataController(deviceReportSvc *service.DeviceReportService, influxSvc *
 		deviceReportSvc: deviceReportSvc,
 		influxSvc:       influxSvc,
 	}
-}
-
-// Ping @Summary      InfluxDB连通性检查
-// @Tags         data
-// @Accept       JSON
-// @Produce      JSON
-// @Success      200   {object}  common.ApiResponse
-// @Failure      400   {object}  common.ApiResponse
-// @Router       /api/data/ping [post]
-// Ping InfluxDB连通性检查 (POST /data/ping)
-func (ctl *DataController) Ping(c *gin.Context) {
-	if err := ctl.influxSvc.Ping(c.Request.Context()); err != nil {
-		common.FailWithMsg(c, common.CodeServerError, "InfluxDB 连接失败: "+err.Error())
-		return
-	}
-	common.Success(c, "true")
 }
 
 // ReportData @Summary      上报传感器数据
