@@ -6,6 +6,7 @@ server:
   port: 9091
   udp-port: 9092       # UDP 设备上报端口
   mode: release
+  swagger-enabled: false  # 生产环境关闭 Swagger 文档
 
 database:
   host: "1Panel-postgresql-atvS"

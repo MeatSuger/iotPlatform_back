@@ -25,10 +25,7 @@ GOFLAGS    = -ldflags="$(LDFLAGS)" -trimpath
 # ===========================================
 
 dev:
-	@echo "→ 启动隧道..."
-	@bash ./scripts/tunnel.sh on
-	@echo "→ 启动 air 热重载..."
-	/home/yu/go/bin/air -c .air.toml
+	@bash ./scripts/dev.sh
 
 # ===========================================
 # 编译

@@ -21,10 +21,11 @@ type Config struct {
 
 // ServerConfig 服务器配置
 type ServerConfig struct {
-	Port        int    `mapstructure:"port"`
-	UDPPort     int    `mapstructure:"udp-port"` // UDP 设备上报端口，0=禁用
-	ContextPath string `mapstructure:"context-path"`
-	Mode        string `mapstructure:"mode"` // debug, release, test
+	Port           int    `mapstructure:"port"`
+	UDPPort        int    `mapstructure:"udp-port"` // UDP 设备上报端口，0=禁用
+	ContextPath    string `mapstructure:"context-path"`
+	Mode           string `mapstructure:"mode"`            // debug, release, test
+	SwaggerEnabled bool   `mapstructure:"swagger-enabled"` // 是否启用 Swagger 文档（生产环境关闭，默认 true）
 }
 
 // DatabaseConfig 数据库配置
@@ -114,7 +115,7 @@ type MQTTConfig struct {
 // MqttGatewayConfig MQTT 桥接网关配置（胶水层：设备 WSS 接入 → 框架鉴权 → 透明转发到外部 MQTT Docker）
 // 设备连接: wss://<host>/api/ws/mqtt/broker?X-Device-Token=<token>，与 HTTP 同端口
 // 鉴权由 DeviceAuthMiddleware（Sa-Token）接管
- type MqttGatewayConfig struct {
+type MqttGatewayConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 }
 
@@ -143,6 +144,9 @@ func Load(configPath string) error {
 	// 环境变量覆盖（支持嵌套键，如 DATABASE_HOST 覆盖 database.host）
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	// Swagger 默认开启（仅生产环境显式关闭），保证旧配置无需改动
+	v.SetDefault("server.swagger-enabled", true)
 
 	if err := v.ReadInConfig(); err != nil {
 		return fmt.Errorf("读取配置文件失败: %w", err)

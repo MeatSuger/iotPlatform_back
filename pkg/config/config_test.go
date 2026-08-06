@@ -151,4 +151,31 @@ func TestConfig_StructDefaults(t *testing.T) {
 	assert.Equal(t, 0, cfg.Server.Port)
 	assert.Equal(t, 0, cfg.Server.UDPPort)
 	assert.Empty(t, cfg.Server.Mode)
+	assert.False(t, cfg.Server.SwaggerEnabled) // 未显式设置时为 false
+}
+
+func TestLoad_SwaggerEnabled(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	// 未配置 swagger-enabled → 默认开启
+	content := `
+server:
+  port: 8080
+  mode: debug
+`
+	assert.NoError(t, os.WriteFile(configPath, []byte(content), 0644))
+	assert.NoError(t, Load(configPath))
+	assert.True(t, Cfg.Server.SwaggerEnabled)
+
+	// 显式关闭
+	content = `
+server:
+  port: 8080
+  mode: release
+  swagger-enabled: false
+`
+	assert.NoError(t, os.WriteFile(configPath, []byte(content), 0644))
+	assert.NoError(t, Load(configPath))
+	assert.False(t, Cfg.Server.SwaggerEnabled)
 }

@@ -37,6 +37,7 @@ import (
 // 鉴权（框架 Sa-Token 体系，两种凭证方式二选一，均不拦截 WebSocket 升级，保证透传）：
 //  1. HTTP 层：请求携带 X-Device-Token（Header/Cookie/Query），mqtt.js 等可拼 URL 参数的客户端
 //  2. MQTT 层：CONNECT 包 username=设备ID / password=设备Token，标准 MQTT 客户端（paho/ESP32 等）
+//
 // 鉴权失败时回 MQTT 标准 CONNACK not authorized(0x05)，而不是 HTTP 拒绝。
 //
 // 链路：设备 --wss--> 网关(框架 Sa-Token 鉴权) --tcp--> 外部 Mosquitto(1883)

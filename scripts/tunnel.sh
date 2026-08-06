@@ -28,8 +28,13 @@ resolve_ip() {
 
 on() {
     if [ -S "$CTRL_SOCK" ]; then
-        printf "%b\n" "隧道已在运行"
-        return 0
+        # 校验旧连接是否仍有效（上次异常退出可能残留死 socket）
+        if ssh -S "$CTRL_SOCK" -O check "$SSH_ALIAS" 2>/dev/null; then
+            printf "%b\n" "隧道已在运行"
+            return 0
+        fi
+        printf "%b\n" "检测到失效隧道，重新连接..."
+        rm -f "$CTRL_SOCK"
     fi
 
     printf "%b\n" "→ 建立 SSH 主控连接..."

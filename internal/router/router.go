@@ -1,6 +1,9 @@
 package router
 
 import (
+	"net/http"
+	"time"
+
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	sagin "github.com/sa-tokens/sa-token-go/integrations/gin"
@@ -51,6 +54,15 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 	}
 	r.Use(cors.New(corsCfg))
 
+	// ===== 健康检查（无需认证，供容器编排/负载均衡探测） =====
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status":  "ok",
+			"service": "iot-platform",
+			"time":    time.Now().Format(time.RFC3339),
+		})
+	})
+
 	// 中间件快捷变量
 	userAuth := middleware.AuthMiddleware()                                         // 用户 Sa-Token 认证
 	deviceAuth := middleware.DeviceAuthMiddleware()                                 // 设备 Sa-Token 认证（保留用于兼容）
@@ -67,8 +79,10 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 	api := r.Group("/api")
 	api.Use(userPlugin.TokenInterceptor())
 	{
-		// ===== Swagger 文档 =====
-		api.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+		// ===== Swagger 文档（生产环境通过 server.swagger-enabled=false 关闭） =====
+		if config.Cfg.Server.SwaggerEnabled {
+			api.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+		}
 
 		// ===== WebSocket（不受认证中间件影响） =====
 		api.GET("/ws/mqtt", func(c *gin.Context) {
