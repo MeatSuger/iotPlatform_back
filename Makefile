@@ -93,3 +93,17 @@ deploy: push
 	ssh $(SSH_HOST) 'mkdir -p $(REMOTE_DIR)/deployments'
 	scp -r deployments/app deployments/mqtt deployments/sql $(SSH_HOST):$(REMOTE_DIR)/deployments/ || { echo "✗ 部署文件上传失败"; exit 1; }
 	@echo "✓ 部署文件已同步"
+
+# ===========================================
+# 重启
+# ===========================================
+
+restart:
+	@echo "→ 重启远程 Docker 容器..."
+	ssh $(SSH_HOST) 'cd $(REMOTE_DIR) && docker compose -f deployments/app/docker-compose.yml restart' || \
+	ssh $(SSH_HOST) 'cd $(REMOTE_DIR) && docker-compose -f deployments/app/docker-compose.yml restart'
+	@echo "✓ 容器已重启"
+
+# 一键：编译 + 推送 + 重启
+release: push restart
+	@echo "✓ 发布完成"

@@ -56,6 +56,12 @@ import (
 	_ "github.com/lib/pq"
 )
 
+// 编译时注入（通过 -ldflags "-X main.Version=... -X main.BuildTime=..."）
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+)
+
 func main() {
 	// 1. 加载配置
 	configPath := os.Getenv("CONFIG_PATH")
@@ -72,10 +78,12 @@ func main() {
 	cfg := config.Cfg
 
 	// 2. 初始化结构化日志（Zap）
-	common.InitLogger(cfg.Server.Mode)
+	common.InitLogger(cfg.Server.Mode, cfg.Server.LogLevel)
 	defer common.Sync()
 
-	zap.L().Info("[Main] IoT Platform (Go) 正在启动...")
+	zap.L().Info("[Main] IoT Platform (Go) 正在启动...",
+		zap.String("version", Version),
+		zap.String("buildTime", BuildTime))
 
 	// 3. 连接PostgreSQL（Ent）
 	entClient, err := initEntClient(cfg)
@@ -109,7 +117,7 @@ func main() {
 		Storage(saredis.NewStorageFromClient(rdb)).
 		TokenName("Authorization").
 		KeyPrefix("Authorization:").
-		Timeout(2592000).
+		Timeout(60 * 60 * 24 * 3).
 		ActiveTimeout(-1).
 		IsConcurrent(true).
 		IsLog(true).
@@ -181,6 +189,10 @@ func main() {
 	defer dataBuffer.Stop()
 	svcs.Report.SetBuffer(dataBuffer)
 	zap.L().Info("[Main] Redis 设备数据缓冲器已启用")
+
+	// 7.6 启动跨实例缓存失效 Pub-Sub 监听（多实例部署时自动同步 L1 缓存）
+	go components.Cache.SubscribeInvalidate(context.Background())
+	zap.L().Info("[Main] 跨实例缓存失效 Pub-Sub 已启动")
 
 	influxSvc := svcs.InfluxDB
 

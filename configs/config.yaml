@@ -6,6 +6,7 @@ server:
   port: 8182           # 服务端口（dev使用8182避免与Java版8181冲突）
   udp-port: 8183       # UDP 设备上报端口（0=禁用）
   mode: debug          # debug | release | test
+  log-level: debug     # 日志级别: debug | info | warn | error（默认: debug→debug, release→info）
   swagger-enabled: true  # 是否启用 Swagger 文档
 
 database:

@@ -13,7 +13,7 @@ import (
 
 func init() {
 	gin.SetMode(gin.TestMode)
-	common.InitLogger("test")
+	common.InitLogger("test", "")
 	defer common.Sync()
 }
 

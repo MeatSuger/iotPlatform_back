@@ -26,11 +26,12 @@ import (
 // InitializeApp Wire 依赖注入入口
 func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, error) {
 	userRepo := repository.NewUserRepo(entClient)
-	userService := service.NewUserService(userRepo)
-	deviceRepo := repository.NewDeviceRepo(entClient)
 	redisCache := cache.NewRedisCache(rdb)
+	userService := service.NewUserService(userRepo, redisCache)
+	deviceRepo := repository.NewDeviceRepo(entClient)
 	deviceService := service.NewDeviceService(deviceRepo, redisCache)
 	influxDBService := provideInfluxDBService()
+	influxDBService.SetCache(redisCache)
 	deviceReportService := service.NewDeviceReportService(deviceRepo, influxDBService, redisCache, deviceService)
 	hub := websocket.NewHub()
 	downlinkCmdRepo := repository.NewDownlinkCmdRepo(entClient)
@@ -40,6 +41,7 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 	appComponents := &AppComponents{
 		Services:  services,
 		WsHandler: wsHandler,
+		Cache:     redisCache,
 	}
 	return appComponents, nil
 }
@@ -50,6 +52,7 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 type AppComponents struct {
 	Services  *router.Services
 	WsHandler *websocket.WsHandler
+	Cache     *cache.RedisCache
 }
 
 func provideInfluxDBService() *service.InfluxDBService {

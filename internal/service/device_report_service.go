@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -22,20 +24,33 @@ type DeviceReportService struct {
 	cache      *cache.RedisCache
 	deviceSvc  *DeviceService
 	buffer     *DeviceDataBuffer // Redis 写缓冲（可选）
+
+	// L1 本地内存缓存：消除热点设备的 Redis 往返延迟
+	localCache *cache.LocalCache
+
+	// PostgreSQL 批量更新（debounced，避免每个请求 spawn goroutine）
+	pgUpdateMu      sync.Mutex
+	pgUpdatePending map[string]time.Time // deviceID → 最新活跃时间
+	pgUpdateTimer   *time.Timer
 }
+
+const pgDebounceInterval = 5 * time.Second // PostgreSQL 活跃时间更新防抖间隔
 
 func NewDeviceReportService(
 	deviceRepo *repository.DeviceRepo,
 	influxSvc *InfluxDBService,
-	cache *cache.RedisCache,
+	redisCache *cache.RedisCache,
 	deviceSvc *DeviceService,
 ) *DeviceReportService {
-	return &DeviceReportService{
-		deviceRepo: deviceRepo,
-		influxSvc:  influxSvc,
-		cache:      cache,
-		deviceSvc:  deviceSvc,
+	svc := &DeviceReportService{
+		deviceRepo:      deviceRepo,
+		influxSvc:       influxSvc,
+		cache:           redisCache,
+		deviceSvc:       deviceSvc,
+		localCache:      cache.NewLocalCache(5 * time.Second), // L1 5s TTL，覆盖高频上报
+		pgUpdatePending: make(map[string]time.Time),
 	}
+	return svc
 }
 
 // SetBuffer 注入缓冲器（由 main 初始化后调用）
@@ -43,88 +58,131 @@ func (s *DeviceReportService) SetBuffer(buf *DeviceDataBuffer) {
 	s.buffer = buf
 }
 
-// ReportStatus 设备上报传感器数据（1000 并发优化版）
-//
-// 快速路径（~1ms）：
-//  1. Token 校验（Redis 查询，极快）
-//  2. 更新 Redis 设备状态缓存（立即生效）
-//  3. 将数据推入 Redis List 缓冲队列（1 次 LPush）
-//
-// 慢速路径（后台 worker 异步）：
-//   - 批量写入 InfluxDB
-//   - 批量更新 PostgreSQL 设备活跃时间（30s 防抖）
+// schedulePGUpdate 防抖批量更新 PostgreSQL 设备活跃时间
+// 替代原先每个请求 spawn 一个 goroutine 的做法
+// 高并发下多个请求的活跃时间更新被合并为一次批量执行
+func (s *DeviceReportService) schedulePGUpdate(deviceID string) {
+	now := time.Now()
+
+	s.pgUpdateMu.Lock()
+	s.pgUpdatePending[deviceID] = now
+
+	if s.pgUpdateTimer == nil {
+		s.pgUpdateTimer = time.AfterFunc(pgDebounceInterval, func() {
+			s.flushPGUpdates()
+		})
+	}
+	s.pgUpdateMu.Unlock()
+}
+
+// flushPGUpdates 批量执行 PostgreSQL 活跃时间更新
+func (s *DeviceReportService) flushPGUpdates() {
+	s.pgUpdateMu.Lock()
+	pending := s.pgUpdatePending
+	s.pgUpdatePending = make(map[string]time.Time)
+	s.pgUpdateTimer = nil
+	s.pgUpdateMu.Unlock()
+
+	ctx := context.Background()
+	for deviceID := range pending {
+		if err := s.deviceRepo.UpdateLastActive(ctx, deviceID, "ONLINE"); err != nil {
+			zap.S().Warnf("[DeviceReport] 批量更新活跃时间失败 [device=%s]: %v", deviceID, err)
+		}
+	}
+}
+
+// ReportStatus 设备上报传感器数据（带 Token 校验，供非 HTTP 入口调用）
 func (s *DeviceReportService) ReportStatus(ctx context.Context, deviceID, token string, dto entity.DeviceStatusDTO) error {
 	deviceID = util.NormalizeDeviceID(deviceID)
 
-	// 1. Token 校验（Redis-backed Sa-Token，极快）
-	deviceMgr := middleware.GetDeviceManager()
-	tokenDeviceID, err := deviceMgr.GetLoginID(token)
-	if err != nil {
-		return ErrInvalidDeviceToken
-	}
-	if tokenDeviceID != deviceID {
-		return ErrDeviceTokenMismatch
-	}
-
-	// 2. 获取设备信息（优先 Redis 缓存）
-	device, err := s.deviceSvc.GetByDeviceID(ctx, deviceID)
-	if err != nil {
-		return err
+	// Token 校验（仅非 HTTP 入口需要，HTTP 入口由中间件完成）
+	if token != "" {
+		deviceMgr := middleware.GetDeviceManager()
+		tokenDeviceID, err := deviceMgr.GetLoginID(token)
+		if err != nil {
+			return ErrInvalidDeviceToken
+		}
+		if tokenDeviceID != deviceID {
+			return ErrDeviceTokenMismatch
+		}
 	}
 
+	return s.reportStatusFast(ctx, deviceID, dto)
+}
+
+// ReportStatusFast 设备上报传感器数据（跳过 Token 校验，HTTP 中间件已验证）
+// 优化后的快速路径（目标 <5ms）：
+//  1. L1 本地缓存检查设备存在性（0 次 Redis 读）
+//  2. Pipeline 合并：更新设备状态 Hash + 缓存传感器数据 + 推入缓冲队列（1 次 Redis 往返）
+//
+// 慢速路径（后台 worker 异步）：
+//   - 批量写入 InfluxDB
+//   - 批量更新 PostgreSQL 设备活跃时间
+func (s *DeviceReportService) ReportStatusFast(ctx context.Context, deviceID string, dto entity.DeviceStatusDTO) error {
+	return s.reportStatusFast(ctx, util.NormalizeDeviceID(deviceID), dto)
+}
+
+// reportStatusFast 核心快速路径实现
+func (s *DeviceReportService) reportStatusFast(ctx context.Context, deviceID string, dto entity.DeviceStatusDTO) error {
 	now := time.Now()
 	nowMs := now.UnixMilli()
 
-	// 3. 更新 Device 缓存中的运行时状态（Status + LastActiveTime），不再另存 DeviceStatus
-	device.Status = "ONLINE"
-	device.LastActiveTime = now
-	err = s.cache.CacheDevice(ctx, deviceID, device)
-	if err != nil {
-		return err
-	}
-
-	// 同时缓存最新传感器数据（用于快速查询）
-	err = s.cache.CacheSensorRecent(ctx, deviceID, dto.Sensors)
-	if err != nil {
-		return err
-	}
-
-	// 4. 异步更新 PostgreSQL 状态 + 活跃时间
-	go func() {
-		bgCtx := context.Background()
-		if err := s.deviceRepo.UpdateLastActive(bgCtx, deviceID, "ONLINE"); err != nil {
-			zap.S().Warnf("[DeviceReport] 更新活跃时间失败 [device=%s]: %v", deviceID, err)
+	// 1. L1 本地缓存：快速确认设备存在（避免 Redis GET + JSON Unmarshal）
+	localKey := "dev:" + deviceID
+	if _, ok := s.localCache.Get(localKey); !ok {
+		// 首次或缓存过期：从 Redis 读取设备信息（仅一次）
+		device, err := s.deviceSvc.GetByDeviceID(ctx, deviceID)
+		if err != nil {
+			return err
 		}
-	}()
+		// 缓存到 L1（仅存轻量标记）
+		s.localCache.Set(localKey, device.Status)
+	}
 
-	// 5. 推入 Redis 缓冲队列 → 后台 worker 批量写 InfluxDB
+	// 2. 准备缓冲数据（提前序列化，避免在 Pipeline 中序列化）
+	sensorDTOs := make([]SensorDataDTO, len(dto.Sensors))
+	for i, sensor := range dto.Sensors {
+		sensorDTOs[i] = SensorDataDTO{
+			Name:      sensor.Name,
+			Type:      sensor.Type,
+			Value:     sensor.Value,
+			Timestamp: sensor.Timestamp.UnixMilli(),
+		}
+	}
+
+	// 序列化缓冲报告
+	bufferData, _ := json.Marshal(BufferedReport{
+		DeviceID:  deviceID,
+		Sensors:   sensorDTOs,
+		Timestamp: nowMs,
+	})
+
+	// 3. 一次 Pipeline 完成所有 Redis 写操作（1 次往返！）
 	if s.buffer != nil {
-		sensorDTOs := make([]SensorDataDTO, len(dto.Sensors))
-		for i, sensor := range dto.Sensors {
-			sensorDTOs[i] = SensorDataDTO{
-				Name:      sensor.Name,
-				Type:      sensor.Type,
-				Value:     sensor.Value,
-				Timestamp: sensor.Timestamp.UnixMilli(),
-			}
-		}
-		report := BufferedReport{
-			DeviceID:  deviceID,
-			Token:     token,
-			Sensors:   sensorDTOs,
-			Timestamp: nowMs,
-		}
-		if err := s.buffer.Enqueue(ctx, report); err != nil {
-			zap.S().Warnf("[DeviceReport] 入队失败 [device=%s]: %v", deviceID, err)
-			// 降级：同步写入 InfluxDB
+		if err := s.cache.FastReportWrite(ctx, deviceID, "ONLINE", nowMs, dto.Sensors, bufferData); err != nil {
+			zap.S().Warnf("[DeviceReport] 快速写入失败 [device=%s]: %v", deviceID, err)
+			// 降级：逐条写入
+			s.cache.CacheDeviceStatus(ctx, deviceID, "ONLINE", nowMs)
+			s.cache.CacheSensorRecent(ctx, deviceID, dto.Sensors)
 			s.writeSensorsSync(deviceID, dto)
 		}
 	} else {
-		// 无缓冲器：同步写入（兼容旧逻辑）
+		// 无缓冲器：Pipeline 仅更新状态 + 传感器
+		s.cache.CacheDeviceStatus(ctx, deviceID, "ONLINE", nowMs)
+		s.cache.CacheSensorRecent(ctx, deviceID, dto.Sensors)
 		s.writeSensorsSync(deviceID, dto)
 	}
 
-	zap.S().Infof("[DeviceReport] 设备 %s 上报 %d 条传感器数据", deviceID, len(dto.Sensors))
+	// 失效查询缓存（新数据入库，旧查询结果过期）
+	// 异步执行，不阻塞响应
+	go func() {
+		_ = s.cache.EvictSensorQueryCache(context.Background(), deviceID)
+	}()
+
+	// 4. 防抖批量更新 PostgreSQL（合并 5s 窗口内的所有更新为一次）
+	s.schedulePGUpdate(deviceID)
+
+	zap.S().Debugf("[DeviceReport] 设备 %s 上报 %d 条传感器数据", deviceID, len(dto.Sensors))
 	return nil
 }
 
@@ -189,38 +247,49 @@ func (s *DeviceReportService) FlushReports(_ context.Context, reports []Buffered
 func (s *DeviceReportService) Heartbeat(ctx context.Context, deviceID, token string) error {
 	deviceID = util.NormalizeDeviceID(deviceID)
 
-	// Token 校验（Redis-backed，极快）
-	deviceMgr := middleware.GetDeviceManager()
-	tokenDeviceID, err := deviceMgr.GetLoginID(token)
-	if err != nil {
-		return ErrInvalidDeviceToken
-	}
-	if tokenDeviceID != deviceID {
-		return ErrDeviceTokenMismatch
+	// Token 校验（仅非 HTTP 入口需要）
+	if token != "" {
+		deviceMgr := middleware.GetDeviceManager()
+		tokenDeviceID, err := deviceMgr.GetLoginID(token)
+		if err != nil {
+			return ErrInvalidDeviceToken
+		}
+		if tokenDeviceID != deviceID {
+			return ErrDeviceTokenMismatch
+		}
 	}
 
-	now := time.Now()
+	return s.heartbeatFast(ctx, deviceID)
+}
 
-	// 更新 Device 缓存中的运行时状态
-	device, err := s.deviceSvc.GetByDeviceID(ctx, deviceID)
-	if err == nil {
-		device.Status = "ONLINE"
-		device.LastActiveTime = now
-		err := s.cache.CacheDevice(ctx, deviceID, device)
+// HeartbeatFast 设备心跳（跳过 Token 校验，HTTP 中间件已验证）
+func (s *DeviceReportService) HeartbeatFast(ctx context.Context, deviceID string) error {
+	return s.heartbeatFast(ctx, util.NormalizeDeviceID(deviceID))
+}
+
+// heartbeatFast 核心心跳逻辑
+func (s *DeviceReportService) heartbeatFast(ctx context.Context, deviceID string) error {
+	nowMs := time.Now().UnixMilli()
+
+	// L1 本地缓存检查设备存在
+	localKey := "dev:" + deviceID
+	if _, ok := s.localCache.Get(localKey); !ok {
+		_, err := s.deviceSvc.GetByDeviceID(ctx, deviceID)
 		if err != nil {
 			return err
 		}
+		s.localCache.Set(localKey, "ONLINE")
 	}
 
-	// 异步更新 PostgreSQL 状态 + 活跃时间
-	go func() {
-		bgCtx := context.Background()
-		if err := s.deviceRepo.UpdateLastActive(bgCtx, deviceID, "ONLINE"); err != nil {
-			zap.S().Warnf("[DeviceReport] 心跳更新活跃时间失败 [device=%s]: %v", deviceID, err)
-		}
-	}()
+	// 仅更新设备状态 Hash（轻量级，无需完整 Device JSON）
+	if err := s.cache.CacheDeviceStatus(ctx, deviceID, "ONLINE", nowMs); err != nil {
+		return err
+	}
 
-	zap.S().Infof("[DeviceReport] 设备 %s 心跳", deviceID)
+	// 防抖批量更新 PostgreSQL
+	s.schedulePGUpdate(deviceID)
+
+	zap.S().Debugf("[DeviceReport] 设备 %s 心跳", deviceID)
 	return nil
 }
 
@@ -231,6 +300,15 @@ func (s *DeviceReportService) GetDeviceStatus(ctx context.Context, deviceID stri
 	device, err := s.deviceSvc.GetByDeviceID(ctx, deviceID)
 	if err != nil {
 		return nil, err
+	}
+
+	// 优先从 Hash 读取最新状态（避免完整 JSON 反序列化）
+	status, lastActiveMs, err := s.cache.GetCachedDeviceStatus(ctx, deviceID)
+	if err == nil && status != "" {
+		device.Status = status
+		if lastActiveMs > 0 {
+			device.LastActiveTime = time.UnixMilli(lastActiveMs)
+		}
 	}
 
 	// 从传感器缓存获取最新数据（SensorData.UnmarshalJSON 自动修正零值时间戳）

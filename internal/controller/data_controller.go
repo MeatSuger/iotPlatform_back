@@ -35,12 +35,12 @@ func NewDataController(deviceReportSvc *service.DeviceReportService, influxSvc *
 // @Security     DeviceAuth
 // @Router       /api/data/{deviceId}/Data [post]
 // ReportData 上报传感器数据 (POST /data/:deviceId/Data)
+// 优化：中间件已完成 Token 校验，此处直接使用已验证的 deviceID，跳过重复校验
 func (ctl *DataController) ReportData(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 
-	// 从中间件上下文中获取已验证的设备Token
-	rawToken, _ := c.Get("deviceToken")
-	tokenStr, _ := rawToken.(string)
+	// 中间件已验证 Token 并将 deviceId 注入上下文，直接信任
+	// 避免再次调用 deviceMgr.GetLoginID() 产生冗余 Redis 往返
 
 	var dto entity.DeviceStatusDTO
 	if err := c.ShouldBindJSON(&dto); err != nil {
@@ -53,7 +53,8 @@ func (ctl *DataController) ReportData(c *gin.Context) {
 		return
 	}
 
-	if err := ctl.deviceReportSvc.ReportStatus(c.Request.Context(), deviceID, tokenStr, dto); err != nil {
+	// 快速路径：跳过 Token 二次校验（中间件已校验）
+	if err := ctl.deviceReportSvc.ReportStatusFast(c.Request.Context(), deviceID, dto); err != nil {
 		common.FailWithMsg(c, common.CodeBadRequest, err.Error())
 		return
 	}
@@ -72,12 +73,12 @@ func (ctl *DataController) ReportData(c *gin.Context) {
 // @Router       /api/data/{deviceId}/ping [post]
 // @Router       /api/data/{deviceId}/heartbeat [post]
 // Heartbeat 设备心跳 (POST /data/:deviceId/ping 或 /data/:deviceId/heartbeat)
+// 优化：中间件已完成 Token 校验，跳过重复校验
 func (ctl *DataController) Heartbeat(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
-	rawToken, _ := c.Get("deviceToken")
-	tokenStr, _ := rawToken.(string)
 
-	if err := ctl.deviceReportSvc.Heartbeat(c.Request.Context(), deviceID, tokenStr); err != nil {
+	// 快速路径：跳过 Token 二次校验（中间件已校验）
+	if err := ctl.deviceReportSvc.HeartbeatFast(c.Request.Context(), deviceID); err != nil {
 		common.FailWithMsg(c, common.CodeBadRequest, err.Error())
 		return
 	}

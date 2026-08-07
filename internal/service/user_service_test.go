@@ -89,7 +89,8 @@ func TestLoginResponse_Fields(t *testing.T) {
 }
 
 func TestNewUserService(t *testing.T) {
-	svc := NewUserService(nil)
+	svc := NewUserService(nil, nil)
 	assert.NotNil(t, svc)
 	assert.Nil(t, svc.repo)
+	assert.Nil(t, svc.cache)
 }

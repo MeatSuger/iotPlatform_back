@@ -25,6 +25,7 @@ type ServerConfig struct {
 	UDPPort        int    `mapstructure:"udp-port"` // UDP 设备上报端口，0=禁用
 	ContextPath    string `mapstructure:"context-path"`
 	Mode           string `mapstructure:"mode"`            // debug, release, test
+	LogLevel       string `mapstructure:"log-level"`       // 日志级别: debug, info, warn, error（默认: debug模式下debug，其他info）
 	SwaggerEnabled bool   `mapstructure:"swagger-enabled"` // 是否启用 Swagger 文档（生产环境关闭，默认 true）
 }
 

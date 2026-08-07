@@ -19,6 +19,7 @@ import (
 type AppComponents struct {
 	Services  *router.Services
 	WsHandler *websocket.WsHandler
+	Cache     *cache.RedisCache
 }
 
 // InitializeApp Wire 依赖注入入口

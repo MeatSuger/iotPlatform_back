@@ -37,6 +37,7 @@ type DeviceRegisterResponse struct {
 	DeviceToken string `json:"deviceToken"`
 }
 
+// Register 注册设备（Write-Through：写DB后同步预热缓存）
 func (s *DeviceService) Register(ctx context.Context, ownerID uint, req DeviceRegisterRequest) (*DeviceRegisterResponse, error) {
 	var deviceID string
 	now := time.Now()
@@ -79,42 +80,50 @@ func (s *DeviceService) Register(ctx context.Context, ownerID uint, req DeviceRe
 		return nil, fmt.Errorf("生成设备Token失败: %w", err)
 	}
 
-	// 缓存
+	// Write-Through：预热缓存
 	dev, _ := s.repo.GetByDeviceID(ctx, deviceID)
 	if dev != nil {
-		err := s.cache.CacheDevice(ctx, deviceID, dev)
-		if err != nil {
-			return nil, err
-		}
+		_ = s.cache.CacheDevice(ctx, deviceID, dev)
 	}
+	// 失效用户设备列表缓存（新设备加入）
+	_ = s.cache.EvictDeviceListCache(ctx, ownerID)
 
 	return &DeviceRegisterResponse{DeviceID: deviceID, DeviceToken: token}, nil
 }
 
+// GetByDeviceID 获取设备（Cache-Aside：L1本地 → L2 Redis → PostgreSQL回源）
+// 参考：seaguest/cache 的 loader 模式 + go-redis/cache 的 Cache-Aside 模式
 func (s *DeviceService) GetByDeviceID(ctx context.Context, deviceID string) (*ent.Device, error) {
 	deviceID = util.NormalizeDeviceID(deviceID)
 
 	var device ent.Device
-	if err := s.cache.GetCachedDevice(ctx, deviceID, &device); err == nil {
-		return &device, nil
-	}
-
-	d, err := s.repo.GetByDeviceID(ctx, deviceID)
+	err := s.cache.GetCachedDeviceWithLoader(ctx, deviceID, &device, func(ctx context.Context) (any, error) {
+		// L1/L2 均 miss，从 PostgreSQL 回源（带 singleflight 防击穿）
+		d, err := s.repo.GetByDeviceID(ctx, deviceID)
+		if err != nil {
+			return nil, err
+		}
+		return d, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	err = s.cache.CacheDevice(ctx, deviceID, d)
-	if err != nil {
-		return nil, err
-	}
-	return d, nil
+	return &device, nil
 }
 
+// ListByOwnerID 获取用户设备列表（Cache-Aside，2分钟缓存）
 func (s *DeviceService) ListByOwnerID(ctx context.Context, ownerID uint) ([]*ent.Device, error) {
-	return s.repo.ListByOwnerID(ctx, ownerID)
+	var devices []*ent.Device
+	err := s.cache.GetCachedDeviceList(ctx, ownerID, &devices, func(ctx context.Context) (any, error) {
+		return s.repo.ListByOwnerID(ctx, ownerID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return devices, nil
 }
 
+// Delete 删除设备（Write-Invalidate：删DB后同步失效所有相关缓存）
 func (s *DeviceService) Delete(ctx context.Context, deviceID string) error {
 	deviceID = util.NormalizeDeviceID(deviceID)
 	device, err := s.repo.GetByDeviceID(ctx, deviceID)
@@ -125,17 +134,15 @@ func (s *DeviceService) Delete(ctx context.Context, deviceID string) error {
 		return err
 	}
 
-	go func() {
-		bgCtx := context.Background()
-		err := s.cache.EvictDeviceCache(bgCtx, deviceID)
-		if err != nil {
-			return
-		}
-		err = s.cache.EvictSensorRecentCache(bgCtx, deviceID)
-		if err != nil {
-			return
-		}
-	}()
+	// 同步失效所有相关缓存（不阻塞响应，异步发布 Pub-Sub 通知其他实例）
+	_ = s.cache.EvictDeviceCache(ctx, deviceID)
+	_ = s.cache.EvictSensorRecentCache(ctx, deviceID)
+	_ = s.cache.EvictDeviceStatusCache(ctx, deviceID)
+	// 失效该用户设备列表缓存
+	for _, ownerID := range []uint{device.OwnerID} {
+		_ = s.cache.EvictDeviceListCache(ctx, ownerID)
+	}
+
 	return nil
 }
 

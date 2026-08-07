@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	sagin "github.com/sa-tokens/sa-token-go/integrations/gin"
@@ -20,6 +22,56 @@ func SetDeviceManager(mgr *sagin.Manager) {
 // GetDeviceManager 获取设备 Token Manager
 func GetDeviceManager() *sagin.Manager {
 	return deviceMgr
+}
+
+// deviceAuthCache 本地内存缓存：Token → deviceID 映射
+// 消除高频上报时对 Sa-Token Redis 存储的重复查询
+var (
+	deviceAuthCacheMu sync.RWMutex
+	deviceAuthCache   = make(map[string]cachedAuth) // token → {deviceID, expiresAt}
+)
+
+type cachedAuth struct {
+	deviceID  string
+	expiresAt time.Time
+}
+
+const deviceAuthCacheTTL = 5 * time.Second
+
+// getCachedDeviceID 从本地缓存获取已校验的 Token 对应的 deviceID
+func getCachedDeviceID(token string) (string, bool) {
+	deviceAuthCacheMu.RLock()
+	e, ok := deviceAuthCache[token]
+	deviceAuthCacheMu.RUnlock()
+	if ok && time.Now().Before(e.expiresAt) {
+		return e.deviceID, true
+	}
+	return "", false
+}
+
+// setCachedDeviceID 缓存 Token → deviceID 到本地
+func setCachedDeviceID(token, deviceID string) {
+	deviceAuthCacheMu.Lock()
+	deviceAuthCache[token] = cachedAuth{deviceID: deviceID, expiresAt: time.Now().Add(deviceAuthCacheTTL)}
+	deviceAuthCacheMu.Unlock()
+}
+
+// cleanupAuthCache 定期清理过期条目
+func init() {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			deviceAuthCacheMu.Lock()
+			now := time.Now()
+			for k, v := range deviceAuthCache {
+				if now.After(v.expiresAt) {
+					delete(deviceAuthCache, k)
+				}
+			}
+			deviceAuthCacheMu.Unlock()
+		}
+	}()
 }
 
 // ========================================
@@ -75,8 +127,8 @@ func AuthMiddleware() gin.HandlerFunc {
 	}
 }
 
-// DeviceAuthMiddleware 设备 Sa-Token 认证中间件（用于用户获取设备Token）
-// 保留用于 /device/:deviceId/login, /device/:deviceId/token 等需要 Token 的接口
+// DeviceAuthMiddleware 设备 Sa-Token 认证中间件（用于数据上报/心跳/命令拉取）
+// 优化：使用本地内存缓存 Token → deviceID 映射（5s TTL），避免每次 Redis 查询
 func DeviceAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := extractDeviceToken(c)
@@ -86,11 +138,18 @@ func DeviceAuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		loginID, err := deviceMgr.GetLoginID(token)
-		if err != nil {
-			common.FailWithMsg(c, common.CodeUnauthorized, "设备Token无效")
-			c.Abort()
-			return
+		// L1 本地缓存：Token → deviceID（5s TTL，覆盖高频上报场景）
+		loginID, hit := getCachedDeviceID(token)
+		if !hit {
+			// 缓存未命中，走 Sa-Token Redis 查询
+			var err error
+			loginID, err = deviceMgr.GetLoginID(token)
+			if err != nil {
+				common.FailWithMsg(c, common.CodeUnauthorized, "设备Token无效")
+				c.Abort()
+				return
+			}
+			setCachedDeviceID(token, loginID)
 		}
 
 		c.Set("deviceId", loginID)

@@ -10,16 +10,18 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/repository"
+	"iot-platform.local/pkg/cache"
 	"iot-platform.local/pkg/common"
 )
 
 // UserService 用户服务
 type UserService struct {
-	repo *repository.UserRepo
+	repo  *repository.UserRepo
+	cache *cache.RedisCache
 }
 
-func NewUserService(repo *repository.UserRepo) *UserService {
-	return &UserService{repo: repo}
+func NewUserService(repo *repository.UserRepo, redisCache *cache.RedisCache) *UserService {
+	return &UserService{repo: repo, cache: redisCache}
 }
 
 // RegisterRequest 注册请求
@@ -146,17 +148,36 @@ func (s *UserService) Login(ctx context.Context, req LoginRequest) (*LoginRespon
 	}, nil
 }
 
+// GetByID 获取用户（Cache-Aside：L1本地 → L2 Redis → PostgreSQL回源）
 func (s *UserService) GetByID(ctx context.Context, id uint) (*ent.User, error) {
-	return s.repo.GetByID(ctx, id)
+	var user ent.User
+	err := s.cache.GetCachedUser(ctx, fmt.Sprintf("%d", id), &user, func(ctx context.Context) (any, error) {
+		return s.repo.GetByID(ctx, id)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
 }
 
+// Update 更新用户（Write-Invalidate：更新DB后失效缓存）
 func (s *UserService) Update(ctx context.Context, user *ent.User) error {
-	return s.repo.Update(ctx, user)
+	if err := s.repo.Update(ctx, user); err != nil {
+		return err
+	}
+	// 失效缓存，下次读取自动回填
+	_ = s.cache.EvictUserCache(ctx, fmt.Sprintf("%d", user.ID))
+	return nil
 }
 
+// Delete 删除用户（Write-Invalidate：删DB后失效缓存）
 func (s *UserService) Delete(ctx context.Context, id uint) error {
 	_ = stputil.Kickout(id)
-	return s.repo.Delete(ctx, id)
+	if err := s.repo.Delete(ctx, id); err != nil {
+		return err
+	}
+	_ = s.cache.EvictUserCache(ctx, fmt.Sprintf("%d", id))
+	return nil
 }
 
 func (s *UserService) List(ctx context.Context) ([]*ent.User, error) {

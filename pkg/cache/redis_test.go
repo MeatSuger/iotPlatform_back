@@ -7,9 +7,9 @@ import (
 )
 
 func TestRedisCacheConstants(t *testing.T) {
-	assert.Equal(t, "device:", PrefixDevice)
-	assert.Equal(t, "sensorRecent:", PrefixSensorRecent)
-	assert.Equal(t, "mqtt:messages:", PrefixMQTTMessage)
+	assert.Equal(t, "cache:device:", PrefixDevice)
+	assert.Equal(t, "cache:sensorRecent:", PrefixSensorRecent)
+	assert.Equal(t, "cache:mqttMsg:", PrefixMQTTMessage)
 }
 
 func TestTTLConstants(t *testing.T) {
@@ -29,8 +29,8 @@ func TestRedisCache_GetClient(t *testing.T) {
 
 // Test key generation patterns
 func TestCacheKeyPatterns(t *testing.T) {
-	assert.Equal(t, "device:abc123", PrefixDevice+"abc123")
-	assert.Equal(t, "mqtt:messages:abc123", PrefixMQTTMessage+"abc123")
+	assert.Equal(t, "cache:device:abc123", PrefixDevice+"abc123")
+	assert.Equal(t, "cache:mqttMsg:abc123", PrefixMQTTMessage+"abc123")
 }
 
 // Test context-based operations - basic API coverage

@@ -6,9 +6,9 @@ import {check, sleep} from 'k6';
 // 用法: k6 run k6-test.js
 // ============================================
 
-const BASE = __ENV.BASE_URL || 'https://api.meatsuger.top/api';
+// const BASE = __ENV.BASE_URL || 'https://api.meatsuger.top/api';
 // const BASE = __ENV.BASE_URL || 'http://47.99.74.160:9091/api';
-// const BASE = __ENV.BASE_URL || 'http://localhost:8182/api';
+const BASE = __ENV.BASE_URL || 'http://localhost:8182/api';
 const VUS = __ENV.VUS || 10;
 
 export const options = {

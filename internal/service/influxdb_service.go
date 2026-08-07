@@ -11,6 +11,8 @@ import (
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api"
 	"github.com/influxdata/influxdb-client-go/v2/api/write"
+
+	"iot-platform.local/pkg/cache"
 )
 
 // InfluxDBService InfluxDB时序数据服务
@@ -23,6 +25,9 @@ type InfluxDBService struct {
 	writeAPI     api.WriteAPI
 	writeAPILock sync.Mutex
 	writeAPIOnce sync.Once
+
+	// Redis 缓存（查询结果缓存，减少 InfluxDB 压力）
+	cache *cache.RedisCache
 }
 
 // NewInfluxDBService 创建InfluxDB服务
@@ -33,6 +38,11 @@ func NewInfluxDBService(url, token, org, bucket string) *InfluxDBService {
 		org:    org,
 		bucket: bucket,
 	}
+}
+
+// SetCache 注入 Redis 缓存（由 Wire 初始化后调用）
+func (s *InfluxDBService) SetCache(c *cache.RedisCache) {
+	s.cache = c
 }
 
 // Close 关闭InfluxDB连接
@@ -87,14 +97,52 @@ func (s *InfluxDBService) WriteDeviceSensorsAsync(deviceID string, sensors []Sen
 	}()
 }
 
-// QueryRecentDeviceSensors 查询设备最近的传感器数据（默认近 7 天）
+// QueryRecentDeviceSensors 查询设备最近的传感器数据（Redis缓存 → InfluxDB回源）
+//
+// 两层缓存策略：
+//  1. limit ≤ 10：直接从 Redis 传感器最新缓存返回（0次 InfluxDB 查询）
+//  2. limit > 10：先查 Redis 查询缓存（30s TTL），miss 则查 InfluxDB 并回填
 func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID string, limit int) ([]map[string]any, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 
+	// 小 limit：直接从传感器最新缓存返回（上报时已写入，0 次 InfluxDB）
+	if limit <= 10 && s.cache != nil {
+		var sensors []map[string]any
+		if err := s.cache.GetCachedSensorRecent(ctx, deviceID, &sensors); err == nil && len(sensors) > 0 {
+			if len(sensors) > limit {
+				sensors = sensors[:limit]
+			}
+			return sensors, nil
+		}
+	}
+
+	// 大 limit：先查 Redis 查询缓存（Cache-Aside）
+	if s.cache != nil {
+		var cached []map[string]any
+		if err := s.cache.GetCachedSensorQuery(ctx, deviceID, limit, &cached); err == nil && len(cached) > 0 {
+			return cached, nil
+		}
+	}
+
+	// 缓存 miss → 查 InfluxDB
+	records, err := s.queryInfluxDB(ctx, deviceID, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// 回填 Redis 查询缓存
+	if s.cache != nil && len(records) > 0 {
+		_ = s.cache.CacheSensorQuery(ctx, deviceID, limit, records)
+	}
+
+	return records, nil
+}
+
+// queryInfluxDB 直接查询 InfluxDB（原始查询逻辑）
+func (s *InfluxDBService) queryInfluxDB(ctx context.Context, deviceID string, limit int) ([]map[string]any, error) {
 	queryAPI := s.client.QueryAPI(s.org)
-	// 不使用 pivot，直接从 _field=value 的行中读取 _value 和标签
 	flux := fmt.Sprintf(`
 		from(bucket: "%s")
 			|> range(start: -7d)
@@ -113,7 +161,6 @@ func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID
 	var records []map[string]any
 	for result.Next() {
 		record := result.Record()
-		// 字段名对齐 API 文档：name, type, value, timestamp
 		row := map[string]any{
 			"name":      record.ValueByKey("sensorName"),
 			"type":      record.ValueByKey("type"),

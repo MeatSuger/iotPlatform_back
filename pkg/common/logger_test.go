@@ -10,7 +10,7 @@ import (
 func TestInitLogger_Debug(t *testing.T) {
 	// 不应 panic
 	assert.NotPanics(t, func() {
-		InitLogger("debug")
+		InitLogger("debug", "")
 	})
 
 	logger := zap.L()
@@ -19,7 +19,7 @@ func TestInitLogger_Debug(t *testing.T) {
 
 func TestInitLogger_Release(t *testing.T) {
 	assert.NotPanics(t, func() {
-		InitLogger("release")
+		InitLogger("release", "")
 	})
 
 	logger := zap.L()
@@ -27,7 +27,7 @@ func TestInitLogger_Release(t *testing.T) {
 }
 
 func TestSync(t *testing.T) {
-	InitLogger("debug")
+	InitLogger("debug", "")
 	// Sync should not panic even if nothing to flush
 	assert.NotPanics(t, func() {
 		Sync()

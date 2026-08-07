@@ -77,6 +77,18 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 
 	// API路由组（TokenInterceptor 自动从 Header/Cookie/Query 提取 token 到 context）
 	api := r.Group("/api")
+
+	// 设备数据上报/心跳路由组：不需要 TokenInterceptor（使用独立的 DeviceAuth 中间件）
+	// 提前注册以跳过不必要的中间件
+	dataGroup := api.Group("/data")
+	dataGroup.Use(deviceAuth)
+	{
+		dataGroup.POST("/:deviceId/Data", dataCtl.ReportData)
+		dataGroup.POST("/:deviceId/ping", dataCtl.Heartbeat)
+		dataGroup.POST("/:deviceId/heartbeat", dataCtl.Heartbeat)
+	}
+
+	// 其余 API 使用 TokenInterceptor
 	api.Use(userPlugin.TokenInterceptor())
 	{
 		// ===== Swagger 文档（生产环境通过 server.swagger-enabled=false 关闭） =====
@@ -138,16 +150,11 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 			deviceGroup.GET("/:deviceId/cmd", deviceAuth, downlinkCtl.GetCmd) // 设备拉取（UUID设备Token认证）
 		}
 
-		// ===== 数据相关路由（设备Token认证） =====
-		dataGroup := api.Group("/data")
+		// ===== 数据查询路由（用户认证） =====
+		dataQueryGroup := api.Group("/data")
 		{
-			// 需要设备Token认证
-			dataGroup.POST("/:deviceId/Data", deviceAuth, dataCtl.ReportData)
-			dataGroup.POST("/:deviceId/ping", deviceAuth, dataCtl.Heartbeat)
-			dataGroup.POST("/:deviceId/heartbeat", deviceAuth, dataCtl.Heartbeat)
-			// 查询数据（公开）
-			dataGroup.GET("/:deviceId/Data/list", userAuth, dataCtl.QueryData)
-			dataGroup.GET("/list", userAuth, dataCtl.ListData)
+			dataQueryGroup.GET("/:deviceId/Data/list", userAuth, dataCtl.QueryData)
+			dataQueryGroup.GET("/list", userAuth, dataCtl.ListData)
 		}
 	}
 
