@@ -188,13 +188,13 @@ func (s *DeviceReportService) reportStatusFast(ctx context.Context, deviceID str
 
 // writeSensorsSync 同步写入传感器数据到 InfluxDB（降级路径）
 func (s *DeviceReportService) writeSensorsSync(deviceID string, dto entity.DeviceStatusDTO) {
-	sensorPoints := make([]SensorPoint, len(dto.Sensors))
+	data := make([]SensorData, len(dto.Sensors))
 	for i, sensor := range dto.Sensors {
 		ts := sensor.Timestamp
 		if ts.IsZero() {
 			ts = time.Now()
 		}
-		sensorPoints[i] = SensorPoint{
+		data[i] = SensorData{
 			DeviceID:   deviceID,
 			SensorName: sensor.Name,
 			Type:       sensor.Type,
@@ -202,8 +202,7 @@ func (s *DeviceReportService) writeSensorsSync(deviceID string, dto entity.Devic
 			Timestamp:  ts,
 		}
 	}
-	// 使用异步批量写入替代逐条同步写入
-	s.influxSvc.WriteDeviceSensorsBatch(deviceID, sensorPoints)
+	s.influxSvc.WriteSensorsAsync(data)
 }
 
 // ============================================================
@@ -217,7 +216,7 @@ func (s *DeviceReportService) FlushReports(_ context.Context, reports []Buffered
 	}
 
 	// 收集所有传感器数据点
-	var allPoints []SensorPoint
+	var allData []SensorData
 	for _, report := range reports {
 		for _, sensor := range report.Sensors {
 			// 优先用传感器自身时间戳，再用 report 级别时间戳
@@ -229,7 +228,7 @@ func (s *DeviceReportService) FlushReports(_ context.Context, reports []Buffered
 			if t.IsZero() {
 				t = time.Now()
 			}
-			allPoints = append(allPoints, SensorPoint{
+			allData = append(allData, SensorData{
 				DeviceID:   report.DeviceID,
 				SensorName: sensor.Name,
 				Type:       sensor.Type,
@@ -239,8 +238,7 @@ func (s *DeviceReportService) FlushReports(_ context.Context, reports []Buffered
 		}
 	}
 
-	// 使用异步批量写入
-	s.influxSvc.WriteDeviceSensorsBatch("", allPoints)
+	s.influxSvc.WriteSensorsAsync(allData)
 	return nil
 }
 

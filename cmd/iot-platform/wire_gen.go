@@ -7,6 +7,8 @@
 package main
 
 import (
+	"time"
+
 	"github.com/redis/go-redis/v9"
 	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/repository"
@@ -57,7 +59,16 @@ type AppComponents struct {
 
 func provideInfluxDBService() *service.InfluxDBService {
 	cfg := config.Cfg
-	return service.NewInfluxDBService(cfg.InfluxDB.URL, cfg.InfluxDB.Token, cfg.InfluxDB.Database, cfg.InfluxDB.AuthScheme)
+	return service.NewInfluxDBService(service.InfluxDBConfig{
+		URL:                   cfg.InfluxDB.URL,
+		Token:                 cfg.InfluxDB.Token,
+		Database:              cfg.InfluxDB.Database,
+		AuthScheme:            cfg.InfluxDB.AuthScheme,
+		WriteTimeout:          10 * time.Second,
+		QueryTimeout:          2 * time.Minute,
+		IdleConnectionTimeout: 90 * time.Second,
+		MaxIdleConnections:    10,
+	})
 }
 
 func provideRouterServices(

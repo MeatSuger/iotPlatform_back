@@ -219,6 +219,18 @@ func main() {
 	}
 	cancel()
 
+	// 9.5 预热 InfluxDB gRPC Flight SQL 连接（gRPC HTTP/2 首次握手慢，避免首次查询 25s 延迟）
+	go func() {
+		warmCtx, warmCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer warmCancel()
+		_, err := influxSvc.QueryDeviceSensorsByTime(warmCtx, "", "", time.Now().Add(-1*time.Hour), time.Now())
+		if err != nil {
+			zap.L().Warn("[Main] InfluxDB 预热失败", zap.Error(err))
+		} else {
+			zap.L().Info("[Main] InfluxDB gRPC Flight SQL 预热完成")
+		}
+	}()
+
 	// 10. MQTT 桥接网关（设备真 MQTT/WSS 接入：框架 Sa-Token 鉴权 → 透明转发到外部Broker）
 	// 设备入口: /api/ws/mqtt/broker，鉴权在 MQTT 协议层完成（CONNECT username/password 或 ?X-Device-Token=）
 	var mqttGateway *controller.MqttGatewayController

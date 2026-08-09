@@ -2,6 +2,7 @@ package controller
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	entity "iot-platform.local/internal/model"
@@ -93,8 +94,10 @@ func (ctl *DataController) Heartbeat(c *gin.Context) {
 // @Tags         data
 // @Accept       JSON
 // @Produce      JSON
-// @Param        deviceId  path      string  true   "设备ID"
-// @Param        limit     query     int     false  "数量限制"
+// @Param        deviceId  path      string  false  "设备ID"
+// @Param        limit     query     int     false  "数量限制，默认50"
+// @Param        start     query     string  false  "起始时间（RFC3339），默认3天前"
+// @Param        end       query     string  false  "结束时间（RFC3339），默认当前时间"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
 // @Router       /api/data/{deviceId}/Data/list [get]
@@ -104,13 +107,34 @@ func (ctl *DataController) QueryData(c *gin.Context) {
 	limitStr := c.DefaultQuery("limit", "50")
 	limit, _ := strconv.Atoi(limitStr)
 
-	records, err := ctl.influxSvc.QueryRecentDeviceSensors(c.Request.Context(), deviceID, limit)
+	// 解析时间范围（默认最近 3 天）
+	start, end := parseTimeRange(c)
+
+	records, err := ctl.influxSvc.QueryRecentDeviceSensors(c.Request.Context(), deviceID, limit, start, end)
 	if err != nil {
 		common.FailWithMsg(c, common.CodeServerError, err.Error())
 		return
 	}
 
 	common.Success(c, records)
+}
+
+// parseTimeRange 解析 URL 查询参数 start/end，默认最近 3 天
+func parseTimeRange(c *gin.Context) (start, end time.Time) {
+	end = time.Now()
+	start = end.Add(-72 * time.Hour)
+
+	if s := c.Query("start"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			start = t
+		}
+	}
+	if s := c.Query("end"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			end = t
+		}
+	}
+	return
 }
 
 // ListData @Summary      通用数据查询入口
