@@ -111,8 +111,8 @@ type InfluxDBConfig struct {
 	Token       string `mapstructure:"token"`
 	Database    string `mapstructure:"database"`
 	AuthScheme  string `mapstructure:"auth-scheme"`  // Token(Cloud) | Bearer(Core/Edge自部署)，默认 Token
-	QueryURL    string `mapstructure:"query-url"`     // Flight SQL gRPC 端点（留空则复用 url，如 :8182）
-	HealthCheck bool   `mapstructure:"health-check"`  // 启动时是否健康检查（默认 true）
+	QueryURL    string `mapstructure:"query-url"`    // Flight SQL gRPC 端点（留空则复用 url，如 :8182）
+	HealthCheck bool   `mapstructure:"health-check"` // 启动时是否健康检查（默认 true）
 }
 
 // MQTTConfig MQTT Broker 连接地址（供网关透明转发）

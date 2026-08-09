@@ -12,6 +12,8 @@ services:
       start_period: 20s
     environment:
       - CONFIG_PATH=configs/config.prod.yaml
+    ports:
+      - "127.0.0.1:9091:9091"
     networks:
       - 1panel-network
     volumes:
