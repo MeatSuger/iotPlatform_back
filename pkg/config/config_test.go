@@ -41,8 +41,8 @@ func TestRedisConfig_PoolConfig_Defaults(t *testing.T) {
 	assert.Equal(t, 3, readTimeout)
 	assert.Equal(t, 3, writeTimeout)
 	assert.Equal(t, 4, poolTimeout)
-	// maxRetries defaults when 0: uses default 3 (since 0 is not < 0)
-	assert.Equal(t, 0, maxRetries)
+	// maxRetries defaults when 0: now uses default 3 (fixed: <= 0 check)
+	assert.Equal(t, 3, maxRetries)
 }
 
 func TestRedisConfig_PoolConfig_Custom(t *testing.T) {
@@ -108,8 +108,7 @@ redis:
 influxdb:
   url: http://localhost:8086
   token: my-token
-  org: my-org
-  bucket: my-bucket
+  database: my-database
 mqtt:
   broker-url: "tcp://localhost:1883"
   keep-alive: 60
@@ -130,8 +129,7 @@ cors:
 	assert.Equal(t, 6379, Cfg.Redis.Port)
 	assert.Equal(t, "http://localhost:8086", Cfg.InfluxDB.URL)
 	assert.Equal(t, "my-token", Cfg.InfluxDB.Token)
-	assert.Equal(t, "my-org", Cfg.InfluxDB.Org)
-	assert.Equal(t, "my-bucket", Cfg.InfluxDB.Bucket)
+	assert.Equal(t, "my-database", Cfg.InfluxDB.Database)
 
 	assert.Equal(t, "tcp://localhost:1883", Cfg.MQTT.BrokerURL)
 }

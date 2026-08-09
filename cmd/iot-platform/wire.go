@@ -53,7 +53,7 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 
 func provideInfluxDBService() *service.InfluxDBService {
 	cfg := config.Cfg
-	return service.NewInfluxDBService(cfg.InfluxDB.URL, cfg.InfluxDB.Token, cfg.InfluxDB.Org, cfg.InfluxDB.Bucket)
+	return service.NewInfluxDBService(cfg.InfluxDB.URL, cfg.InfluxDB.Token, cfg.InfluxDB.Database, cfg.InfluxDB.AuthScheme)
 }
 
 func provideRouterServices(

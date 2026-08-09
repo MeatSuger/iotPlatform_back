@@ -6,8 +6,8 @@ import { check, sleep } from 'k6';
 // 用法: k6 run k6-bench.js --vus 200
 // ============================================
 
-// const BASE = __ENV.BASE_URL || 'http://localhost:8182/api';
-const BASE = __ENV.BASE_URL || 'https://api.meatsuger.top/api';
+const BASE = __ENV.BASE_URL || 'http://localhost:8182/api';
+// const BASE = __ENV.BASE_URL || 'https://api.meatsuger.top/api';
 const DEVICE_ID = __ENV.DEVICE_ID || '369c04';
 const TOKEN = __ENV.DEVICE_TOKEN || '3d2175f9-99d7-47c0-a632-9e1ee0e98618';
 const USER_TOKEN = __ENV.USER_TOKEN || '2cbe6aa5-607f-4f79-91c9-7533b3132e30';

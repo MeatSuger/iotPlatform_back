@@ -33,10 +33,10 @@ redis:
   max-retries: 3
 
 influxdb:
-  url: "http://1Panel-influxdb-ks5i:8086"
-  token: "edBQ1U5Vw21Yycg8_BIV2kET6X4-HW071OrYa26HnRhmi1PTeKwXVZ9esF0VIdy1wKn36-yS0Bv4uje6RT2Yfw=="
-  org: "influxdb_yHi3BP"
-  bucket: "iot-sensor"
+  url: "http://influxdb3-core:8181"
+  token: "apiv3_1wM9E7Lp5PKlUHZIt4sFJgdH-hBQlLNhpMEfEjDg1CKIGe5S8fktY_q7ghBOhcitHlZo7AKqAcpm9YP0FzFtPw"
+  database: "iotData"
+  auth-scheme: "Bearer"  # v3 Core 自部署用 Bearer，Cloud 用 Token
 
 # MQTT Broker 连接地址（仅此一项，供网关透明转发到外部 MQTT Docker）
 mqtt:

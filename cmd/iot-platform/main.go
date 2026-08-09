@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -301,18 +302,58 @@ func initEntClient(cfg *config.Config) (*ent.Client, error) {
 func initRedis(cfg *config.Config) (*redis.Client, error) {
 	poolSize, minIdle, dialTimeout, readTimeout, writeTimeout, poolTimeout, maxRetries := cfg.Redis.PoolConfig()
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr:         cfg.Redis.Addr(),
-		Password:     cfg.Redis.Password,
-		DB:           cfg.Redis.DB,
-		PoolSize:     poolSize,
-		MinIdleConns: minIdle,
-		DialTimeout:  time.Duration(dialTimeout) * time.Second,
-		ReadTimeout:  time.Duration(readTimeout) * time.Second,
-		WriteTimeout: time.Duration(writeTimeout) * time.Second,
-		PoolTimeout:  time.Duration(poolTimeout) * time.Second,
-		MaxRetries:   maxRetries,
-	})
+	clientName := cfg.Redis.ClientName
+	if clientName == "" {
+		clientName = "iot-platform"
+	}
+
+	var rdb *redis.Client
+
+	switch cfg.Redis.Mode {
+	case "sentinel":
+		// Sentinel 高可用模式
+		masterName := cfg.Redis.MasterName
+		if masterName == "" {
+			masterName = "mymaster"
+		}
+		sentinelAddrs := strings.Split(cfg.Redis.SentinelAddrs, ",")
+		if len(sentinelAddrs) == 1 && sentinelAddrs[0] == "" {
+			// 未配置 sentinel-addrs 时回退到 host:port 作为唯一哨兵地址
+			sentinelAddrs = []string{cfg.Redis.Addr()}
+		}
+		rdb = redis.NewFailoverClient(&redis.FailoverOptions{
+			MasterName:    masterName,
+			SentinelAddrs: sentinelAddrs,
+			Password:      cfg.Redis.Password,
+			DB:            cfg.Redis.DB,
+			ClientName:    clientName,
+			PoolSize:      poolSize,
+			MinIdleConns:  minIdle,
+			DialTimeout:   time.Duration(dialTimeout) * time.Second,
+			ReadTimeout:   time.Duration(readTimeout) * time.Second,
+			WriteTimeout:  time.Duration(writeTimeout) * time.Second,
+			PoolTimeout:   time.Duration(poolTimeout) * time.Second,
+			MaxRetries:    maxRetries,
+		})
+	case "cluster":
+		// Cluster 集群模式暂不支持（需要将 *redis.Client 改为 redis.UniversalClient 接口）
+		return nil, fmt.Errorf("redis cluster 模式暂不支持，请使用 standalone 或 sentinel 模式")
+	default:
+		// standalone 单节点（默认）
+		rdb = redis.NewClient(&redis.Options{
+			Addr:         cfg.Redis.Addr(),
+			Password:     cfg.Redis.Password,
+			DB:           cfg.Redis.DB,
+			ClientName:   clientName,
+			PoolSize:     poolSize,
+			MinIdleConns: minIdle,
+			DialTimeout:  time.Duration(dialTimeout) * time.Second,
+			ReadTimeout:  time.Duration(readTimeout) * time.Second,
+			WriteTimeout: time.Duration(writeTimeout) * time.Second,
+			PoolTimeout:  time.Duration(poolTimeout) * time.Second,
+			MaxRetries:   maxRetries,
+		})
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

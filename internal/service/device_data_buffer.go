@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,9 +128,8 @@ func (b *DeviceDataBuffer) worker() {
 // drain 从 Redis 中批量取出数据并写入持久层
 func (b *DeviceDataBuffer) drain(ctx context.Context) {
 	for {
-		// 使用 RPOP 批量取出（右侧弹出，保持 FIFO）
 		count := b.batchSize
-		results, err := b.rdb.RPopCount(ctx, b.bufferKey, count).Result()
+		results, err := b.rpopCount(ctx, b.bufferKey, count)
 		if err != nil {
 			if !errors.Is(err, redis.Nil) {
 				zap.L().Warn("[DataBuffer] RPOP 失败", zap.Error(err))
@@ -168,13 +168,46 @@ func (b *DeviceDataBuffer) drain(ctx context.Context) {
 	}
 }
 
-// requeue 失败重试：推回队列头部
-func (b *DeviceDataBuffer) requeue(ctx context.Context, reports []BufferedReport) {
-	type item struct {
-		Data string
+// rpopCount 批量 RPOP，兼容 Redis < 6.2（RPopCount 不可用时循环 RPOP）
+func (b *DeviceDataBuffer) rpopCount(ctx context.Context, key string, count int) ([]string, error) {
+	results, err := b.rdb.RPopCount(ctx, key, count).Result()
+	if err != nil {
+		// 检测是否为 Redis < 6.2 不支持 RPopCount 命令
+		if strings.Contains(err.Error(), "unknown command") ||
+			strings.Contains(err.Error(), "ERR unknown") ||
+			strings.Contains(err.Error(), "syntax error") {
+			return b.rpopFallback(ctx, key, count)
+		}
+		return results, err
 	}
+	return results, nil
+}
+
+// rpopFallback Redis < 6.2 降级方案：循环 RPOP
+func (b *DeviceDataBuffer) rpopFallback(ctx context.Context, key string, count int) ([]string, error) {
+	var results []string
+	for i := 0; i < count; i++ {
+		val, err := b.rdb.RPop(ctx, key).Result()
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				break
+			}
+			return results, err
+		}
+		results = append(results, val)
+	}
+	if len(results) == 0 {
+		return nil, redis.Nil
+	}
+	return results, nil
+}
+
+// requeue 失败重试：推回队列左侧（头部，给其他消息机会，避免紧循环）
+func (b *DeviceDataBuffer) requeue(ctx context.Context, reports []BufferedReport) {
 	for i := len(reports) - 1; i >= 0; i-- {
 		data, _ := json.Marshal(reports[i])
-		b.rdb.RPush(ctx, b.bufferKey, data) // 推回右侧，下次 RPOP 先取
+		b.rdb.LPush(ctx, b.bufferKey, data) // 推回左侧头部，防止立即被 RPOP 取出
 	}
+	// 短暂休眠，避免紧循环耗尽 CPU
+	time.Sleep(50 * time.Millisecond)
 }

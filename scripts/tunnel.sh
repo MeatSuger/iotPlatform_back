@@ -12,7 +12,8 @@ HOSTS_MARK="# BEGIN_TUNNEL"
 declare -A CONTAINERS=(
     ["1Panel-postgresql-atvS"]=5432
     ["1Panel-redis-143d"]=6379
-    ["1Panel-influxdb-ks5i"]=8086
+    # ["1Panel-influxdb-ks5i"]=8086
+    ["influxdb3-core"]=8181
     ["mqtt"]=1883	
 )
 

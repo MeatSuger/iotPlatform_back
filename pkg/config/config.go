@@ -48,18 +48,23 @@ func (d DatabaseConfig) DSN() string {
 }
 
 // RedisConfig Redis配置
+// Mode 支持: "standalone"（默认单节点）, "sentinel"（哨兵高可用）, "cluster"（集群分片）
 type RedisConfig struct {
-	Host         string `mapstructure:"host"`
-	Port         int    `mapstructure:"port"`
-	Password     string `mapstructure:"password"`
-	DB           int    `mapstructure:"db"`
-	PoolSize     int    `mapstructure:"pool-size"`
-	MinIdleConns int    `mapstructure:"min-idle-conns"`
-	DialTimeout  int    `mapstructure:"dial-timeout"`
-	ReadTimeout  int    `mapstructure:"read-timeout"`
-	WriteTimeout int    `mapstructure:"write-timeout"`
-	PoolTimeout  int    `mapstructure:"pool-timeout"`
-	MaxRetries   int    `mapstructure:"max-retries"`
+	Mode          string `mapstructure:"mode"` // standalone | sentinel | cluster
+	Host          string `mapstructure:"host"`
+	Port          int    `mapstructure:"port"`
+	Password      string `mapstructure:"password"`
+	DB            int    `mapstructure:"db"`
+	MasterName    string `mapstructure:"master-name"`    // Sentinel 主节点名称
+	SentinelAddrs string `mapstructure:"sentinel-addrs"` // Sentinel 地址列表（逗号分隔）
+	ClientName    string `mapstructure:"client-name"`    // Redis 连接标识（CLIENT LIST 可辨识）
+	PoolSize      int    `mapstructure:"pool-size"`
+	MinIdleConns  int    `mapstructure:"min-idle-conns"`
+	DialTimeout   int    `mapstructure:"dial-timeout"`
+	ReadTimeout   int    `mapstructure:"read-timeout"`
+	WriteTimeout  int    `mapstructure:"write-timeout"`
+	PoolTimeout   int    `mapstructure:"pool-timeout"`
+	MaxRetries    int    `mapstructure:"max-retries"`
 }
 
 // Addr 返回Redis地址
@@ -94,18 +99,20 @@ func (r RedisConfig) PoolConfig() (poolSize, minIdle, dialTimeout, readTimeout, 
 		poolTimeout = 4
 	}
 	maxRetries = r.MaxRetries
-	if maxRetries < 0 {
+	if maxRetries <= 0 {
 		maxRetries = 3
 	}
 	return
 }
 
-// InfluxDBConfig InfluxDB配置
+// InfluxDBConfig InfluxDB v3 配置（v3 无 org/bucket 概念，统一使用 database）
 type InfluxDBConfig struct {
-	URL    string `mapstructure:"url"`
-	Token  string `mapstructure:"token"`
-	Org    string `mapstructure:"org"`
-	Bucket string `mapstructure:"bucket"`
+	URL         string `mapstructure:"url"`
+	Token       string `mapstructure:"token"`
+	Database    string `mapstructure:"database"`
+	AuthScheme  string `mapstructure:"auth-scheme"`  // Token(Cloud) | Bearer(Core/Edge自部署)，默认 Token
+	QueryURL    string `mapstructure:"query-url"`     // Flight SQL gRPC 端点（留空则复用 url，如 :8182）
+	HealthCheck bool   `mapstructure:"health-check"`  // 启动时是否健康检查（默认 true）
 }
 
 // MQTTConfig MQTT Broker 连接地址（供网关透明转发）
