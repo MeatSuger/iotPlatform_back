@@ -1,5 +1,5 @@
 -- ============================================
--- 下放命令表 (iot_downlink_cmd)
+-- 下行命令表 (iot_downlink_cmd)
 -- 用法: psql -U <user> -d <database> -f iot_downlink_cmd.sql
 -- ============================================
 
@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS iot_downlink_cmd (
     type       VARCHAR(50)  NOT NULL DEFAULT '',
     payload    TEXT         NOT NULL DEFAULT '',
     status     VARCHAR(20)  DEFAULT 'pending',
-    created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT fk_cmd_device FOREIGN KEY (device_id) REFERENCES iot_device(device_id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_iot_downlink_cmd_device_id ON iot_downlink_cmd (device_id);
+CREATE INDEX IF NOT EXISTS downlinkcmd_device_id ON iot_downlink_cmd (device_id);

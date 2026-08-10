@@ -9,11 +9,13 @@ CREATE TABLE IF NOT EXISTS app_user (
     passwd      VARCHAR(255)  NOT NULL,
     name        VARCHAR(100)  DEFAULT '',
     email       VARCHAR(255)  DEFAULT '',
-    age         INTEGER       DEFAULT 0,
+    age         BIGINT        DEFAULT 0,
     role        VARCHAR(50)   DEFAULT 'user',
     status      VARCHAR(50)   DEFAULT 'active',
     create_time TIMESTAMPTZ   DEFAULT NOW(),
-    update_time TIMESTAMPTZ   DEFAULT NOW()
+    update_time TIMESTAMPTZ   DEFAULT NOW(),
+
+    CONSTRAINT chk_user_status CHECK (status IN ('active', 'inactive'))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uk_app_user_account ON app_user (account);
+CREATE UNIQUE INDEX IF NOT EXISTS app_user_account_key ON app_user (account);

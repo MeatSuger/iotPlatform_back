@@ -8,6 +8,7 @@ import (
 	"entgo.io/ent/dialect/entsql"
 	"entgo.io/ent/schema"
 	"entgo.io/ent/schema/field"
+	"entgo.io/ent/schema/index"
 )
 
 // MqttPublishLog MQTT发布日志，对应表 mqtt_publish_log
@@ -50,5 +51,15 @@ func (MqttPublishLog) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}).
 			Default(time.Now).
 			StructTag(`json:"createTime"`),
+	}
+}
+
+// create_time 使用 BRIN 索引：写多读少的时间序列场景，
+// BRIN 比 B-tree 小约 1000 倍，写入开销极低
+// pages_per_range=32 通过数据库迁移设置（ent 不直接支持该选项）
+func (MqttPublishLog) Indexes() []ent.Index {
+	return []ent.Index{
+		index.Fields("create_time").
+			Annotations(entsql.IndexType("BRIN")),
 	}
 }

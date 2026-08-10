@@ -7,6 +7,7 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/entsql"
 	"entgo.io/ent/schema"
+	"entgo.io/ent/schema/edge"
 	"entgo.io/ent/schema/field"
 	"entgo.io/ent/schema/index"
 )
@@ -28,7 +29,7 @@ func (DownlinkCmd) Fields() []ent.Field {
 			StructTag(`json:"id"`),
 		field.String("device_id").
 			MaxLen(50).
-			NotEmpty().
+			Optional().
 			StructTag(`json:"deviceId"`),
 		field.String("type").
 			MaxLen(50).
@@ -51,5 +52,16 @@ func (DownlinkCmd) Fields() []ent.Field {
 func (DownlinkCmd) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("device_id"),
+	}
+}
+
+// M2O: 多个下行指令属于一个设备
+// 注: ent v0.14 String 类型 FK 不支持 Required()，非空由 DB 约束保证
+func (DownlinkCmd) Edges() []ent.Edge {
+	return []ent.Edge{
+		edge.From("device", Device.Type).
+			Ref("cmds").
+			Unique().
+			Field("device_id"),
 	}
 }
