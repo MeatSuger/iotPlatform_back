@@ -24,6 +24,7 @@ import (
 	"iot-platform.local/internal/model"
 	"iot-platform.local/internal/repository"
 	"iot-platform.local/internal/service"
+	"iot-platform.local/pkg/cache"
 	"iot-platform.local/pkg/config"
 )
 
@@ -46,6 +47,7 @@ type MqttGatewayController struct {
 	dialTimeout time.Duration
 	logRepo     *repository.MqttPublishLogRepo
 	reportSvc   *service.DeviceReportService // 设备数据上报服务（onPublish 入库用）
+	cache       *cache.RedisCache            // MQTT 消息历史缓存（可为 nil）
 
 	// 设备Token注册表：框架鉴权通过后记录 deviceID → token，
 	// 供 onPublish 上报时使用（与 HTTP 上报共用 Sa-Token 体系）
@@ -54,8 +56,8 @@ type MqttGatewayController struct {
 }
 
 // NewMqttGatewayController 创建 MQTT 桥接网关控制器
-// reportSvc 可为 nil（此时 onPublish 只记日志不入库）
-func NewMqttGatewayController(logRepo *repository.MqttPublishLogRepo, reportSvc *service.DeviceReportService) *MqttGatewayController {
+// reportSvc 可为 nil（此时 onPublish 只记日志不入库）；cache 可为 nil（不记录消息历史）
+func NewMqttGatewayController(logRepo *repository.MqttPublishLogRepo, reportSvc *service.DeviceReportService, cache *cache.RedisCache) *MqttGatewayController {
 	addr := strings.TrimPrefix(config.Cfg.MQTT.BrokerURL, "tcp://")
 	addr = strings.TrimPrefix(addr, "ssl://")
 	return &MqttGatewayController{
@@ -63,6 +65,7 @@ func NewMqttGatewayController(logRepo *repository.MqttPublishLogRepo, reportSvc 
 		dialTimeout:  5 * time.Second,
 		logRepo:      logRepo,
 		reportSvc:    reportSvc,
+		cache:        cache,
 		deviceTokens: make(map[string]string),
 	}
 }
@@ -354,6 +357,16 @@ func (g *MqttGatewayController) onPublish(topic string, payload []byte) {
 		if err := g.reportSvc.ReportStatus(context.Background(), deviceID, token, dto); err != nil {
 			zap.S().Warnf("[MQTT网关] PUBLISH 数据入库失败 [device=%s topic=%s]: %v", deviceID, topic, err)
 			return
+		}
+		// 4. 写入设备 MQTT 消息历史（List + Lua 原子 LPush+LTrim+Expire，保留最近 499 条/24h）
+		if g.cache != nil {
+			if err := g.cache.LPushMQTTMessage(context.Background(), deviceID, map[string]any{
+				"topic":   topic,
+				"payload": string(payload),
+				"ts":      time.Now().UnixMilli(),
+			}); err != nil {
+				zap.S().Debugf("[MQTT网关] 消息历史写入失败 [device=%s topic=%s]: %v", deviceID, topic, err)
+			}
 		}
 		zap.S().Infof("[MQTT网关] PUBLISH 数据已入库 [device=%s topic=%s sensors=%d]", deviceID, topic, len(dto.Sensors))
 	}()

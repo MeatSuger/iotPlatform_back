@@ -33,7 +33,7 @@ redis:
   max-retries: 3
 
 influxdb:
-  url: "http://influxdb3-core:8181"
+  url: "http://127.0.0.1:8181"
   token: "apiv3_1wM9E7Lp5PKlUHZIt4sFJgdH-hBQlLNhpMEfEjDg1CKIGe5S8fktY_q7ghBOhcitHlZo7AKqAcpm9YP0FzFtPw"
   database: "iotData"
   auth-scheme: "Bearer"  # v3 Core 自部署用 Bearer，Cloud 用 Token

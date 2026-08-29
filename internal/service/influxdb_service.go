@@ -246,7 +246,8 @@ func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID
 	}
 
 	// 仅默认时间范围走 Redis 缓存（自定义时间范围直接查 InfluxDB）
-	isDefaultRange := start.Equal(now.Add(-72*time.Hour)) && end.Equal(now)
+	// 零值 start/end = 调用方未指定 → 默认最近 3 天，可命中缓存
+	isDefaultRange := start.IsZero() && end.IsZero()
 
 	if isDefaultRange {
 		// 小 limit：直接从传感器最新缓存返回（上报时已写入，0 次 InfluxDB）

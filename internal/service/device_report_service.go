@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"iot-platform.local/internal/middleware"
@@ -310,10 +312,16 @@ func (s *DeviceReportService) GetDeviceStatus(ctx context.Context, deviceID stri
 	}
 
 	// 从传感器缓存获取最新数据（SensorData.UnmarshalJSON 自动修正零值时间戳）
+	// redis.Nil = 无缓存数据（设备未上报过），属正常情况，返回空列表而非错误
 	var sensors []entity.SensorData
 	err = s.cache.GetCachedSensorRecent(ctx, deviceID, &sensors)
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, redis.Nil) {
+			// Redis 故障等真实错误才上报；无数据时继续返回空 sensors
+			zap.L().Warn("[DeviceReport] 读取传感器缓存失败",
+				zap.String("deviceID", deviceID), zap.Error(err))
+		}
+		sensors = nil
 	}
 
 	return &entity.DeviceStatus{

@@ -119,18 +119,16 @@ func (ctl *DataController) QueryData(c *gin.Context) {
 	common.Success(c, records)
 }
 
-// parseTimeRange 解析 URL 查询参数 start/end，默认最近 3 天
+// parseTimeRange 解析 URL 查询参数 start/end
+// 未传参数时返回零值（零值 → 服务端使用默认最近 3 天，可命中缓存）
 func parseTimeRange(c *gin.Context) (start, end time.Time) {
-	end = time.Now()
-	start = end.Add(-72 * time.Hour)
-
 	if s := c.Query("start"); s != "" {
 		if t, err := time.Parse(time.RFC3339, s); err == nil {
 			start = t
 		}
 	}
-	if s := c.Query("end"); s != "" {
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
+	if e := c.Query("end"); e != "" {
+		if t, err := time.Parse(time.RFC3339, e); err == nil {
 			end = t
 		}
 	}

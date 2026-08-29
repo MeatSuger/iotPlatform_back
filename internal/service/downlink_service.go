@@ -17,7 +17,17 @@ import (
 const (
 	cmdQueuePrefix = "cmd:queue:"
 	cmdQueueMaxLen = 200
+	cmdQueueTTL    = 7 * 24 * time.Hour // 队列键 TTL，防废弃设备永久残留
 )
+
+// pollCmdLua 原子取出并删除队列全部命令（LRange + Del 非原子 → 并发 Poll 竞态修复）
+var pollCmdLua = redis.NewScript(`
+	local vals = redis.call('LRANGE', KEYS[1], 0, -1)
+	if #vals > 0 then
+		redis.call('DEL', KEYS[1])
+	end
+	return vals
+`)
 
 // DownlinkService 下放服务
 type DownlinkService struct {
@@ -60,7 +70,7 @@ func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req D
 		return nil, fmt.Errorf("保存命令失败: %w", err)
 	}
 
-	// Redis 队列
+	// Redis 队列（RPush + LTrim 保底 + EXPIRE 防残留）
 	queueKey := cmdQueuePrefix + deviceID
 	cmdJSON, _ := json.Marshal(DownlinkCmdResponse{
 		ID:        cmd.ID,
@@ -68,8 +78,18 @@ func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req D
 		Payload:   json.RawMessage(cmd.Payload),
 		CreatedAt: cmd.CreatedAt,
 	})
-	s.rdb.RPush(ctx, queueKey, string(cmdJSON))
-	s.rdb.LTrim(ctx, queueKey, -cmdQueueMaxLen, -1)
+	// 注意: LTrim 只保留最近 cmdQueueMaxLen 条，慢轮询设备离线期间
+	// 积累的旧命令会被裁剪（DB 中仍为 pending）。如需不丢命令应改用
+	// Stream consumer group 或 Set + 确认机制。
+	if err := s.rdb.RPush(ctx, queueKey, string(cmdJSON)).Err(); err != nil {
+		return nil, fmt.Errorf("命令入队失败: %w", err)
+	}
+	if err := s.rdb.LTrim(ctx, queueKey, -cmdQueueMaxLen, -1).Err(); err != nil {
+		return nil, fmt.Errorf("命令队列裁剪失败: %w", err)
+	}
+	if err := s.rdb.Expire(ctx, queueKey, cmdQueueTTL).Err(); err != nil {
+		return nil, fmt.Errorf("命令队列 TTL 设置失败: %w", err)
+	}
 
 	// WebSocket 实时推送
 	if s.wsHub != nil {
@@ -93,15 +113,25 @@ func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req D
 
 func (s *DownlinkService) PollCmd(ctx context.Context, deviceID string) ([]DownlinkCmdResponse, error) {
 	queueKey := cmdQueuePrefix + deviceID
-	results, err := s.rdb.LRange(ctx, queueKey, 0, -1).Result()
-	if err != nil || len(results) == 0 {
+
+	// Lua 原子操作：取出全部 + 删除（修复 LRange+Del 非原子的并发竞态）
+	results, err := pollCmdLua.Run(ctx, s.rdb, []string{queueKey}).Result()
+	if err != nil {
+		// Redis 故障不再静默吞掉，上抛给调用方
+		return nil, fmt.Errorf("轮询命令失败: %w", err)
+	}
+	vals, ok := results.([]any)
+	if !ok || len(vals) == 0 {
 		return []DownlinkCmdResponse{}, nil
 	}
-	s.rdb.Del(ctx, queueKey)
 
-	cmds := make([]DownlinkCmdResponse, 0, len(results))
+	cmds := make([]DownlinkCmdResponse, 0, len(vals))
 	var ids []uint
-	for _, raw := range results {
+	for _, v := range vals {
+		raw, ok := v.(string)
+		if !ok {
+			continue
+		}
 		var cmd DownlinkCmdResponse
 		if err := json.Unmarshal([]byte(raw), &cmd); err == nil {
 			cmds = append(cmds, cmd)
@@ -109,8 +139,7 @@ func (s *DownlinkService) PollCmd(ctx context.Context, deviceID string) ([]Downl
 		}
 	}
 	if len(ids) > 0 {
-		err := s.cmdRepo.MarkSent(ctx, ids)
-		if err != nil {
+		if err := s.cmdRepo.MarkSent(ctx, ids); err != nil {
 			return nil, err
 		}
 	}

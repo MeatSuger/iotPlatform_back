@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,7 +59,7 @@ const (
 	TTLDevice       = 10 * time.Minute // 设备元数据（L2）
 	TTLDeviceLocal  = 30 * time.Second // 设备元数据（L1）
 	TTLDeviceStatus = 10 * time.Minute // 设备运行时状态
-	TTLSensorRecent = 5 * time.Minute  // 传感器最新数据
+	TTLSensorRecent = 8 * time.Minute  // 传感器最新数据（8min，较原5min减少miss，仍小于设备TTL）
 	TTLSensorQuery  = 30 * time.Second // 传感器查询结果（短TTL，保证数据新鲜度）
 	TTLUser         = 15 * time.Minute // 用户信息
 	TTLUserLocal    = 60 * time.Second // 用户信息（L1）
@@ -131,21 +132,35 @@ func (c *RedisCache) Delete(ctx context.Context, keys ...string) error {
 	return c.client.Del(ctx, keys...).Err()
 }
 
-// DeleteByPattern 按模式删除缓存（使用 Pipeline 批量删除）
+// DeleteByPattern 按模式删除缓存（SCAN 分批 + UNLINK 异步释放，避免阻塞）
 func (c *RedisCache) DeleteByPattern(ctx context.Context, pattern string) error {
-	iter := c.client.Scan(ctx, 0, pattern, 0).Iterator()
+	const batchSize = 500
+	iter := c.client.Scan(ctx, 0, pattern, batchSize).Iterator()
 	var keys []string
 	for iter.Next(ctx) {
 		keys = append(keys, iter.Val())
+		if len(keys) >= batchSize {
+			if err := c.unlinkBatch(ctx, keys); err != nil {
+				return err
+			}
+			keys = keys[:0]
+		}
 	}
 	if err := iter.Err(); err != nil {
 		return err
 	}
-	if len(keys) == 0 {
-		return nil
+	if len(keys) > 0 {
+		return c.unlinkBatch(ctx, keys)
 	}
+	return nil
+}
+
+// unlinkBatch 使用 UNLINK 批量删除（异步释放内存，不阻塞 Redis）
+func (c *RedisCache) unlinkBatch(ctx context.Context, keys []string) error {
 	pipe := c.client.Pipeline()
-	pipe.Del(ctx, keys...)
+	for _, k := range keys {
+		pipe.Unlink(ctx, k)
+	}
 	_, err := pipe.Exec(ctx)
 	return err
 }
@@ -213,7 +228,7 @@ func (c *RedisCache) GetOrLoad(ctx context.Context, key string, dest any, redisT
 
 	// 2.5 检查 L2 负缓存（防穿透：redis.Nil 时优先查负缓存）
 	if err == redis.Nil {
-		negKey := PrefixNegCache + key
+		negKey := negCacheKey(key)
 		negExists, negErr := c.client.Exists(ctx, negKey).Result()
 		if negErr == nil && negExists > 0 {
 			// L2 负缓存命中
@@ -237,7 +252,7 @@ func (c *RedisCache) GetOrLoad(ctx context.Context, key string, dest any, redisT
 		if loadErr != nil {
 			// 负缓存：将"不存在"的结果缓存到 L1 + L2
 			if errors.Is(loadErr, redis.Nil) || isNotFoundErr(loadErr) {
-				c.client.Set(ctx, PrefixNegCache+key, "1", jitterTTL(TTLNegCache))
+				c.client.Set(ctx, negCacheKey(key), "1", jitterTTL(TTLNegCache))
 				if localTTL > 0 {
 					c.local.setNeg(key, minDuration(localTTL, TTLNegCache))
 				}
@@ -352,8 +367,12 @@ func (c *RedisCache) CacheDevice(ctx context.Context, deviceID string, device an
 
 // EvictDeviceCache 失效设备缓存（Write-Invalidate）
 func (c *RedisCache) EvictDeviceCache(ctx context.Context, deviceID string) error {
-	c.local.Delete(PrefixDevice + deviceID)
-	return c.Delete(ctx, PrefixDevice+deviceID)
+	key := PrefixDevice + deviceID
+	c.local.Delete(key)
+	if err := c.Delete(ctx, key); err != nil {
+		return err
+	}
+	return c.PublishInvalidate(ctx, key)
 }
 
 // ============================================================
@@ -416,8 +435,12 @@ type deviceStatusEntry struct {
 
 // EvictDeviceStatusCache 清除设备状态缓存
 func (c *RedisCache) EvictDeviceStatusCache(ctx context.Context, deviceID string) error {
-	c.local.Delete(PrefixDeviceStatus + deviceID)
-	return c.Delete(ctx, PrefixDeviceStatus+deviceID)
+	key := PrefixDeviceStatus + deviceID
+	c.local.Delete(key)
+	if err := c.Delete(ctx, key); err != nil {
+		return err
+	}
+	return c.PublishInvalidate(ctx, key)
 }
 
 // ============================================================
@@ -437,31 +460,92 @@ func (c *RedisCache) GetCachedSensorRecent(ctx context.Context, deviceID string,
 
 // EvictSensorRecentCache 清除传感器缓存
 func (c *RedisCache) EvictSensorRecentCache(ctx context.Context, deviceID string) error {
-	return c.Delete(ctx, PrefixSensorRecent+deviceID+":latest")
+	key := PrefixSensorRecent + deviceID + ":latest"
+	if err := c.Delete(ctx, key); err != nil {
+		return err
+	}
+	return c.PublishInvalidate(ctx, key)
 }
 
 // ---- 传感器查询结果缓存（Cache-Aside，减少 InfluxDB 压力） ----
+// 键含设备级版本号 (cache:sensor_query:{deviceID}:{ver}:{limit})：
+// 上报时 INCR 版本号使旧查询缓存自然失效（TTL 30s 自愈），
+// 避免每次上报执行 SCAN 全 keyspace 清理（高 QPS 下为纯开销）。
 
 // CacheSensorQuery 缓存传感器查询结果
 func (c *RedisCache) CacheSensorQuery(ctx context.Context, deviceID string, limit int, data any) error {
-	key := fmt.Sprintf("%s%s:%d", PrefixSensorQuery, deviceID, limit)
+	ver, err := c.client.Get(ctx, sensorQueryVerKey(deviceID)).Int64()
+	if err != nil && err != redis.Nil {
+		return err
+	}
+	key := fmt.Sprintf("%s%s:%d:%d", PrefixSensorQuery, deviceID, ver, limit)
 	return c.Set(ctx, key, data, TTLSensorQuery)
 }
 
 // GetCachedSensorQuery 获取缓存的传感器查询结果
 func (c *RedisCache) GetCachedSensorQuery(ctx context.Context, deviceID string, limit int, dest any) error {
-	key := fmt.Sprintf("%s%s:%d", PrefixSensorQuery, deviceID, limit)
+	ver, err := c.client.Get(ctx, sensorQueryVerKey(deviceID)).Int64()
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("%s%s:%d:%d", PrefixSensorQuery, deviceID, ver, limit)
 	return c.Get(ctx, key, dest)
 }
 
-// EvictSensorQueryCache 清除设备所有查询缓存（数据上报时调用）
+// EvictSensorQueryCache 使设备查询缓存失效：INCR 版本号（O(1)，非 SCAN）
+// 版本号键带 1 小时 TTL 防残留（每次 INCR 顺带刷新）
 func (c *RedisCache) EvictSensorQueryCache(ctx context.Context, deviceID string) error {
-	return c.DeleteByPattern(ctx, PrefixSensorQuery+deviceID+":*")
+	pipe := c.client.Pipeline()
+	verKey := sensorQueryVerKey(deviceID)
+	pipe.Incr(ctx, verKey)
+	pipe.Expire(ctx, verKey, time.Hour)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// sensorQueryVerKey 查询缓存版本号键（TTL 1 小时防残留）
+func sensorQueryVerKey(deviceID string) string {
+	return PrefixSensorQuery + deviceID + ":ver"
+}
+
+// EvictDeviceAllCaches 设备删除时清理该设备的所有关联缓存
+// 包括: 查询缓存、下行命令队列、MQTT 消息历史（前缀模式 + 精确键）
+func (c *RedisCache) EvictDeviceAllCaches(ctx context.Context, deviceID string) error {
+	var errs []error
+
+	// 1. 传感器查询缓存：删版本号键（旧 key 靠 TTL 自愈）
+	if err := c.Delete(ctx, sensorQueryVerKey(deviceID)); err != nil {
+		errs = append(errs, fmt.Errorf("查询缓存: %w", err))
+	}
+
+	// 2. 下行命令队列（前缀模式）
+	if err := c.DeleteByPattern(ctx, "cmd:queue:"+deviceID+":*"); err != nil {
+		errs = append(errs, fmt.Errorf("命令队列: %w", err))
+	}
+	if err := c.Delete(ctx, "cmd:queue:"+deviceID); err != nil {
+		errs = append(errs, fmt.Errorf("命令队列: %w", err))
+	}
+
+	// 3. MQTT 消息历史（前缀模式）
+	if err := c.DeleteByPattern(ctx, PrefixMQTTMessage+deviceID+":*"); err != nil {
+		errs = append(errs, fmt.Errorf("MQTT消息: %w", err))
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("清理设备缓存: %v", errs)
+	}
+	return nil
 }
 
 // ============================================================
-// 设备上报快速路径：Pipeline 批量写入（1次往返完成3个操作）
+// 设备上报快速路径：Pipeline 批量写入（1次往返完成4个操作）
 // ============================================================
+
+// BufferDeviceReportsKey 上报缓冲队列 key（与 device_data_buffer.go 共享）
+const BufferDeviceReportsKey = "buffer:device_reports"
+
+// BufferQueueMaxLen 缓冲队列长度上限（防 InfluxDB 故障时无限增长耗尽内存）
+const BufferQueueMaxLen = 20000
 
 // FastReportWrite 一次 Pipeline 完成：更新设备状态 Hash + 缓存传感器数据 + 推入缓冲队列
 // 将 3 次 Redis 往返合并为 1 次
@@ -481,8 +565,9 @@ func (c *RedisCache) FastReportWrite(ctx context.Context, deviceID string, statu
 	}
 	pipe.Set(ctx, sensorKey, sensorJSON, jitterTTL(TTLSensorRecent))
 
-	// 3. 推入缓冲队列
-	pipe.LPush(ctx, "buffer:device_reports", bufferData)
+	// 3. 推入缓冲队列（带 LTrim 上限，防内存耗尽；保留头部最新数据）
+	pipe.LPush(ctx, BufferDeviceReportsKey, bufferData)
+	pipe.LTrim(ctx, BufferDeviceReportsKey, 0, BufferQueueMaxLen-1)
 
 	_, err = pipe.Exec(ctx)
 	return err
@@ -506,8 +591,12 @@ func (c *RedisCache) CacheUser(ctx context.Context, userID string, user any) err
 
 // EvictUserCache 失效用户缓存
 func (c *RedisCache) EvictUserCache(ctx context.Context, userID string) error {
-	c.local.Delete(PrefixUser + userID)
-	return c.Delete(ctx, PrefixUser+userID)
+	key := PrefixUser + userID
+	c.local.Delete(key)
+	if err := c.Delete(ctx, key); err != nil {
+		return err
+	}
+	return c.PublishInvalidate(ctx, key)
 }
 
 // ============================================================
@@ -517,14 +606,18 @@ func (c *RedisCache) EvictUserCache(ctx context.Context, userID string) error {
 // GetCachedDeviceList 获取用户设备列表（L1 → L2 → loader）
 func (c *RedisCache) GetCachedDeviceList(ctx context.Context, ownerID uint, dest any, loader func(context.Context) (any, error)) error {
 	key := fmt.Sprintf("%s%d", PrefixDeviceList, ownerID)
-	return c.GetOrLoad(ctx, key, dest, TTLDeviceList, TTLDeviceList, loader)
+	// L1 短 TTL（20s），保持 L1<TTL < L2<TTL（2min）原则
+	return c.GetOrLoad(ctx, key, dest, TTLDeviceList, 20*time.Second, loader)
 }
 
 // EvictDeviceListCache 失效用户设备列表缓存
 func (c *RedisCache) EvictDeviceListCache(ctx context.Context, ownerID uint) error {
 	key := fmt.Sprintf("%s%d", PrefixDeviceList, ownerID)
 	c.local.Delete(key)
-	return c.Delete(ctx, key)
+	if err := c.Delete(ctx, key); err != nil {
+		return err
+	}
+	return c.PublishInvalidate(ctx, key)
 }
 
 // ============================================================
@@ -822,6 +915,16 @@ func toBytes(v any) ([]byte, error) {
 	default:
 		return json.Marshal(val)
 	}
+}
+
+// negCacheKey 生成负缓存键：剥离 key 的 "cache:" 前缀，避免双重前缀
+// 例: cache:device:abc -> cache:neg:device:abc
+func negCacheKey(key string) string {
+	const cachePrefix = "cache:"
+	if strings.HasPrefix(key, cachePrefix) {
+		return PrefixNegCache + strings.TrimPrefix(key, cachePrefix)
+	}
+	return PrefixNegCache + key
 }
 
 // isNotFoundErr 判断是否为"记录不存在"错误（用于负缓存决策）

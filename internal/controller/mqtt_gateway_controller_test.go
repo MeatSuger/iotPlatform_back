@@ -207,7 +207,7 @@ func setupGatewayTest(t *testing.T) (*httptest.Server, *MqttGatewayController) {
 	t.Cleanup(func() { config.Cfg = oldCfg })
 
 	gin.SetMode(gin.TestMode)
-	gateway := NewMqttGatewayController(nil, nil)
+	gateway := NewMqttGatewayController(nil, nil, nil)
 	e := gin.New()
 	e.GET("/api/ws/mqtt/broker", gateway.HandleWebSocket)
 	ts := httptest.NewServer(e)
@@ -360,7 +360,7 @@ func TestMqttGatewayControllerRejectBadQueryToken(t *testing.T) {
 	}
 
 	gin.SetMode(gin.TestMode)
-	gw := NewMqttGatewayController(nil, nil)
+	gw := NewMqttGatewayController(nil, nil, nil)
 	e := gin.New()
 	e.GET("/api/ws/mqtt/broker", gw.HandleWebSocket)
 	ts := httptest.NewServer(e)
@@ -396,7 +396,7 @@ func TestMqttGatewayControllerFragmentedConnect(t *testing.T) {
 	}
 
 	gin.SetMode(gin.TestMode)
-	gw := NewMqttGatewayController(nil, nil)
+	gw := NewMqttGatewayController(nil, nil, nil)
 	e := gin.New()
 	e.GET("/api/ws/mqtt/broker", gw.HandleWebSocket)
 	ts := httptest.NewServer(e)

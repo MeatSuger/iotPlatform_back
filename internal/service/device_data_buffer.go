@@ -10,6 +10,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
+
+	"iot-platform.local/pkg/cache"
 )
 
 // DeviceDataBuffer Redis 写缓冲 — 消峰填谷，支撑 1000+ 并发上报
@@ -57,7 +59,7 @@ type DeviceDataBuffer struct {
 }
 
 const (
-	defaultBufferKey     = "buffer:device_reports"
+	defaultBufferKey     = cache.BufferDeviceReportsKey
 	defaultBatchSize     = 200
 	defaultFlushInterval = 200 * time.Millisecond
 )
@@ -203,11 +205,14 @@ func (b *DeviceDataBuffer) rpopFallback(ctx context.Context, key string, count i
 }
 
 // requeue 失败重试：推回队列左侧（头部，给其他消息机会，避免紧循环）
+// 带 LTrim 上限保护：InfluxDB 持续故障时队列不会无限增长耗尽内存
 func (b *DeviceDataBuffer) requeue(ctx context.Context, reports []BufferedReport) {
 	for i := len(reports) - 1; i >= 0; i-- {
 		data, _ := json.Marshal(reports[i])
 		b.rdb.LPush(ctx, b.bufferKey, data) // 推回左侧头部，防止立即被 RPOP 取出
 	}
+	// 裁剪到上限（保留头部最新数据）
+	_ = b.rdb.LTrim(ctx, b.bufferKey, 0, cache.BufferQueueMaxLen-1).Err()
 	// 短暂休眠，避免紧循环耗尽 CPU
 	time.Sleep(50 * time.Millisecond)
 }

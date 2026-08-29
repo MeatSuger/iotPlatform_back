@@ -138,6 +138,8 @@ func (s *DeviceService) Delete(ctx context.Context, deviceID string) error {
 	_ = s.cache.EvictDeviceCache(ctx, deviceID)
 	_ = s.cache.EvictSensorRecentCache(ctx, deviceID)
 	_ = s.cache.EvictDeviceStatusCache(ctx, deviceID)
+	// 清理该设备的查询缓存/命令队列/MQTT 消息
+	_ = s.cache.EvictDeviceAllCaches(ctx, deviceID)
 	// 失效该用户设备列表缓存
 	for _, ownerID := range []uint{device.OwnerID} {
 		_ = s.cache.EvictDeviceListCache(ctx, ownerID)
@@ -162,5 +164,13 @@ func (s *DeviceService) GetDeviceToken(ctx context.Context, deviceID string, own
 
 func (s *DeviceService) UpdateStatus(ctx context.Context, deviceID, status string) error {
 	deviceID = util.NormalizeDeviceID(deviceID)
-	return s.repo.UpdateLastActive(ctx, deviceID, status)
+	if err := s.repo.UpdateLastActive(ctx, deviceID, status); err != nil {
+		return err
+	}
+	// 同步更新设备缓存中的状态（Write-Through）：
+	// 不失效整个设备缓存（避免下一次读取回源 DB），而是同步状态 Hash
+	// 与设备 JSON 缓存，确保离线后状态立即反映（否则最长 10 分钟显示 ONLINE）
+	nowMs := time.Now().UnixMilli()
+	_ = s.cache.CacheDeviceStatus(ctx, deviceID, status, nowMs)
+	return nil
 }
