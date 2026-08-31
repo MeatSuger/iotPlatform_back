@@ -78,16 +78,8 @@ func (ctl *UserController) Login(c *gin.Context) {
 		return
 	}
 
-	// Set-Cookie（对齐 Java Sa-Token 行为：登录后自动下发 Cookie）
-	c.SetCookie(
-		resp.TokenName,         // "Authorization"
-		resp.TokenValue,        // token 值
-		int(resp.TokenTimeout), // maxAge（秒）
-		"/",                    // path
-		"",                     // domain
-		false,                  // secure
-		false,                  // httpOnly
-	)
+	// Set-Cookie（httpOnly + 生产环境 secure + SameSite=Lax）
+	common.SetAuthCookie(c, resp.TokenName, resp.TokenValue, int(resp.TokenTimeout))
 
 	common.SuccessWithMsg(c, "登录成功", resp)
 }
@@ -140,7 +132,7 @@ func (ctl *UserController) Logout(c *gin.Context) {
 		_ = stputil.LogoutByToken(token)
 	}
 	// 清除 Cookie
-	c.SetCookie("Authorization", "", -1, "/", "", false, false)
+	common.ClearAuthCookie(c, "Authorization")
 	common.SuccessWithMsg(c, "退出登录成功", nil)
 }
 
@@ -181,6 +173,12 @@ func (ctl *UserController) Update(c *gin.Context) {
 	// account 是登录凭证，不允许修改（显式拒绝，避免前端误以为修改成功）
 	if req.Account != "" && req.Account != existing.Account {
 		common.FailWithMsg(c, common.CodeBadRequest, "账号不可修改")
+		return
+	}
+
+	// 状态字段仅管理员/超级管理员可修改（普通用户无权变更自身状态）
+	if req.Status != "" && currentRole != service.RoleSuperAdmin && currentRole != service.RoleAdmin {
+		common.FailWithMsg(c, common.CodeForbidden, "无权修改用户状态")
 		return
 	}
 

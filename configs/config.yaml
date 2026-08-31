@@ -6,7 +6,8 @@ server:
   port: 8182           # 服务端口（dev使用8182避免与Java版8181冲突）
   udp-port: 8183       # UDP 设备上报端口（0=禁用）
   mode: debug          # debug | release | test
-  log-level: debug     # 日志级别: debug | info | warn | error（默认: debug→debug, release→info）
+  log-level: debug     # 日志级别: debug | info | warn | error
+                        # 开发环境用 debug：输出全部日志（含高频数据路径与所有成功请求），便于排查
   swagger-enabled: true  # 是否启用 Swagger 文档
 
 database:
@@ -24,8 +25,8 @@ redis:
   port: 6379
   password: "redis_DbbDB3"
   db: 0
-  pool-size: 500          # 1000并发场景下增大连接池
-  min-idle-conns: 50      # 预热最小空闲连接
+  pool-size: 200          # 连接池大小（200 足够 100 VUs 并发，避免占用过多 Redis maxclients）
+  min-idle-conns: 30      # 预热最小空闲连接，减少冷启动延迟
   dial-timeout: 5
   read-timeout: 3
   write-timeout: 3
@@ -37,6 +38,12 @@ influxdb:
   token: "apiv3_1wM9E7Lp5PKlUHZIt4sFJgdH-hBQlLNhpMEfEjDg1CKIGe5S8fktY_q7ghBOhcitHlZo7AKqAcpm9YP0FzFtPw"
   database: "iotData"
   auth-scheme: "Bearer"  # v3 Core 自部署用 Bearer，Cloud 用 Token
+  max-idle-connections: 50
+
+# 设备离线检测（Redis 状态为准，离线后同步 PostgreSQL）
+device:
+  offline-scan-interval: 30   # 扫描间隔（秒）
+  offline-threshold: 120      # 离线判定阈值（秒），心跳周期 60s 的 2 倍
 
 # MQTT Broker 连接地址（仅此一项，供网关透明转发到外部 MQTT Docker）
 mqtt:

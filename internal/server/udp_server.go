@@ -77,7 +77,9 @@ func (s *UDPServer) loop() {
 			}
 		}
 
-		go s.handle(remoteAddr, buf[:n])
+		data := make([]byte, n)
+		copy(data, buf[:n])
+		go s.handle(remoteAddr, data)
 	}
 }
 
@@ -100,7 +102,7 @@ func (s *UDPServer) handle(addr *net.UDPAddr, data []byte) {
 		return
 	}
 
-	zap.S().Infof("[UDP] 数据上报成功 [device=%s, remote=%s, sensors=%d]", p.DeviceID, addr, len(p.Sensors))
+	zap.S().Debugf("[UDP] 数据上报成功 [device=%s, remote=%s, sensors=%d]", p.DeviceID, addr, len(p.Sensors))
 }
 
 // Stop 停止 UDP 监听

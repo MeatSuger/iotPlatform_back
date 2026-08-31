@@ -43,8 +43,8 @@ func TestRoleConstants(t *testing.T) {
 }
 
 func TestUserStatusConstants(t *testing.T) {
-	assert.Equal(t, "active", UserStatusActive)
-	assert.Equal(t, "disabled", UserStatusDisabled)
+	assert.Equal(t, "ACTIVE", UserStatusActive)
+	assert.Equal(t, "DISABLED", UserStatusDisabled)
 }
 
 func TestRegisterRequest_Validation(t *testing.T) {

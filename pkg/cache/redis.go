@@ -60,7 +60,7 @@ const (
 	TTLDeviceLocal  = 30 * time.Second // 设备元数据（L1）
 	TTLDeviceStatus = 10 * time.Minute // 设备运行时状态
 	TTLSensorRecent = 8 * time.Minute  // 传感器最新数据（8min，较原5min减少miss，仍小于设备TTL）
-	TTLSensorQuery  = 30 * time.Second // 传感器查询结果（短TTL，保证数据新鲜度）
+	TTLSensorQuery  = 15 * time.Second // 传感器查询结果（短TTL，保证数据新鲜度）
 	TTLUser         = 15 * time.Minute // 用户信息
 	TTLUserLocal    = 60 * time.Second // 用户信息（L1）
 	TTLDeviceList   = 2 * time.Minute  // 用户设备列表
@@ -130,39 +130,6 @@ func (c *RedisCache) Get(ctx context.Context, key string, dest any) error {
 // Delete 删除缓存
 func (c *RedisCache) Delete(ctx context.Context, keys ...string) error {
 	return c.client.Del(ctx, keys...).Err()
-}
-
-// DeleteByPattern 按模式删除缓存（SCAN 分批 + UNLINK 异步释放，避免阻塞）
-func (c *RedisCache) DeleteByPattern(ctx context.Context, pattern string) error {
-	const batchSize = 500
-	iter := c.client.Scan(ctx, 0, pattern, batchSize).Iterator()
-	var keys []string
-	for iter.Next(ctx) {
-		keys = append(keys, iter.Val())
-		if len(keys) >= batchSize {
-			if err := c.unlinkBatch(ctx, keys); err != nil {
-				return err
-			}
-			keys = keys[:0]
-		}
-	}
-	if err := iter.Err(); err != nil {
-		return err
-	}
-	if len(keys) > 0 {
-		return c.unlinkBatch(ctx, keys)
-	}
-	return nil
-}
-
-// unlinkBatch 使用 UNLINK 批量删除（异步释放内存，不阻塞 Redis）
-func (c *RedisCache) unlinkBatch(ctx context.Context, keys []string) error {
-	pipe := c.client.Pipeline()
-	for _, k := range keys {
-		pipe.Unlink(ctx, k)
-	}
-	_, err := pipe.Exec(ctx)
-	return err
 }
 
 // Exists 检查键是否存在
@@ -294,65 +261,8 @@ func (c *RedisCache) GetOrLoad(ctx context.Context, key string, dest any, redisT
 }
 
 // ============================================================
-// 核心模式2：Write-Through（写穿透）
-//
-// 先写 DB → 同步更新缓存 → 返回
-// 适用场景：设备状态更新（立即生效，高频读取）
-// 参考：viney-shih/go-cache Write-Through 模式
-// ============================================================
-
-// WriteThrough 写穿透：同时更新 DB 和缓存
-func (c *RedisCache) WriteThrough(ctx context.Context, key string, value any, ttl time.Duration, writer func(context.Context) error) error {
-	// 1. 先写 DB（source of truth）
-	if err := writer(ctx); err != nil {
-		return err
-	}
-
-	// 2. 同步更新缓存
-	if err := c.Set(ctx, key, value, ttl); err != nil {
-		// 缓存更新失败记录日志（不阻塞主流程，但需可观测）
-		zap.L().Warn("[RedisCache] WriteThrough 缓存更新失败",
-			zap.String("key", key), zap.Error(err))
-	}
-
-	// 3. 通知其他实例失效本地缓存的旧版本（可选：通过 Pub-Sub）
-	// c.publishInvalidate(ctx, key)
-
-	return nil
-}
-
-// ============================================================
-// 核心模式3：Write-Invalidate（写失效）
-//
-// 先写 DB → 删除缓存 → 返回（下次读取时自动回填）
-// 适用场景：设备元数据更新（不频繁，容忍首次 miss 回源）
-// 优点：避免写竞争导致缓存与 DB 不一致
-// 参考：Redis 官方 Cache-Aside 指南
-// ============================================================
-
-// WriteInvalidate 写失效：更新 DB 后删除缓存
-func (c *RedisCache) WriteInvalidate(ctx context.Context, key string, writer func(context.Context) error) error {
-	// 1. 先写 DB
-	if err := writer(ctx); err != nil {
-		return err
-	}
-
-	// 2. 删除缓存
-	c.Delete(ctx, key)
-	c.local.Delete(key)
-
-	return nil
-}
-
-// ============================================================
 // 设备缓存
 // ============================================================
-
-// GetCachedDevice 获取设备元数据（Cache-Aside）
-func (c *RedisCache) GetCachedDevice(ctx context.Context, deviceID string, dest any) error {
-	key := PrefixDevice + deviceID
-	return c.GetOrLoad(ctx, key, dest, TTLDevice, TTLDeviceLocal, nil)
-}
 
 // GetCachedDeviceWithLoader 获取设备元数据（带 DB 加载器）
 func (c *RedisCache) GetCachedDeviceWithLoader(ctx context.Context, deviceID string, dest any, loader func(context.Context) (any, error)) error {
@@ -469,7 +379,7 @@ func (c *RedisCache) EvictSensorRecentCache(ctx context.Context, deviceID string
 
 // ---- 传感器查询结果缓存（Cache-Aside，减少 InfluxDB 压力） ----
 // 键含设备级版本号 (cache:sensor_query:{deviceID}:{ver}:{limit})：
-// 上报时 INCR 版本号使旧查询缓存自然失效（TTL 30s 自愈），
+// 上报时 INCR 版本号使旧查询缓存自然失效（TTL 15s 自愈），
 // 避免每次上报执行 SCAN 全 keyspace 清理（高 QPS 下为纯开销）。
 
 // CacheSensorQuery 缓存传感器查询结果
@@ -483,9 +393,11 @@ func (c *RedisCache) CacheSensorQuery(ctx context.Context, deviceID string, limi
 }
 
 // GetCachedSensorQuery 获取缓存的传感器查询结果
+// 与 CacheSensorQuery 对称：版本号键缺失时按 ver=0 处理，
+// 否则写入用 ver=0、读取却报错，缓存永不命中。
 func (c *RedisCache) GetCachedSensorQuery(ctx context.Context, deviceID string, limit int, dest any) error {
 	ver, err := c.client.Get(ctx, sensorQueryVerKey(deviceID)).Int64()
-	if err != nil {
+	if err != nil && err != redis.Nil {
 		return err
 	}
 	key := fmt.Sprintf("%s%s:%d:%d", PrefixSensorQuery, deviceID, ver, limit)
@@ -509,7 +421,7 @@ func sensorQueryVerKey(deviceID string) string {
 }
 
 // EvictDeviceAllCaches 设备删除时清理该设备的所有关联缓存
-// 包括: 查询缓存、下行命令队列、MQTT 消息历史（前缀模式 + 精确键）
+// 包括: 查询缓存、下行命令队列、MQTT 消息历史（精确键）
 func (c *RedisCache) EvictDeviceAllCaches(ctx context.Context, deviceID string) error {
 	var errs []error
 
@@ -518,16 +430,13 @@ func (c *RedisCache) EvictDeviceAllCaches(ctx context.Context, deviceID string) 
 		errs = append(errs, fmt.Errorf("查询缓存: %w", err))
 	}
 
-	// 2. 下行命令队列（前缀模式）
-	if err := c.DeleteByPattern(ctx, "cmd:queue:"+deviceID+":*"); err != nil {
-		errs = append(errs, fmt.Errorf("命令队列: %w", err))
-	}
+	// 2. 下行命令队列
 	if err := c.Delete(ctx, "cmd:queue:"+deviceID); err != nil {
 		errs = append(errs, fmt.Errorf("命令队列: %w", err))
 	}
 
-	// 3. MQTT 消息历史（前缀模式）
-	if err := c.DeleteByPattern(ctx, PrefixMQTTMessage+deviceID+":*"); err != nil {
+	// 3. MQTT 消息历史
+	if err := c.Delete(ctx, PrefixMQTTMessage+deviceID); err != nil {
 		errs = append(errs, fmt.Errorf("MQTT消息: %w", err))
 	}
 
@@ -584,11 +493,6 @@ func (c *RedisCache) GetCachedUser(ctx context.Context, userID string, dest any,
 	return c.GetOrLoad(ctx, key, dest, TTLUser, TTLUserLocal, loader)
 }
 
-// CacheUser 缓存用户信息
-func (c *RedisCache) CacheUser(ctx context.Context, userID string, user any) error {
-	return c.Set(ctx, PrefixUser+userID, user, TTLUser)
-}
-
 // EvictUserCache 失效用户缓存
 func (c *RedisCache) EvictUserCache(ctx context.Context, userID string) error {
 	key := PrefixUser + userID
@@ -635,15 +539,6 @@ func (c *RedisCache) LPushMQTTMessage(ctx context.Context, deviceID string, msg 
 	return c.mqttAtomicScript.Run(ctx, c.client, []string{key},
 		string(data), "499", int64(TTLMQTTMessage.Seconds()),
 	).Err()
-}
-
-// GetRecentMQTTMessages 获取最近的MQTT消息
-func (c *RedisCache) GetRecentMQTTMessages(ctx context.Context, deviceID string, limit int) ([]string, error) {
-	key := PrefixMQTTMessage + deviceID
-	if limit <= 0 {
-		limit = 10
-	}
-	return c.client.LRange(ctx, key, 0, int64(limit-1)).Result()
 }
 
 // ============================================================

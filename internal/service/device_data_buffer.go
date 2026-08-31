@@ -165,7 +165,7 @@ func (b *DeviceDataBuffer) drain(ctx context.Context) {
 			return
 		}
 
-		zap.L().Info("[DataBuffer] 批量刷盘完成",
+		zap.L().Debug("[DataBuffer] 批量刷盘完成",
 			zap.Int("reports", len(reports)))
 	}
 }

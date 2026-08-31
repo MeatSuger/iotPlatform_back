@@ -166,6 +166,8 @@ cors:
     - "https://your-domain.com"
 ```
 
+> `server.mode: debug` 时，日志会输出每条 SQL 的执行耗时（`op` / `query` / `latency`），便于排查慢查询；`release` 下无此开销。
+
 ---
 
 ## API 文档
@@ -183,12 +185,14 @@ cors:
 
 ## 认证体系
 
-| 类型 | Token 名称 | 存储 | 过期 |
-|------|-----------|------|------|
-| 用户 | `Authorization` | Redis `Authorization:token:xxx` | 30 天 |
-| 设备 | `X-Device-Token` | Redis `X-Device-Token:token:xxx` | 永不过期 |
+| 类型 | Token 名称 | 存储 | 过期 | 说明 |
+|------|-----------|------|------|------|
+| 用户 | `Authorization` | Redis `Authorization:token:xxx` | 30 天 | 同一账号最多同时在线 5 端，每端独立 Token |
+| 设备 | `X-Device-Token` | Redis `X-Device-Token:token:xxx` | 永不过期 | 一个 deviceId 只对应一个有效 Token（重新获取顶掉旧 Token） |
 
-设备 Token 通过 `GET /device/:deviceId/login` 获取（需要用户登录）。
+- 设备 Token 通过 `GET /api/device/:deviceId/login` 获取，使用设备 6 位 hex ID 认证（**无需用户登录**）。
+- 设备若 **30 天未上线**，其 Token 会被自动清理（**不删除设备**），设备重新登录即可获取新 Token。
+- 认证 Cookie 统一为 `httpOnly` + `SameSite=Lax`，生产环境（`release`）自动启用 `secure`。
 
 ---
 

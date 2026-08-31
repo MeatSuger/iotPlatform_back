@@ -171,7 +171,11 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 	zap.S().Infof("[MQTT网关] 设备 %s 鉴权通过", deviceID)
 
 	// 4. 连接外部 broker
-	tcp, err := net.DialTimeout("tcp", g.brokerAddr, g.dialTimeout)
+	dialer := &net.Dialer{
+		Timeout:   g.dialTimeout,
+		KeepAlive: 30 * time.Second,
+	}
+	tcp, err := dialer.Dial("tcp", g.brokerAddr)
 	if err != nil {
 		zap.S().Warnf("[MQTT网关] 连接外部Broker失败: %s: %v", g.brokerAddr, err)
 		return
@@ -368,7 +372,7 @@ func (g *MqttGatewayController) onPublish(topic string, payload []byte) {
 				zap.S().Debugf("[MQTT网关] 消息历史写入失败 [device=%s topic=%s]: %v", deviceID, topic, err)
 			}
 		}
-		zap.S().Infof("[MQTT网关] PUBLISH 数据已入库 [device=%s topic=%s sensors=%d]", deviceID, topic, len(dto.Sensors))
+		zap.S().Debugf("[MQTT网关] PUBLISH 数据已入库 [device=%s topic=%s sensors=%d]", deviceID, topic, len(dto.Sensors))
 	}()
 }
 

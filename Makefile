@@ -236,4 +236,4 @@ help:
 	@echo "  version          显示版本信息"
 	@echo "  help             显示本帮助"
 	@printf '$(C_YELLOW)常用变量:$(C_RESET) GO, GOFLAGS, BUILD_DIR, SSH_HOST, REMOTE_DIR, REMOTE_DOCKER, UPLOAD_TOOL, UPLOAD_FLAGS (可在命令行覆盖)\n\n'
-	@echo "开发运行 (原 dev): 构建用 make all, 热重载服务器见 scripts/dev.sh"
+	@echo "开发运行: 构建用 make all, 热重载服务器见 scripts/dev.sh"

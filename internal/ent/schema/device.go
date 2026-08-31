@@ -10,6 +10,7 @@ import (
 	"entgo.io/ent/schema"
 	"entgo.io/ent/schema/edge"
 	"entgo.io/ent/schema/field"
+	"entgo.io/ent/schema/index"
 )
 
 // Device 设备实体，对应表 iot_device
@@ -100,7 +101,9 @@ func (Device) Fields() []ent.Field {
 }
 
 func (Device) Indexes() []ent.Index {
-	return nil
+	return []ent.Index{
+		index.Fields("owner_id"),
+	}
 }
 
 // 变更3: 新增 Edges —— 对应外键 fk_device_owner / fk_cmd_device

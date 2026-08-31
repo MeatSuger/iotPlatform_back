@@ -17,6 +17,7 @@ type Config struct {
 	MQTT        MQTTConfig        `mapstructure:"mqtt"`
 	MqttGateway MqttGatewayConfig `mapstructure:"mqtt-gateway"`
 	CORS        CORSConfig        `mapstructure:"cors"`
+	Device      DeviceConfig      `mapstructure:"device"`
 }
 
 // ServerConfig 服务器配置
@@ -107,12 +108,13 @@ func (r RedisConfig) PoolConfig() (poolSize, minIdle, dialTimeout, readTimeout, 
 
 // InfluxDBConfig InfluxDB v3 配置（v3 无 org/bucket 概念，统一使用 database）
 type InfluxDBConfig struct {
-	URL         string `mapstructure:"url"`
-	Token       string `mapstructure:"token"`
-	Database    string `mapstructure:"database"`
-	AuthScheme  string `mapstructure:"auth-scheme"`  // Token(Cloud) | Bearer(Core/Edge自部署)，默认 Token
-	QueryURL    string `mapstructure:"query-url"`    // Flight SQL gRPC 端点（留空则复用 url，如 :8182）
-	HealthCheck bool   `mapstructure:"health-check"` // 启动时是否健康检查（默认 true）
+	URL                string `mapstructure:"url"`
+	Token              string `mapstructure:"token"`
+	Database           string `mapstructure:"database"`
+	AuthScheme         string `mapstructure:"auth-scheme"`          // Token(Cloud) | Bearer(Core/Edge自部署)，默认 Token
+	QueryURL           string `mapstructure:"query-url"`            // Flight SQL gRPC 端点（留空则复用 url，如 :8182）
+	HealthCheck        bool   `mapstructure:"health-check"`         // 启动时是否健康检查（默认 true）
+	MaxIdleConnections int    `mapstructure:"max-idle-connections"` // 最大空闲连接数，默认 50
 }
 
 // MQTTConfig MQTT Broker 连接地址（供网关透明转发）
@@ -125,6 +127,12 @@ type MQTTConfig struct {
 // 鉴权由 DeviceAuthMiddleware（Sa-Token）接管
 type MqttGatewayConfig struct {
 	Enabled bool `mapstructure:"enabled"`
+}
+
+// DeviceConfig 设备离线检测配置（Redis 状态为准，离线后同步 PostgreSQL）
+type DeviceConfig struct {
+	OfflineScanInterval int `mapstructure:"offline-scan-interval"` // 扫描间隔（秒），默认 30
+	OfflineThreshold    int `mapstructure:"offline-threshold"`    // 离线判定阈值（秒），默认 120（2×心跳周期）
 }
 
 // CORSConfig 跨域配置

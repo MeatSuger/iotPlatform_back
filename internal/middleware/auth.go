@@ -90,29 +90,23 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// stputil 全局函数操作默认用户 Manager
-		if !stputil.IsLogin(token) {
+		// 一次 Redis GET 完成登录校验 + 获取 loginID（替代 IsLogin + GetLoginID 的多次往返）
+		info, err := stputil.GetTokenInfo(token)
+		if err != nil || info == nil {
 			common.FailWithMsg(c, common.CodeUnauthorized, "Token无效或已过期")
 			c.Abort()
 			return
 		}
 
-		loginID, err := stputil.GetLoginID(token)
-		if err != nil {
-			common.FailWithMsg(c, common.CodeUnauthorized, "Token无效")
-			c.Abort()
-			return
-		}
-
-		userID, err := strconv.ParseUint(loginID, 10, 64)
+		userID, err := strconv.ParseUint(info.LoginID, 10, 64)
 		if err != nil {
 			common.FailWithMsg(c, common.CodeUnauthorized, "Token格式无效")
 			c.Abort()
 			return
 		}
 
-		// 获取角色
-		roles, _ := stputil.GetRoles(loginID)
+		// 获取角色（1 次 Redis GET）
+		roles, _ := stputil.GetRoles(info.LoginID)
 		role := ""
 		if len(roles) > 0 {
 			role = roles[0]

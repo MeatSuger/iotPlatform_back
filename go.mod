@@ -7,7 +7,6 @@ require (
 	github.com/InfluxCommunity/influxdb3-go/v2 v2.17.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/gin-contrib/cors v1.7.7
-	github.com/gin-contrib/zap v1.1.7
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/google/wire v0.7.0

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"runtime/debug"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -18,6 +19,7 @@ func Recovery() gin.HandlerFunc {
 					zap.Any("error", err),
 					zap.String("path", c.Request.URL.Path),
 					zap.String("method", c.Request.Method),
+					zap.String("stack", string(debug.Stack())),
 				)
 
 				// 检查是否为 AppError（统一类型，定义在 common/errors.go）

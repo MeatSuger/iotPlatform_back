@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
 	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/middleware"
 	"iot-platform.local/internal/repository"
@@ -160,6 +161,36 @@ func (s *DeviceService) GetDeviceToken(ctx context.Context, deviceID string, own
 
 	deviceMgr := middleware.GetDeviceManager()
 	return deviceMgr.Login(deviceID, "device")
+}
+
+// DeviceTokenInactiveTTL 设备离线多久后清理其 Token（不删除设备）
+const DeviceTokenInactiveTTL = 30 * 24 * time.Hour
+
+// CleanupInactiveDeviceTokens 清理长时间未上线设备的 Token（不删除设备记录）
+// 返回清理数量。设备 30 天未上线（含从未上线但注册超 30 天）即删除其 Token。
+func (s *DeviceService) CleanupInactiveDeviceTokens(ctx context.Context, inactiveBefore time.Time) (int, error) {
+	devices, err := s.repo.ListInactiveBefore(ctx, inactiveBefore)
+	if err != nil {
+		return 0, fmt.Errorf("查询离线设备失败: %w", err)
+	}
+
+	deviceMgr := middleware.GetDeviceManager()
+	if deviceMgr == nil {
+		return 0, fmt.Errorf("设备Token管理器未初始化")
+	}
+
+	cleaned := 0
+	for _, d := range devices {
+		if err := deviceMgr.Logout(d.ID, "device"); err != nil {
+			zap.S().Warnf("[Device] 清理设备Token失败 [deviceId=%s]: %v", d.ID, err)
+			continue
+		}
+		cleaned++
+	}
+	if cleaned > 0 {
+		zap.S().Infof("[Device] 已清理 %d 个离线设备的Token", cleaned)
+	}
+	return cleaned, nil
 }
 
 func (s *DeviceService) UpdateStatus(ctx context.Context, deviceID, status string) error {

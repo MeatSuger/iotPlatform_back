@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sa-tokens/sa-token-go/stputil"
@@ -60,8 +61,8 @@ const (
 )
 
 const (
-	UserStatusActive   = "active"
-	UserStatusDisabled = "disabled"
+	UserStatusActive   = "ACTIVE"
+	UserStatusDisabled = "DISABLED"
 )
 
 func (s *UserService) Register(ctx context.Context, req RegisterRequest) (*ent.User, error) {
@@ -110,7 +111,7 @@ func (s *UserService) Login(ctx context.Context, req LoginRequest) (*LoginRespon
 		zap.S().Warnf("[User] 登录失败: 账号 %s (ID=%d) 密码错误", user.Account, user.ID)
 		return nil, common.ErrPasswordWrong
 	}
-	if user.Status == UserStatusDisabled {
+	if strings.EqualFold(user.Status, UserStatusDisabled) {
 		zap.S().Warnf("[User] 登录失败: 账号 %s (ID=%d) 已被禁用", user.Account, user.ID)
 		return nil, common.ErrAccountDisabled
 	}

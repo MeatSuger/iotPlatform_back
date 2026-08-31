@@ -55,6 +55,10 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 
 func provideInfluxDBService() *service.InfluxDBService {
 	cfg := config.Cfg
+	maxIdleConns := cfg.InfluxDB.MaxIdleConnections
+	if maxIdleConns <= 0 {
+		maxIdleConns = 50
+	}
 	return service.NewInfluxDBService(service.InfluxDBConfig{
 		URL:                   cfg.InfluxDB.URL,
 		Token:                 cfg.InfluxDB.Token,
@@ -63,7 +67,7 @@ func provideInfluxDBService() *service.InfluxDBService {
 		WriteTimeout:          10 * time.Second,
 		QueryTimeout:          2 * time.Minute,
 		IdleConnectionTimeout: 90 * time.Second,
-		MaxIdleConnections:    10,
+		MaxIdleConnections:    maxIdleConns,
 	})
 }
 

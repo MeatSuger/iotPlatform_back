@@ -79,3 +79,24 @@ func (r *DeviceRepo) UpdateLastActive(ctx context.Context, deviceID, status stri
 		SetLastActiveTime(time.Now()).
 		Exec(ctx)
 }
+
+// ListByStatus 返回指定状态的所有设备（供离线检测同步器扫描 ONLINE 设备）
+func (r *DeviceRepo) ListByStatus(ctx context.Context, status string) ([]*ent.Device, error) {
+	return r.client.Device.Query().
+		Where(entdevice.StatusEQ(status)).
+		All(ctx)
+}
+
+// ListInactiveBefore 返回最后活跃时间早于 cutoff 的设备
+// 含从未上线（last_active_time 为 NULL）且创建时间早于 cutoff 的设备
+func (r *DeviceRepo) ListInactiveBefore(ctx context.Context, cutoff time.Time) ([]*ent.Device, error) {
+	return r.client.Device.Query().
+		Where(entdevice.Or(
+			entdevice.LastActiveTimeLT(cutoff),
+			entdevice.And(
+				entdevice.LastActiveTimeIsNil(),
+				entdevice.CreatedAtLT(cutoff),
+			),
+		)).
+		All(ctx)
+}

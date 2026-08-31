@@ -92,9 +92,8 @@ func main() {
 		zap.L().Fatal("[Main] 数据库连接失败", zap.Error(err))
 	}
 	defer func(entClient *ent.Client) {
-		err := entClient.Close()
-		if err != nil {
-
+		if err := entClient.Close(); err != nil {
+			zap.L().Warn("[Main] 关闭数据库连接失败", zap.Error(err))
 		}
 	}(entClient)
 	zap.L().Info("[Main] PostgreSQL 连接成功（Ent）")
@@ -105,9 +104,8 @@ func main() {
 		zap.L().Fatal("[Main] Redis连接失败", zap.Error(err))
 	}
 	defer func(rdb *redis.Client) {
-		err := rdb.Close()
-		if err != nil {
-
+		if err := rdb.Close(); err != nil {
+			zap.L().Warn("[Main] 关闭 Redis 连接失败", zap.Error(err))
 		}
 	}(rdb)
 
@@ -121,9 +119,11 @@ func main() {
 		Timeout(60 * 60 * 24 * 3).
 		ActiveTimeout(-1).
 		IsConcurrent(true).
+		IsShare(false).   // 每次登录生成独立 Token（便于多端管理与顶号）
+		MaxLoginCount(5). // 同一账号最多同时在线 5 端
 		IsLog(true).
 		IsReadCookie(true).
-		CookieHttpOnly(false).
+		CookieHttpOnly(true).
 		TokenStyle(satoken.TokenStyleUUID).
 		Build()
 
@@ -134,7 +134,10 @@ func main() {
 		Storage(saredis.NewStorageFromClient(rdb)).
 		TokenName("X-Device-Token").
 		KeyPrefix("X-Device-Token:").
-		Timeout(-1).
+		NeverExpire().       // 默认过期时间最长：永不过期
+		NoActiveTimeout().   // 不做活跃超时冻结
+		IsConcurrent(false). // 顶号：一个 deviceId 只保留一个有效 Token
+		IsShare(false).      // 不复用旧 Token，每次登录生成新 Token 并踢掉旧 Token
 		IsLog(true).
 		TokenStyle(satoken.TokenStyleUUID).
 		Build()
@@ -194,6 +197,34 @@ func main() {
 	// 7.6 启动跨实例缓存失效 Pub-Sub 监听（多实例部署时自动同步 L1 缓存）
 	go components.Cache.SubscribeInvalidate(context.Background())
 	zap.L().Info("[Main] 跨实例缓存失效 Pub-Sub 已启动")
+
+	// 7.6.5 设备离线检测同步器：Redis 状态为准，离线后同步到 PostgreSQL
+	offlineScanInterval := time.Duration(cfg.Device.OfflineScanInterval) * time.Second
+	offlineThreshold := time.Duration(cfg.Device.OfflineThreshold) * time.Second
+	offlineSyncer := service.NewDeviceOfflineSyncer(
+		repository.NewDeviceRepo(entClient), components.Cache,
+		offlineScanInterval, offlineThreshold,
+	)
+	// WS 长连接在线判定：防止长连接但不发心跳的设备被误判离线
+	offlineSyncer.SetOnlineChecker(wsHandler.IsDeviceOnline)
+	// 检测到离线后推送消息给 owner 管理端（与 WS 断开回调行为一致）
+	offlineSyncer.SetOfflineCallback(func(deviceID string) {
+		device, err := svcs.Device.GetByDeviceID(context.Background(), deviceID)
+		if err != nil {
+			return
+		}
+		msg, _ := json.Marshal(map[string]any{
+			"type":      "deviceOffline",
+			"deviceId":  deviceID,
+			"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
+		})
+		wsHandler.NotifyOwner(device.OwnerID, msg)
+	})
+	offlineSyncer.Start()
+	defer offlineSyncer.Stop()
+
+	// 7.7 定期清理 30 天未上线设备的 Token（仅删 Token，不删设备）
+	startInactiveDeviceTokenCleanup(svcs.Device)
 
 	influxSvc := svcs.InfluxDB
 
@@ -255,8 +286,12 @@ func main() {
 	// 13. HTTP 服务器
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: r,
+		Addr:              addr,
+		Handler:           r,
+		ReadTimeout:       15 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {
@@ -307,8 +342,10 @@ func initEntClient(cfg *config.Config) (*ent.Client, error) {
 		db.SetMaxIdleConns(5)
 	}
 	db.SetConnMaxLifetime(time.Hour)
+	db.SetConnMaxIdleTime(5 * time.Minute)
 
-	return ent.NewClient(ent.Driver(drv)), nil
+	// debug 模式包装驱动，记录每条 SQL 的耗时（release/test 模式零开销）
+	return ent.NewClient(ent.Driver(debugDriver(drv, cfg.Server.Mode))), nil
 }
 
 func initRedis(cfg *config.Config) (*redis.Client, error) {
@@ -387,4 +424,33 @@ func repairZeroTimestamps(client *ent.Client) error {
 		SetCreateTime(time.Now()).
 		SetUpdateTime(time.Now()).
 		Exec(ctx)
+}
+
+// startInactiveDeviceTokenCleanup 后台任务：清理 30 天未上线设备的 Token（不删除设备记录）
+func startInactiveDeviceTokenCleanup(deviceSvc *service.DeviceService) {
+	const interval = 24 * time.Hour // 每天执行一次
+
+	run := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		cutoff := time.Now().Add(-service.DeviceTokenInactiveTTL)
+		n, err := deviceSvc.CleanupInactiveDeviceTokens(ctx, cutoff)
+		if err != nil {
+			zap.L().Warn("[Main] 清理离线设备Token失败", zap.Error(err))
+			return
+		}
+		if n > 0 {
+			zap.L().Info("[Main] 已清理离线设备Token", zap.Int("count", n))
+		}
+	}
+
+	go func() {
+		run() // 启动时先执行一次
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			run()
+		}
+	}()
 }

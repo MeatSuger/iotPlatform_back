@@ -3,23 +3,60 @@ package middleware
 import (
 	"time"
 
-	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
-// Logger 使用 ginzap 的结构化 HTTP 请求日志中间件
-// 使用全局 zap.L() logger（由 common.InitLogger 初始化）
-func Logger() gin.HandlerFunc {
-	return ginzap.GinzapWithConfig(zap.L(), &ginzap.Config{
-		TimeFormat: time.RFC3339,
-		UTC:        true,
-		SkipPaths:  []string{"/health"},
-	})
+// skipPaths 不记录访问日志的路径（健康检查等高频探测）
+var skipPaths = map[string]bool{
+	"/health": true,
 }
 
-// RecoveryWithZap 使用 Zap 的 panic 恢复中间件
-// 自动记录 panic 堆栈到 Zap（对应 common.InitLogger 初始化的全局 logger）
-func RecoveryWithZap() gin.HandlerFunc {
-	return ginzap.RecoveryWithZap(zap.L(), true)
+// Logger 使用 Zap 的结构化 HTTP 请求日志中间件
+//
+// 按响应状态码分级输出，配合 pkg/common.InitLogger 的 log-level 实现：
+//   - 5xx → error（生产环境可见）
+//   - 4xx → warn （生产环境可见，仅必要）
+//   - 2xx/3xx → debug（生产环境不输出；debug 环境显示全部请求明细）
+//
+// 效果：
+//   - debug 环境（log-level: debug）→ 记录所有请求，便于开发排查
+//   - 生产环境（log-level: info/warn）→ 只输出失败请求（4xx/5xx），成功请求静默
+func Logger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+		query := c.Request.URL.RawQuery
+
+		c.Next()
+
+		if skipPaths[path] {
+			return
+		}
+
+		status := c.Writer.Status()
+
+		fields := []zap.Field{
+			zap.Int("status", status),
+			zap.String("method", c.Request.Method),
+			zap.String("path", path),
+			zap.String("query", query),
+			zap.String("ip", c.ClientIP()),
+			zap.String("user-agent", c.Request.UserAgent()),
+			zap.Duration("latency", time.Since(start)),
+			zap.String("time", time.Now().Format(time.RFC3339)),
+		}
+		if len(c.Errors) > 0 {
+			fields = append(fields, zap.Strings("errors", c.Errors.Errors()))
+		}
+
+		switch {
+		case status >= 500:
+			zap.L().Error("[HTTP]", fields...)
+		case status >= 400:
+			zap.L().Warn("[HTTP]", fields...)
+		default:
+			zap.L().Debug("[HTTP]", fields...)
+		}
+	}
 }

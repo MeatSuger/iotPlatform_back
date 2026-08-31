@@ -87,7 +87,7 @@ func NewInfluxDBService(cfg InfluxDBConfig) *InfluxDBService {
 	if cfg.MaxIdleConnections > 0 {
 		config.MaxIdleConnections = cfg.MaxIdleConnections
 	} else {
-		config.MaxIdleConnections = 10
+		config.MaxIdleConnections = 50
 	}
 
 	client, err := influxdb3.New(config)
@@ -171,7 +171,7 @@ func (s *InfluxDBService) WriteSensors(ctx context.Context, data []SensorData) e
 		return fmt.Errorf("写入传感器数据失败 [count=%d]: %w", len(data), s.handleWriteError(err))
 	}
 
-	zap.S().Infof("[InfluxDB] 写入 %d 条传感器数据", len(data))
+	zap.S().Debugf("[InfluxDB] 写入 %d 条传感器数据", len(data))
 	return nil
 }
 
@@ -230,11 +230,15 @@ func (s *InfluxDBService) FlushBatched() {
 // start / end 指定时间范围，零值时默认 end=now, start=3天前。
 // 两层缓存策略（仅默认 3 天范围生效）：
 //  1. limit ≤ 10：直接从 Redis 传感器最新缓存返回（0次 InfluxDB 查询）
-//  2. limit > 10：先查 Redis 查询缓存（30s TTL），miss 则查 InfluxDB 并回填
+//  2. limit > 10：先查 Redis 查询缓存（15s TTL），miss 则查 InfluxDB 并回填
 func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID string, limit int, start, end time.Time) ([]map[string]any, error) {
 	if limit <= 0 {
 		limit = 50
 	}
+
+	// 先判断是否默认范围（start/end 均为零值 = 调用方未指定），再赋默认值。
+	// 必须在赋默认值之前判断，否则 isDefaultRange 恒为 false，缓存路径永不生效。
+	isDefaultRange := start.IsZero() && end.IsZero()
 
 	// 默认时间范围：最近 3 天
 	now := time.Now()
@@ -244,10 +248,6 @@ func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID
 	if start.IsZero() {
 		start = now.Add(-72 * time.Hour)
 	}
-
-	// 仅默认时间范围走 Redis 缓存（自定义时间范围直接查 InfluxDB）
-	// 零值 start/end = 调用方未指定 → 默认最近 3 天，可命中缓存
-	isDefaultRange := start.IsZero() && end.IsZero()
 
 	if isDefaultRange {
 		// 小 limit：直接从传感器最新缓存返回（上报时已写入，0 次 InfluxDB）
@@ -466,7 +466,7 @@ func (s *InfluxDBService) DownsampleAndWrite(ctx context.Context, deviceID strin
 		if err := s.client.WritePoints(ctx, downsampledPoints); err != nil {
 			return fmt.Errorf("降采样写入失败: %w", err)
 		}
-		zap.S().Infof("[InfluxDB] 降采样写入 %d 条 [device=%s]", len(downsampledPoints), deviceID)
+		zap.S().Debugf("[InfluxDB] 降采样写入 %d 条 [device=%s]", len(downsampledPoints), deviceID)
 	}
 
 	return nil

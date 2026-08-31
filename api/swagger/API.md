@@ -22,16 +22,23 @@
 
 - Header: `Authorization` — 用户登录后获得的 Token（UUID 格式）
 - 获取方式: `POST /api/user/login`
+- 并发限制: 同一账号最多同时在线 5 端，每端 Token 独立；超出后最旧端被自动下线
 
 ### 设备认证（DeviceAuth）
 
 - Header: `X-Device-Token` — 设备注册后通过 login 接口获取的 Token
 - 获取方式: `GET /api/device/{deviceId}/login`（使用设备 6 位 hex ID 认证）
+- 唯一性: 一个 deviceId 只对应一个有效 Token，重复获取会顶掉旧 Token（旧 Token 立即失效）
+- 过期策略: 设备 Token 永不过期；设备 **30 天未上线** 会被自动删除 Token（**不删除设备**），重新登录即可获取新 Token
 
 ### 设备 ID 认证（DeviceIDAuth）
 
 - 路径参数: `{deviceId}` — 6 位十六进制设备 ID
 - 用途: 设备获取 Token 时的身份验证（无需额外 Token）
+
+### Cookie 安全
+
+登录 / 获取设备 Token 后下发的认证 Cookie 统一为 `httpOnly` + `SameSite=Lax`，生产环境（`release`）自动启用 `secure`。
 
 ---
 
@@ -256,6 +263,8 @@ Content-Type: application/json
 {"name": "新名字", "email": "new@email.com"}
 ```
 
+> `status` 字段仅管理员/超级管理员可修改；普通用户传 `status` 会返回 `403`。
+
 ### 3.6 获取个人信息 `GET /api/user/profile?id=1`
 
 需要 `Authorization` Header。
@@ -323,6 +332,8 @@ Content-Type: application/json
 ```
 
 > 获取的 `token` 用于 WebSocket 连接和数据上报的 `X-Device-Token` Header。
+>
+> 一个 deviceId 只对应一个有效 Token：重复调用本接口会顶掉旧 Token，旧 Token 立即失效。
 
 ### 4.3 获取设备详情 `GET /api/device/{deviceId}/Data`
 

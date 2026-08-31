@@ -47,8 +47,8 @@ func (ctl *DeviceController) Register(c *gin.Context) {
 		return
 	}
 
-	// Set-Cookie（对齐 Java DeviceUtil：X-Device-Token Cookie）
-	c.SetCookie("X-Device-Token", resp.DeviceToken, 100*365*24*3600, "/", "", false, false)
+	// Set-Cookie（httpOnly + 生产环境 secure + SameSite=Lax）
+	common.SetAuthCookie(c, "X-Device-Token", resp.DeviceToken, 100*365*24*3600)
 
 	common.Success(c, resp)
 }
@@ -144,8 +144,8 @@ func (ctl *DeviceController) GetDeviceToken(c *gin.Context) {
 		return
 	}
 
-	// Set-Cookie（对齐 Java DeviceUtil：X-Device-Token Cookie）
-	c.SetCookie("X-Device-Token", token, 100*365*24*3600, "/", "", false, false)
+	// Set-Cookie（httpOnly + 生产环境 secure + SameSite=Lax）
+	common.SetAuthCookie(c, "X-Device-Token", token, 100*365*24*3600)
 
 	common.Success(c, gin.H{
 		"deviceId":    deviceID,

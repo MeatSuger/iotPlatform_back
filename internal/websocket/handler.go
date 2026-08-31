@@ -92,11 +92,21 @@ func (h *WsHandler) SetDeviceStatusUpdater(u DeviceStatusUpdater) {
 	h.deviceStatusUpdater = u
 }
 
+// IsDeviceOnline 判断设备当前是否有活跃的 WS 长连接（供离线同步器误判保护）
+func (h *WsHandler) IsDeviceOnline(deviceID string) bool {
+	return h.hub.IsDeviceOnline(deviceID)
+}
+
+// NotifyOwner 向指定 owner 的所有管理端连接推送消息（供离线同步器通知）
+func (h *WsHandler) NotifyOwner(ownerID uint, message []byte) {
+	h.hub.SendToOwner(ownerID, message)
+}
+
 // Handle 处理WebSocket连接（MQTT桥接，已不再使用，保留兼容）
 func (h *WsHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		zap.S().Infof("[WebSocket] 升级失败: %v", err)
+		zap.S().Warnf("[WebSocket] 升级失败: %v", err)
 		return
 	}
 
@@ -156,7 +166,7 @@ func (h *WsHandler) HandleUser(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		zap.S().Infof("[UserWS] 升级失败 [user=%d]: %v", ownerID, err)
+		zap.S().Warnf("[UserWS] 升级失败 [user=%d]: %v", ownerID, err)
 		return
 	}
 
@@ -193,7 +203,7 @@ func (h *WsHandler) readUserPump(client *Client) {
 		_, message, err := client.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				zap.S().Infof("[UserWS] 读取错误 [user=%d]: %v", client.OwnerID, err)
+				zap.S().Warnf("[UserWS] 读取错误 [user=%d]: %v", client.OwnerID, err)
 			}
 			break
 		}
@@ -247,7 +257,7 @@ func (h *WsHandler) readUserPump(client *Client) {
 			continue
 		}
 
-		zap.S().Infof("[UserWS] 未知消息 [user=%d, type=%s]", client.OwnerID, envelope.Type)
+		zap.S().Warnf("[UserWS] 未知消息 [user=%d, type=%s]", client.OwnerID, envelope.Type)
 	}
 }
 
@@ -280,7 +290,7 @@ func (h *WsHandler) readPump(client *Client) {
 		_, _, err := client.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				zap.S().Infof("[WebSocket] 读取错误: %v", err)
+				zap.S().Warnf("[WebSocket] 读取错误: %v", err)
 			}
 			break
 		}
@@ -329,7 +339,7 @@ func (h *WsHandler) HandleDevice(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		zap.S().Infof("[WebSocket] 设备升级失败 [device=%s]: %v", deviceID, err)
+		zap.S().Warnf("[WebSocket] 设备升级失败 [device=%s]: %v", deviceID, err)
 		return
 	}
 
@@ -374,7 +384,7 @@ func (h *WsHandler) readDevicePump(client *Client) {
 		_, message, err := client.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				zap.S().Infof("[WebSocket] 设备读取错误 [device=%s]: %v", client.DeviceID, err)
+				zap.S().Warnf("[WebSocket] 设备读取错误 [device=%s]: %v", client.DeviceID, err)
 			}
 			break
 		}
@@ -388,7 +398,7 @@ func (h *WsHandler) readDevicePump(client *Client) {
 			msgType = envelope.Type
 		}
 
-		zap.S().Infof("[WebSocket] 设备上行消息 [device=%s, type=%s, size=%d]", client.DeviceID, msgType, len(message))
+		zap.S().Debugf("[WebSocket] 设备上行消息 [device=%s, type=%s, size=%d]", client.DeviceID, msgType, len(message))
 
 		// 回调上层业务处理
 		if h.onDeviceMessage != nil {
