@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -146,4 +147,117 @@ func TestDeviceDataBuffer_Defaults(t *testing.T) {
 	assert.Equal(t, "buffer:device_reports", defaultBufferKey)
 	assert.Equal(t, 200, defaultBatchSize)
 	assert.Equal(t, 200*time.Millisecond, defaultFlushInterval)
+}
+
+// ========================================
+// 真实 Redis（miniredis）缓冲队列测试
+// ========================================
+
+// fakeWriter 记录 FlushReports 调用，可注入失败
+type fakeWriter struct {
+	reports [][]BufferedReport
+	fail    error
+}
+
+func (w *fakeWriter) FlushReports(_ context.Context, reports []BufferedReport) error {
+	w.reports = append(w.reports, reports)
+	return w.fail
+}
+
+func testReport(deviceID string, ts int64) BufferedReport {
+	return BufferedReport{
+		DeviceID:  deviceID,
+		Sensors:   []SensorDataDTO{{Name: "temperature", Type: "number", Value: 25.5, Timestamp: ts}},
+		Timestamp: ts,
+	}
+}
+
+func TestDeviceDataBuffer_RealDrain(t *testing.T) {
+	mr, rdb := newTestRedis(t)
+	writer := &fakeWriter{}
+	buf := NewDeviceDataBuffer(rdb, writer)
+	buf.flushInterval = 20 * time.Millisecond
+
+	now := time.Now().UnixMilli()
+	assert.NoError(t, buf.Enqueue(context.Background(), testReport("dev1", now)))
+	assert.NoError(t, buf.Enqueue(context.Background(), testReport("dev2", now)))
+
+	buf.Start()
+	defer buf.Stop()
+
+	// 等待 worker 至少排空一轮
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		len, _ := buf.QueueLen(context.Background())
+		if len == 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	assert.Equal(t, int64(0), mustQueueLen(t, buf))
+
+	// 两条上报均已刷给 writer
+	total := 0
+	for _, batch := range writer.reports {
+		total += len(batch)
+	}
+	assert.Equal(t, 2, total)
+	_ = mr
+}
+
+func TestDeviceDataBuffer_FlushErrorRequeues(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	writer := &fakeWriter{fail: errors.New("influx down")}
+	buf := NewDeviceDataBuffer(rdb, writer)
+	buf.flushInterval = 20 * time.Millisecond
+
+	now := time.Now().UnixMilli()
+	assert.NoError(t, buf.Enqueue(context.Background(), testReport("dev1", now)))
+
+	buf.Start()
+	time.Sleep(150 * time.Millisecond)
+	buf.Stop()
+
+	// 数据被重新推回队列（requeue 保护，不丢数据）
+	len, err := buf.QueueLen(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), len)
+}
+
+func TestDeviceDataBuffer_DrainOnStop(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	writer := &fakeWriter{}
+	buf := NewDeviceDataBuffer(rdb, writer)
+	buf.flushInterval = time.Hour // 不触发定时排空，仅 Stop 排空
+
+	now := time.Now().UnixMilli()
+	assert.NoError(t, buf.Enqueue(context.Background(), testReport("dev1", now)))
+
+	buf.Start()
+	buf.Stop()
+
+	total := 0
+	for _, batch := range writer.reports {
+		total += len(batch)
+	}
+	assert.Equal(t, 1, total)
+	assert.Equal(t, int64(0), mustQueueLen(t, buf))
+}
+
+func TestDeviceDataBuffer_RPopError(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	writer := &fakeWriter{}
+	buf := NewDeviceDataBuffer(rdb, writer)
+	buf.flushInterval = 20 * time.Millisecond
+
+	buf.Start()
+	time.Sleep(80 * time.Millisecond)
+	buf.Stop() // 空队列 + Redis 正常：无副作用
+}
+
+func mustQueueLen(t *testing.T, buf *DeviceDataBuffer) int64 {
+	t.Helper()
+	n, err := buf.QueueLen(context.Background())
+	assert.NoError(t, err)
+	return n
 }

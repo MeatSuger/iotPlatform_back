@@ -7,8 +7,6 @@
 package main
 
 import (
-	"time"
-
 	"github.com/redis/go-redis/v9"
 	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/repository"
@@ -17,6 +15,7 @@ import (
 	"iot-platform.local/internal/websocket"
 	"iot-platform.local/pkg/cache"
 	"iot-platform.local/pkg/config"
+	"time"
 )
 
 import (
@@ -33,13 +32,14 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 	deviceRepo := repository.NewDeviceRepo(entClient)
 	deviceService := service.NewDeviceService(deviceRepo, redisCache)
 	influxDBService := provideInfluxDBService()
-	influxDBService.SetCache(redisCache)
 	deviceReportService := service.NewDeviceReportService(deviceRepo, influxDBService, redisCache, deviceService)
-	hub := websocket.NewHub()
 	downlinkCmdRepo := repository.NewDownlinkCmdRepo(entClient)
+	hub := websocket.NewHub()
 	downlinkService := service.NewDownlinkService(downlinkCmdRepo, deviceRepo, rdb, hub)
-	services := provideRouterServices(userService, deviceService, deviceReportService, influxDBService, downlinkService)
-	wsHandler := websocket.NewWsHandler(hub) // 网关架构下不需要 MqttPublisher
+	deviceConfigRepo := repository.NewDeviceConfigRepo(entClient)
+	deviceConfigService := service.NewDeviceConfigService(deviceConfigRepo, downlinkService)
+	services := provideRouterServices(userService, deviceService, deviceReportService, influxDBService, downlinkService, deviceConfigService)
+	wsHandler := websocket.NewWsHandler(hub)
 	appComponents := &AppComponents{
 		Services:  services,
 		WsHandler: wsHandler,
@@ -81,6 +81,7 @@ func provideRouterServices(
 	reportSvc *service.DeviceReportService,
 	influxSvc *service.InfluxDBService,
 	downlinkSvc *service.DownlinkService,
+	configSvc *service.DeviceConfigService,
 ) *router.Services {
 	return &router.Services{
 		User:     userSvc,
@@ -88,5 +89,6 @@ func provideRouterServices(
 		Report:   reportSvc,
 		InfluxDB: influxSvc,
 		Downlink: downlinkSvc,
+		Config:   configSvc,
 	}
 }

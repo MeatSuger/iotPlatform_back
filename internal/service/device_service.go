@@ -24,7 +24,10 @@ func NewDeviceService(repo *repository.DeviceRepo, cache *cache.RedisCache) *Dev
 	return &DeviceService{repo: repo, cache: cache}
 }
 
-type DeviceRegisterRequest struct {
+// DeviceParameters 设备创建/更新请求体
+// 注意：deviceId 与 ownerId 不在请求体中，由服务端从路径参数/登录态推导，
+// 客户端无法通过请求体篡改归属或设备ID。
+type DeviceParameters struct {
 	DeviceName      string `json:"deviceName" binding:"required"`
 	DeviceType      string `json:"deviceType"`
 	FirmwareVersion string `json:"firmwareVersion"`
@@ -33,13 +36,25 @@ type DeviceRegisterRequest struct {
 	Location        string `json:"location"`
 }
 
+// DeviceUpdateParameters 设备增量更新请求体
+// 全部字段为指针：仅出现在请求体中的字段会被更新，未传字段保持数据库原值。
+// 与 DeviceParameters（注册，全量必填）区分，避免空串覆盖已有数据。
+type DeviceUpdateParameters struct {
+	DeviceName      *string `json:"deviceName"`
+	DeviceType      *string `json:"deviceType"`
+	FirmwareVersion *string `json:"firmwareVersion"`
+	IPAddress       *string `json:"ipAddress"`
+	MacAddress      *string `json:"macAddress"`
+	Location        *string `json:"location"`
+}
+
 type DeviceRegisterResponse struct {
 	DeviceID    string `json:"deviceId"`
 	DeviceToken string `json:"deviceToken"`
 }
 
 // Register 注册设备（Write-Through：写DB后同步预热缓存）
-func (s *DeviceService) Register(ctx context.Context, ownerID uint, req DeviceRegisterRequest) (*DeviceRegisterResponse, error) {
+func (s *DeviceService) Register(ctx context.Context, ownerID uint, req DeviceParameters) (*DeviceRegisterResponse, error) {
 	var deviceID string
 	now := time.Now()
 
@@ -92,6 +107,73 @@ func (s *DeviceService) Register(ctx context.Context, ownerID uint, req DeviceRe
 	return &DeviceRegisterResponse{DeviceID: deviceID, DeviceToken: token}, nil
 }
 
+// Update 增量更新设备（Write-Through：写DB后同步预热缓存）
+// 仅更新请求体中出现的字段，未传字段保持数据库原值。
+// ownerID>0 表示用户操作（校验归属）；ownerID=0 表示设备自更新（跳过归属校验）。
+func (s *DeviceService) Update(ctx context.Context, deviceID string, ownerID uint, req DeviceUpdateParameters) (*ent.Device, error) {
+	deviceID = util.NormalizeDeviceID(deviceID)
+
+	fields := repository.DeviceUpdateFields{
+		DeviceName:      req.DeviceName,
+		DeviceType:      req.DeviceType,
+		FirmwareVersion: req.FirmwareVersion,
+		IPAddress:       req.IPAddress,
+		MACAddress:      req.MacAddress,
+		Location:        req.Location,
+	}
+	if fields.IsEmpty() {
+		return nil, fmt.Errorf("无更新字段")
+	}
+
+	// 归属校验（仅用户操作）：先查该用户的设备列表缓存，命中即有权；
+	// 缓存未命中（列表缓存陈旧/未包含）时回源 DB 点查，避免误拒。
+	if ownerID > 0 {
+		zap.L().Debug("user info",
+			zap.Uint("id", ownerID),
+			zap.String("deviceID", deviceID),
+		)
+		devices, err := s.ListByOwnerID(ctx, ownerID)
+		if err != nil {
+			return nil, fmt.Errorf("查询设备列表失败: %w", err)
+		}
+		var owned bool
+		for _, d := range devices {
+			if d != nil && d.ID == deviceID {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			// DB 回源兜底：设备确实存在但属于他人 → 无权；不存在 → 设备不存在
+			dev, err := s.repo.GetByDeviceID(ctx, deviceID)
+			if err != nil {
+				return nil, fmt.Errorf("设备不存在")
+			}
+			if dev.OwnerID != ownerID {
+				return nil, fmt.Errorf("无权操作该设备")
+			}
+		}
+	}
+
+	// 仅更新可编辑字段；ID 用于定位且不可被修改（schema 中 Immutable），OwnerID 不传入 → 归属不可篡改
+	if err := s.repo.Update(ctx, deviceID, fields); err != nil {
+		return nil, fmt.Errorf("更新设备失败: %w", err)
+	}
+
+	// 回读最新数据并预热缓存（Write-Through）
+	dev, err := s.repo.GetByDeviceID(ctx, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("获取设备失败: %w", err)
+	}
+	if dev == nil {
+		return nil, fmt.Errorf("设备不存在")
+	}
+	_ = s.cache.CacheDevice(ctx, deviceID, dev)
+	_ = s.cache.EvictDeviceListCache(ctx, dev.OwnerID)
+
+	return dev, nil
+}
+
 // GetByDeviceID 获取设备（Cache-Aside：L1本地 → L2 Redis → PostgreSQL回源）
 // 参考：seaguest/cache 的 loader 模式 + go-redis/cache 的 Cache-Aside 模式
 func (s *DeviceService) GetByDeviceID(ctx context.Context, deviceID string) (*ent.Device, error) {
@@ -135,7 +217,7 @@ func (s *DeviceService) Delete(ctx context.Context, deviceID string) error {
 		return err
 	}
 
-	// 同步失效所有相关缓存（不阻塞响应，异步发布 Pub-Sub 通知其他实例）
+	// 同步失效本实例所有相关缓存，并通过 Pub-Sub 通知其他实例失效其 L1
 	_ = s.cache.EvictDeviceCache(ctx, deviceID)
 	_ = s.cache.EvictSensorRecentCache(ctx, deviceID)
 	_ = s.cache.EvictDeviceStatusCache(ctx, deviceID)
@@ -193,14 +275,14 @@ func (s *DeviceService) CleanupInactiveDeviceTokens(ctx context.Context, inactiv
 	return cleaned, nil
 }
 
+// UpdateStatus 更新设备在线状态（Write-Through 同步轻量状态 Hash）
 func (s *DeviceService) UpdateStatus(ctx context.Context, deviceID, status string) error {
 	deviceID = util.NormalizeDeviceID(deviceID)
 	if err := s.repo.UpdateLastActive(ctx, deviceID, status); err != nil {
 		return err
 	}
-	// 同步更新设备缓存中的状态（Write-Through）：
-	// 不失效整个设备缓存（避免下一次读取回源 DB），而是同步状态 Hash
-	// 与设备 JSON 缓存，确保离线后状态立即反映（否则最长 10 分钟显示 ONLINE）
+	// 同步状态 Hash（不失效设备 JSON 缓存，避免下次读取回源 DB）；
+	// GetDeviceStatus 读取时以 Hash 覆盖 JSON 中的旧状态，离线后立即反映
 	nowMs := time.Now().UnixMilli()
 	_ = s.cache.CacheDeviceStatus(ctx, deviceID, status, nowMs)
 	return nil

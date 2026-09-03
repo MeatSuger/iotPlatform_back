@@ -60,9 +60,7 @@ func (s *DeviceReportService) SetBuffer(buf *DeviceDataBuffer) {
 	s.buffer = buf
 }
 
-// schedulePGUpdate 防抖批量更新 PostgreSQL 设备活跃时间
-// 替代原先每个请求 spawn 一个 goroutine 的做法
-// 高并发下多个请求的活跃时间更新被合并为一次批量执行
+// schedulePGUpdate 防抖批量更新 PostgreSQL 设备活跃时间（合并 5s 窗口内多次上报为一次批量更新）
 func (s *DeviceReportService) schedulePGUpdate(deviceID string) {
 	now := time.Now()
 
@@ -132,7 +130,7 @@ func (s *DeviceReportService) reportStatusFast(ctx context.Context, deviceID str
 	// 1. L1 本地缓存：快速确认设备存在（避免 Redis GET + JSON Unmarshal）
 	localKey := "dev:" + deviceID
 	if _, ok := s.localCache.Get(localKey); !ok {
-		// 首次或缓存过期：从 Redis 读取设备信息（仅一次）
+		// 缓存 miss：经 GetByDeviceID 全链路加载（L1/L2 → DB）
 		device, err := s.deviceSvc.GetByDeviceID(ctx, deviceID)
 		if err != nil {
 			return err
@@ -152,7 +150,6 @@ func (s *DeviceReportService) reportStatusFast(ctx context.Context, deviceID str
 		}
 	}
 
-	// 序列化缓冲报告
 	bufferData, _ := json.Marshal(BufferedReport{
 		DeviceID:  deviceID,
 		Sensors:   sensorDTOs,
@@ -169,14 +166,13 @@ func (s *DeviceReportService) reportStatusFast(ctx context.Context, deviceID str
 			s.writeSensorsSync(deviceID, dto)
 		}
 	} else {
-		// 无缓冲器：Pipeline 仅更新状态 + 传感器
+		// 无缓冲器：逐条更新状态与传感器缓存，并同步写 InfluxDB
 		s.cache.CacheDeviceStatus(ctx, deviceID, "ONLINE", nowMs)
 		s.cache.CacheSensorRecent(ctx, deviceID, dto.Sensors)
 		s.writeSensorsSync(deviceID, dto)
 	}
 
-	// 失效查询缓存（新数据入库，旧查询结果过期）
-	// 异步执行，不阻塞响应
+	// 失效查询缓存（新数据入库，旧查询结果过期），异步执行不阻塞响应
 	go func() {
 		_ = s.cache.EvictSensorQueryCache(context.Background(), deviceID)
 	}()
@@ -217,11 +213,10 @@ func (s *DeviceReportService) FlushReports(_ context.Context, reports []Buffered
 		return nil
 	}
 
-	// 收集所有传感器数据点
+	// 收集所有传感器数据点（优先用传感器自身时间戳，再用 report 级别时间戳）
 	var allData []SensorData
 	for _, report := range reports {
 		for _, sensor := range report.Sensors {
-			// 优先用传感器自身时间戳，再用 report 级别时间戳
 			ts := sensor.Timestamp
 			if ts == 0 {
 				ts = report.Timestamp
@@ -244,6 +239,7 @@ func (s *DeviceReportService) FlushReports(_ context.Context, reports []Buffered
 	return nil
 }
 
+// Heartbeat 设备心跳（带 Token 校验，供非 HTTP 入口调用）
 func (s *DeviceReportService) Heartbeat(ctx context.Context, deviceID, token string) error {
 	deviceID = util.NormalizeDeviceID(deviceID)
 
@@ -293,6 +289,7 @@ func (s *DeviceReportService) heartbeatFast(ctx context.Context, deviceID string
 	return nil
 }
 
+// GetDeviceStatus 获取设备最新状态（设备基础信息 + 状态 Hash 覆盖 + 传感器缓存）
 func (s *DeviceReportService) GetDeviceStatus(ctx context.Context, deviceID string) (*entity.DeviceStatus, error) {
 	deviceID = util.NormalizeDeviceID(deviceID)
 
@@ -334,6 +331,7 @@ func (s *DeviceReportService) GetDeviceStatus(ctx context.Context, deviceID stri
 	}, nil
 }
 
+// EvictSensorRecentCache 失效设备传感器最新数据缓存
 func (s *DeviceReportService) EvictSensorRecentCache(ctx context.Context, deviceID string) error {
 	return s.cache.EvictSensorRecentCache(ctx, util.NormalizeDeviceID(deviceID))
 }

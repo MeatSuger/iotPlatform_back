@@ -26,9 +26,8 @@ type AckService interface {
 	AckCmd(ctx context.Context, cmdID uint) error
 }
 
-// SetupDeviceWS 配置设备 WebSocket 的 Token 校验器和上行消息处理器
-// 将 main 函数中散布的 WebSocket 初始化逻辑收拢到一处
-// 同时设置 owner 解析器，用于设备消息向 owner 管理端转发
+// SetupDeviceWS 配置设备 WebSocket 的 Token 校验器、上行消息处理器及上线/下线通知回调
+// 将 main 中散布的 WebSocket 初始化逻辑收拢到一处
 func (h *WsHandler) SetupDeviceWS(tokenProvider DeviceTokenProvider, report ReportService, ack AckService) {
 	// Token 校验器
 	h.SetDeviceTokenValidator(func(token string) (string, error) {

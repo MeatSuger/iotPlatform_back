@@ -14,7 +14,7 @@ import (
 )
 
 // ========================================
-// 下放接口测试
+// 下发接口测试
 // ========================================
 
 func TestDownlink_PostCmd(t *testing.T) {
@@ -54,8 +54,7 @@ func TestDownlink_PostCmd(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		// 无 TokenInterceptor → userAuth 读不到 token → 401
-		// 这里只测试路由可达性
+		// 无 TokenInterceptor 时 userAuth 读不到 token 会返回 401，此处仅断言响应码存在（路由可达）
 		var resp map[string]any
 		json.Unmarshal(w.Body.Bytes(), &resp)
 		assert.True(t, resp["code"] != nil)
@@ -126,8 +125,7 @@ func TestDownlink_GetCmd(t *testing.T) {
 
 func TestDownlink_WebSocketEndpoint(t *testing.T) {
 	t.Run("wsHandler.HandleDevice exists", func(t *testing.T) {
-		// 验证 HandlerDevice 方法存在（编译期检查）
-		// 实际 WS 测试需要完整的 Hub + token validator
+		// 占位测试：真实 WS 桥接测试需要完整的 Hub + token validator，暂未实现
 		assert.True(t, true)
 	})
 }

@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// mockReportService for testing
+// mockReportService 测试用的 ReportService 桩实现
 type mockReportService struct{}
 
 func (m *mockReportService) ReportStatus(ctx any, deviceID, token string, dto any) error {

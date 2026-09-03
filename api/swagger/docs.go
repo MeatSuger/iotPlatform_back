@@ -23,241 +23,7 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/api/data/list": {
-            "get": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "data"
-                ],
-                "summary": "通用数据查询入口",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/data/ping": {
-            "post": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "data"
-                ],
-                "summary": "InfluxDB连通性检查",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/data/{deviceId}/Data": {
-            "post": {
-                "security": [
-                    {
-                        "DeviceAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "data"
-                ],
-                "summary": "上报传感器数据",
-                "parameters": [
-                    {
-                        "description": "传感器数据",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/entity.DeviceStatusDTO"
-                        }
-                    },
-                    {
-                        "type": "string",
-                        "description": "设备ID",
-                        "name": "deviceId",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/data/{deviceId}/Data/list": {
-            "get": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "data"
-                ],
-                "summary": "查询设备传感器数据",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "设备ID",
-                        "name": "deviceId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "description": "数量限制",
-                        "name": "limit",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/data/{deviceId}/heartbeat": {
-            "post": {
-                "security": [
-                    {
-                        "DeviceAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "data"
-                ],
-                "summary": "设备心跳",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "设备ID",
-                        "name": "deviceId",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/data/{deviceId}/ping": {
-            "post": {
-                "security": [
-                    {
-                        "DeviceAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "data"
-                ],
-                "summary": "设备心跳",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "设备ID",
-                        "name": "deviceId",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/device/list": {
+        "/api/devices": {
             "get": {
                 "security": [
                     {
@@ -273,12 +39,26 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
-                "summary": "查询用户设备列表",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/common.ApiResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/ent.Device"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -288,9 +68,7 @@ const docTemplate = `{
                         }
                     }
                 }
-            }
-        },
-        "/api/device/register": {
+            },
             "post": {
                 "security": [
                     {
@@ -306,7 +84,6 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
-                "summary": "注册设备",
                 "parameters": [
                     {
                         "description": "设备注册请求参数",
@@ -314,7 +91,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/service.DeviceRegisterRequest"
+                            "$ref": "#/definitions/service.DeviceParameters"
                         }
                     }
                 ],
@@ -322,7 +99,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/common.ApiResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/service.DeviceRegisterResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -334,7 +123,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/device/{deviceId}/Data": {
+        "/api/devices/{deviceId}": {
             "get": {
                 "security": [
                     {
@@ -350,7 +139,6 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
-                "summary": "获取设备详情",
                 "parameters": [
                     {
                         "type": "string",
@@ -376,7 +164,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/device/{deviceId}/cmd": {
+        "/api/devices/{deviceId}/commands": {
             "get": {
                 "security": [
                     {
@@ -392,7 +180,6 @@ const docTemplate = `{
                 "tags": [
                     "device"
                 ],
-                "summary": "设备拉取待消费命令",
                 "parameters": [
                     {
                         "type": "string",
@@ -432,7 +219,6 @@ const docTemplate = `{
                 "tags": [
                     "device"
                 ],
-                "summary": "向设备下发命令",
                 "parameters": [
                     {
                         "type": "string",
@@ -467,7 +253,43 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/device/{deviceId}/delete": {
+        "/api/devices/{deviceId}/config": {
+            "get": {
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            },
             "post": {
                 "security": [
                     {
@@ -483,7 +305,106 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
-                "summary": "删除设备",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "配置内容",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/entity.DeviceConfigSaveRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/devices/{deviceId}/config/report": {
+            "post": {
+                "security": [
+                    {
+                        "DeviceAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "实际生效配置与版本",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/entity.DeviceConfigReport"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/devices/{deviceId}/delete": {
+            "post": {
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
                 "parameters": [
                     {
                         "type": "string",
@@ -509,7 +430,48 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/device/{deviceId}/login": {
+        "/api/devices/{deviceId}/heartbeat": {
+            "post": {
+                "security": [
+                    {
+                        "DeviceAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "data"
+                ],
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/devices/{deviceId}/login": {
             "get": {
                 "description": "使用设备6位hex ID认证（路径参数），无需额外Token",
                 "consumes": [
@@ -521,7 +483,6 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
-                "summary": "获取设备Token",
                 "parameters": [
                     {
                         "type": "string",
@@ -547,11 +508,11 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/mqtt/client/connect": {
+        "/api/devices/{deviceId}/ping": {
             "post": {
                 "security": [
                     {
-                        "UserAuth": []
+                        "DeviceAuth": []
                     }
                 ],
                 "consumes": [
@@ -561,80 +522,67 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "mqtt"
+                    "data"
                 ],
-                "summary": "连接MQTT Broker",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/mqtt/client/disconnect": {
-            "post": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "mqtt"
-                ],
-                "summary": "断开MQTT连接",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/mqtt/client/messages": {
-            "get": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "mqtt"
-                ],
-                "summary": "获取最近的MQTT消息",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/devices/{deviceId}/sensorData": {
+            "get": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "data"
+                ],
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path"
+                    },
+                    {
                         "type": "integer",
-                        "description": "数量限制",
+                        "description": "数量限制，默认50",
                         "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "起始时间（RFC3339），默认3天前",
+                        "name": "start",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "结束时间（RFC3339），默认当前时间",
+                        "name": "end",
                         "in": "query"
                     }
                 ],
@@ -652,174 +600,7 @@ const docTemplate = `{
                         }
                     }
                 }
-            }
-        },
-        "/api/mqtt/client/publish": {
-            "post": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "mqtt"
-                ],
-                "summary": "发布消息",
-                "parameters": [
-                    {
-                        "description": "发布消息请求参数",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/mqtt.PublishRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/mqtt/client/status": {
-            "get": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "mqtt"
-                ],
-                "summary": "获取MQTT客户端状态",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/mqtt/client/subscribe": {
-            "post": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "mqtt"
-                ],
-                "summary": "订阅主题",
-                "parameters": [
-                    {
-                        "description": "订阅请求参数",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/mqtt.SubscribeRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/mqtt/client/unsubscribe": {
-            "post": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "mqtt"
-                ],
-                "summary": "取消订阅",
-                "parameters": [
-                    {
-                        "description": "取消订阅请求参数",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/mqtt.TopicRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/mqtt/{deviceId}/Data": {
+            },
             "post": {
                 "security": [
                     {
@@ -833,9 +614,8 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "mqtt"
+                    "data"
                 ],
-                "summary": "MQTT方式上报传感器数据",
                 "parameters": [
                     {
                         "description": "传感器数据",
@@ -870,13 +650,9 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/mqtt/{deviceId}/heartbeat": {
-            "post": {
-                "security": [
-                    {
-                        "DeviceAuth": []
-                    }
-                ],
+        "/api/devices/{deviceId}/token": {
+            "get": {
+                "description": "使用设备6位hex ID认证（路径参数），无需额外Token",
                 "consumes": [
                     "application/json"
                 ],
@@ -884,13 +660,12 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "mqtt"
+                    "devices"
                 ],
-                "summary": "MQTT方式心跳",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "设备ID",
+                        "description": "设备ID（6位hex）",
                         "name": "deviceId",
                         "in": "path",
                         "required": true
@@ -912,55 +687,14 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/mqtt/{deviceId}/ping": {
+        "/api/devices/{deviceId}/update": {
             "post": {
-                "security": [
-                    {
-                        "DeviceAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "mqtt"
-                ],
-                "summary": "MQTT方式心跳",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "设备ID",
-                        "name": "deviceId",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/user": {
-            "put": {
                 "security": [
                     {
                         "UserAuth": []
                     }
                 ],
+                "description": "仅设备所有者或设备自身可更新；增量更新，仅请求体中出现的字段会被更新，未传字段保持原值",
                 "consumes": [
                     "application/json"
                 ],
@@ -968,17 +702,23 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "users"
+                    "devices"
                 ],
-                "summary": "更新用户信息",
                 "parameters": [
                     {
-                        "description": "用户信息",
+                        "type": "string",
+                        "description": "设备ID（6位hex）",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "待更新的设备字段（至少一个）",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/ent.User"
+                            "$ref": "#/definitions/service.DeviceUpdateParameters"
                         }
                     }
                 ],
@@ -994,7 +734,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/ent.User"
+                                            "$ref": "#/definitions/ent.Device"
                                         }
                                     }
                                 }
@@ -1010,8 +750,8 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/user/delete": {
-            "post": {
+        "/api/users": {
+            "get": {
                 "security": [
                     {
                         "UserAuth": []
@@ -1026,78 +766,26 @@ const docTemplate = `{
                 "tags": [
                     "users"
                 ],
-                "summary": "删除用户",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "用户ID",
-                        "name": "id",
-                        "in": "query",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
+                        "description": "页码（从0开始，仅 pageSize \u003e 0 时生效）",
+                        "name": "pageNum",
+                        "in": "query"
                     },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/user/isLogin": {
-            "get": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "users",
-                    "public"
-                ],
-                "summary": "检查登录状态",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/user/list": {
-            "get": {
-                "security": [
                     {
-                        "UserAuth": []
+                        "type": "integer",
+                        "description": "每页数量（\u003e0 时返回分页 envelope，缺省返回全量数组）",
+                        "name": "pageSize",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "用户名（模糊匹配，仅分页时生效）",
+                        "name": "name",
+                        "in": "query"
                     }
                 ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "users"
-                ],
-                "summary": "列出所有用户",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -1127,9 +815,7 @@ const docTemplate = `{
                         }
                     }
                 }
-            }
-        },
-        "/api/user/login": {
+            },
             "post": {
                 "consumes": [
                     "application/json"
@@ -1141,7 +827,73 @@ const docTemplate = `{
                     "users",
                     "public"
                 ],
-                "summary": "用户登录",
+                "parameters": [
+                    {
+                        "description": "注册请求参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.RegisterRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/users/isLogin": {
+            "get": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users",
+                    "public"
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/users/login": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users",
+                    "public"
+                ],
                 "parameters": [
                     {
                         "description": "登录请求参数",
@@ -1181,7 +933,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/user/logout": {
+        "/api/users/logout": {
             "post": {
                 "security": [
                     {
@@ -1197,7 +949,6 @@ const docTemplate = `{
                 "tags": [
                     "users"
                 ],
-                "summary": "退出登录",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -1214,7 +965,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/user/page": {
+        "/api/users/{userId}": {
             "get": {
                 "security": [
                     {
@@ -1230,79 +981,13 @@ const docTemplate = `{
                 "tags": [
                     "users"
                 ],
-                "summary": "分页查询用户",
                 "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "页码（从0开始）",
-                        "name": "pageNum",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "每页数量",
-                        "name": "pageSize",
-                        "in": "query"
-                    },
                     {
                         "type": "string",
-                        "description": "用户名",
-                        "name": "name",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/common.ApiResponse"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "type": "object",
-                                            "additionalProperties": true
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common.ApiResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/user/profile": {
-            "get": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "users"
-                ],
-                "summary": "获取用户信息",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "用户ID",
-                        "name": "id",
-                        "in": "query"
+                        "description": "用户ID（me=当前登录用户）",
+                        "name": "userId",
+                        "in": "path",
+                        "required": true
                     }
                 ],
                 "responses": {
@@ -1333,8 +1018,13 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/user/register": {
+        "/api/users/{userId}/delete": {
             "post": {
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -1342,18 +1032,64 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "users",
-                    "public"
+                    "users"
                 ],
-                "summary": "用户注册",
                 "parameters": [
                     {
-                        "description": "注册请求参数",
+                        "type": "string",
+                        "description": "用户ID（本人或管理员可操作）",
+                        "name": "userId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/users/{userId}/update": {
+            "post": {
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "用户ID（me=当前用户；本人或管理员可操作）",
+                        "name": "userId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "用户信息",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/service.RegisterRequest"
+                            "$ref": "#/definitions/ent.User"
                         }
                     }
                 ],
@@ -1380,6 +1116,37 @@ const docTemplate = `{
                         "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/health": {
+            "get": {
+                "description": "供容器编排/负载均衡探测，不走统一响应结构；\n探测 PostgreSQL/Redis/InfluxDB，任一失联时返回 HTTP 503",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -1395,6 +1162,59 @@ const docTemplate = `{
                 },
                 "data": {},
                 "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "ent.Device": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "description": "CreatedAt holds the value of the \"created_at\" field.",
+                    "type": "string"
+                },
+                "deviceId": {
+                    "description": "ID of the ent.",
+                    "type": "string"
+                },
+                "deviceName": {
+                    "description": "DeviceName holds the value of the \"device_name\" field.",
+                    "type": "string"
+                },
+                "deviceType": {
+                    "description": "DeviceType holds the value of the \"device_type\" field.",
+                    "type": "string"
+                },
+                "firmwareVersion": {
+                    "description": "FirmwareVersion holds the value of the \"firmware_version\" field.",
+                    "type": "string"
+                },
+                "ipAddress": {
+                    "description": "IPAddress holds the value of the \"ip_address\" field.",
+                    "type": "string"
+                },
+                "lastActiveTime": {
+                    "description": "LastActiveTime holds the value of the \"last_active_time\" field.",
+                    "type": "string"
+                },
+                "location": {
+                    "description": "Location holds the value of the \"location\" field.",
+                    "type": "string"
+                },
+                "macAddress": {
+                    "description": "MACAddress holds the value of the \"mac_address\" field.",
+                    "type": "string"
+                },
+                "ownerId": {
+                    "description": "OwnerID holds the value of the \"owner_id\" field.",
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "Status holds the value of the \"status\" field.",
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "description": "UpdatedAt holds the value of the \"updated_at\" field.",
                     "type": "string"
                 }
             }
@@ -1440,6 +1260,33 @@ const docTemplate = `{
                 }
             }
         },
+        "entity.DeviceConfigReport": {
+            "type": "object",
+            "required": [
+                "version"
+            ],
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "entity.DeviceConfigSaveRequest": {
+            "type": "object",
+            "required": [
+                "config"
+            ],
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "additionalProperties": {}
+                }
+            }
+        },
         "entity.DeviceStatusDTO": {
             "type": "object",
             "required": [
@@ -1474,64 +1321,45 @@ const docTemplate = `{
                 "value": {}
             }
         },
-        "mqtt.PublishRequest": {
-            "type": "object",
-            "required": [
-                "payload",
-                "topic"
-            ],
-            "properties": {
-                "payload": {
-                    "type": "string"
-                },
-                "qos": {
-                    "description": "可选，默认0",
-                    "type": "integer",
-                    "maximum": 2,
-                    "minimum": 0
-                },
-                "retained": {
-                    "description": "可选，默认false",
-                    "type": "boolean"
-                },
-                "topic": {
-                    "type": "string"
-                }
-            }
-        },
-        "mqtt.SubscribeRequest": {
-            "type": "object",
-            "required": [
-                "topic"
-            ],
-            "properties": {
-                "qos": {
-                    "description": "可选，默认0",
-                    "type": "integer",
-                    "maximum": 2,
-                    "minimum": 0
-                },
-                "topic": {
-                    "type": "string"
-                }
-            }
-        },
-        "mqtt.TopicRequest": {
-            "type": "object",
-            "required": [
-                "topic"
-            ],
-            "properties": {
-                "topic": {
-                    "type": "string"
-                }
-            }
-        },
-        "service.DeviceRegisterRequest": {
+        "service.DeviceParameters": {
             "type": "object",
             "required": [
                 "deviceName"
             ],
+            "properties": {
+                "deviceName": {
+                    "type": "string"
+                },
+                "deviceType": {
+                    "type": "string"
+                },
+                "firmwareVersion": {
+                    "type": "string"
+                },
+                "ipAddress": {
+                    "type": "string"
+                },
+                "location": {
+                    "type": "string"
+                },
+                "macAddress": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.DeviceRegisterResponse": {
+            "type": "object",
+            "properties": {
+                "deviceId": {
+                    "type": "string"
+                },
+                "deviceToken": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.DeviceUpdateParameters": {
+            "type": "object",
             "properties": {
                 "deviceName": {
                     "type": "string"
@@ -1564,6 +1392,9 @@ const docTemplate = `{
             ],
             "properties": {
                 "account": {
+                    "type": "string"
+                },
+                "device": {
                     "type": "string"
                 },
                 "passwd": {
@@ -1655,7 +1486,7 @@ const docTemplate = `{
 var SwaggerInfo = &swag.Spec{
 	Version:          "1.0.0",
 	Host:             "localhost:8182",
-	BasePath:         "/api",
+	BasePath:         "/",
 	Schemes:          []string{},
 	Title:            "IoT Platform Go API",
 	Description:      "IoT 物联网平台后端 API（Go 重构版）",

@@ -11,13 +11,13 @@ import (
 	"iot-platform.local/pkg/util"
 )
 
-// DownlinkController 下放控制器
+// DownlinkController 下发控制器
 type DownlinkController struct {
 	downlinkSvc *service.DownlinkService
 	deviceSvc   *service.DeviceService
 }
 
-// NewDownlinkController 创建下放控制器
+// NewDownlinkController 创建下发控制器
 func NewDownlinkController(downlinkSvc *service.DownlinkService, deviceSvc *service.DeviceService) *DownlinkController {
 	return &DownlinkController{
 		downlinkSvc: downlinkSvc,
@@ -27,15 +27,15 @@ func NewDownlinkController(downlinkSvc *service.DownlinkService, deviceSvc *serv
 
 // PostCmd @Summary      向设备下发命令
 // @Tags         device
-// @Accept       JSON
-// @Produce      JSON
+// @Accept       json
+// @Produce      json
 // @Param        deviceId  path      string                     true  "设备ID"
-// @Param        body      service.DownlinkCmdRequest  true  "命令内容"
+// @Param        body      body  service.DownlinkCmdRequest  true  "命令内容"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
 // @Security     UserAuth
-// @Router       /api/device/{deviceId}/cmd [post]
-// PostCmd 用户向设备下发命令 POST /device/:deviceId/cmd
+// @Router       /api/devices/{deviceId}/commands [post]
+// PostCmd 用户向设备下发命令 POST /api/devices/{deviceId}/commands
 func (ctl *DownlinkController) PostCmd(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
@@ -72,14 +72,14 @@ func (ctl *DownlinkController) PostCmd(c *gin.Context) {
 
 // GetCmd @Summary      设备拉取待消费命令
 // @Tags         device
-// @Accept       JSON
-// @Produce      JSON
+// @Accept       json
+// @Produce      json
 // @Param        deviceId  path      string  true  "设备ID"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
 // @Security     DeviceAuth
-// @Router       /api/device/{deviceId}/cmd [get]
-// GetCmd 设备拉取待消费命令 GET /device/:deviceId/cmd（设备认证）
+// @Router       /api/devices/{deviceId}/commands [get]
+// GetCmd 设备拉取待消费命令 GET /api/devices/{deviceId}/commands（设备认证）
 func (ctl *DownlinkController) GetCmd(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 

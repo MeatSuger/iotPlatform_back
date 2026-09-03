@@ -48,7 +48,7 @@ GOFLAGS   ?=
 LDFLAGS    = -s -w \
              -X 'main.Version=$(VERSION)' \
              -X 'main.BuildTime=$(TIMESTAMP)'
-GO_BUILD_FLAGS = -ldflags="$(LDFLAGS)" -trimpath $(GOFLAGS)
+GO_BUILD_FLAGS = -ldflags="$(LDFLAGS)" -trimpath $(GOFLAGS) -tags sonic
 
 # ------------------------------------------------------------
 # 构建 / 部署目录
@@ -173,9 +173,13 @@ maintainer-clean: distclean
 # ============================================================
 # 文档 (GNU: info/dvi/html/ps/pdf)
 # 原 swagger 拆解于此: 生成 API 文档 (HTML)
+# 说明: -d 需显式列出含 @Router 注释的目录（含 internal/ 需 --parseInternal，
+#       此处直接列出目录更稳妥）；--packageName docs 与现有包名保持一致
 # ============================================================
 html:
-	cd cmd/iot-platform && swag init -d . -g main.go --output ../../api/swagger
+	go run github.com/swaggo/swag/cmd/swag@v1.16.6 init \
+	  -d cmd/iot-platform,internal/controller,internal/router,internal/service,internal/model,internal/ent,pkg/common \
+	  -g main.go --output api/swagger --packageName docs
 
 # ============================================================
 # 打包 (GNU: dist / distcheck)

@@ -28,7 +28,7 @@ func TestInitLogger_Release(t *testing.T) {
 
 func TestSync(t *testing.T) {
 	InitLogger("debug", "")
-	// Sync should not panic even if nothing to flush
+	// 无内容可刷新时也不应 panic
 	assert.NotPanics(t, func() {
 		Sync()
 	})

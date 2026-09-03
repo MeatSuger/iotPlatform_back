@@ -15,13 +15,8 @@ import (
 
 // InfluxDBService InfluxDB v3 时序数据服务
 //
-// 使用 InfluxDB v3 官方 Go 客户端（influxdb3-go/v2），基于 Flight SQL API。
-// 与 v2 的主要差异：
-//   - 无 org/bucket 概念，改用 database
-//   - 查询语言从 Flux 切换到 SQL（或 InfluxQL）
-//   - 写入 API 使用 WritePoints / Write / WriteData
-//   - 查询返回 Arrow 列式迭代器
-//
+// 基于 influxdb3-go/v2 官方客户端（Flight SQL API）。与 v2 的差异：
+// 无 org/bucket 概念（改用 database）、查询用 SQL、写入用 WritePoints/WriteData。
 // 参考官方 examples: https://github.com/InfluxCommunity/influxdb3-go/tree/main/examples
 type InfluxDBService struct {
 	client   *influxdb3.Client
@@ -30,7 +25,7 @@ type InfluxDBService struct {
 	// Redis 缓存（查询结果缓存，减少 InfluxDB 压力）
 	cache *cache.RedisCache
 
-	// batcher 用于批量攒批写入（参考 Batching example）
+	// batcher 攒批写入（达到 BatchSize 自动落库）
 	batcher *batching.Batcher
 }
 
@@ -51,11 +46,8 @@ type InfluxDBConfig struct {
 	BatchSize int // 攒批大小，默认 1000；0 表示不启用攒批
 }
 
-// NewInfluxDBService 创建InfluxDB v3服务
-//
-// 参考 examples/Basic 和 examples/WithPreConfigHttp：
-//   - Host / Token / Database 为必填
-//   - 支持通过 InfluxDBConfig 调优连接池和超时参数
+// NewInfluxDBService 创建 InfluxDB v3 服务
+// Host / Token / Database 为必填；连接池与超时参数可经 InfluxDBConfig 调优
 func NewInfluxDBService(cfg InfluxDBConfig) *InfluxDBService {
 	config := influxdb3.ClientConfig{
 		Host:       cfg.URL,
@@ -64,21 +56,21 @@ func NewInfluxDBService(cfg InfluxDBConfig) *InfluxDBService {
 		AuthScheme: cfg.AuthScheme,
 	}
 
-	// 连接调优：设置写入超时（参考 Basic example 的 WriteTimeout）
+	// 写入超时：默认 10s
 	if cfg.WriteTimeout > 0 {
 		config.WriteTimeout = cfg.WriteTimeout
 	} else {
 		config.WriteTimeout = 10 * time.Second
 	}
 
-	// 查询超时（参考 Basic example 的 QueryTimeout）
+	// 查询超时：默认 2 分钟
 	if cfg.QueryTimeout > 0 {
 		config.QueryTimeout = cfg.QueryTimeout
 	} else {
 		config.QueryTimeout = 2 * time.Minute
 	}
 
-	// 连接池调优（参考 WithPreConfigHttp example）
+	// 连接池调优
 	if cfg.IdleConnectionTimeout > 0 {
 		config.IdleConnectionTimeout = cfg.IdleConnectionTimeout
 	} else {
@@ -101,7 +93,7 @@ func NewInfluxDBService(cfg InfluxDBConfig) *InfluxDBService {
 		database: cfg.Database,
 	}
 
-	// 初始化攒批器（参考 Batching example）
+	// 初始化攒批器（BatchSize > 0 时启用）
 	if cfg.BatchSize > 0 {
 		svc.batcher = batching.NewBatcher(
 			batching.WithSize(cfg.BatchSize),
@@ -128,7 +120,7 @@ func (s *InfluxDBService) IsConnected() bool {
 	return s.client != nil
 }
 
-// Close 关闭InfluxDB连接
+// Close 关闭 InfluxDB 连接
 func (s *InfluxDBService) Close() {
 	if s.client != nil {
 		if err := s.client.Close(); err != nil {
@@ -148,9 +140,7 @@ type SensorData struct {
 	Timestamp   time.Time `lp:"timestamp"`
 }
 
-// WriteSensors 写入传感器数据（同步）
-//
-// 使用 WriteData + lp 结构体标签，参考 examples/Basic
+// WriteSensors 同步写入传感器数据（lp 结构体标签映射到 Line Protocol）
 func (s *InfluxDBService) WriteSensors(ctx context.Context, data []SensorData) error {
 	if s.client == nil {
 		return fmt.Errorf("[InfluxDB] 客户端未连接")
@@ -188,9 +178,7 @@ func (s *InfluxDBService) WriteSensorsAsync(data []SensorData) {
 }
 
 // WriteSensorsBatched 使用攒批器写入（高吞吐场景推荐）
-//
-// 参考 examples/Batching：攒批器达到 BatchSize 后自动触发 EmitCallback 写入
-// 注意：调用方需要确保 FlushBatched() 被调用以写入末尾批次
+// 攒批器达到 BatchSize 后自动触发写入；末尾批次需调用 FlushBatched 冲刷
 func (s *InfluxDBService) WriteSensorsBatched(data []SensorData) {
 	if s.batcher == nil {
 		zap.L().Warn("[InfluxDB] 攒批器未初始化，回退到异步写入")
@@ -409,16 +397,14 @@ func (s *InfluxDBService) AggregateDeviceSensor(ctx context.Context, deviceID, s
 	return 0, nil
 }
 
-// DownsampleAndWrite 降采样查询 + 写回（参考 examples/Downsampling）
-//
-// 使用 DATE_BIN 窗口函数进行降采样，然后通过 AsPointWithMeasurement 写回新表。
-// 典型场景：将原始高频数据聚合为 5 分钟均值写入 downsampled 表。
+// DownsampleAndWrite 降采样查询并写回降采样表
+// 使用 DATE_BIN 窗口函数聚合原始高频数据（如按分钟生成均值/最大/最小），
+// 通过 AsPointWithMeasurement 写回 device_sensors_downsampled 表
 func (s *InfluxDBService) DownsampleAndWrite(ctx context.Context, deviceID string, windowInterval string) error {
 	if s.client == nil {
 		return fmt.Errorf("[InfluxDB] 客户端未连接")
 	}
 
-	// DATE_BIN 降采样查询（参考 Downsampling example）
 	query := fmt.Sprintf(`
 		SELECT
 			DATE_BIN(INTERVAL '%s', time) AS window_start,
@@ -451,7 +437,7 @@ func (s *InfluxDBService) DownsampleAndWrite(ctx context.Context, deviceID strin
 			return fmt.Errorf("降采样迭代失败: %w", err)
 		}
 
-		// 使用 AsPointWithMeasurement 将查询结果转为 Point 并写回（参考 Downsampling example）
+		// 查询结果转为 Point 写回降采样表
 		p, err := row.AsPointWithMeasurement("device_sensors_downsampled")
 		if err != nil {
 			zap.L().Warn("[InfluxDB] 降采样 Point 转换失败", zap.Error(err))
@@ -472,7 +458,7 @@ func (s *InfluxDBService) DownsampleAndWrite(ctx context.Context, deviceID strin
 	return nil
 }
 
-// Ping 测试InfluxDB连接（HTTP /ping 端点，不依赖 gRPC Flight SQL）
+// Ping 测试 InfluxDB 连接（HTTP /ping 端点，不依赖 gRPC Flight SQL）
 func (s *InfluxDBService) Ping(ctx context.Context) error {
 	if s.client == nil {
 		return fmt.Errorf("[InfluxDB] 客户端未连接")

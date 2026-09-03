@@ -42,16 +42,16 @@ type DatabaseConfig struct {
 	MaxIdle  int    `mapstructure:"max-idle"`
 }
 
-// DSN 返回PostgreSQL连接字符串
+// DSN 返回 PostgreSQL 连接字符串
 func (d DatabaseConfig) DSN() string {
 	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s TimeZone=Asia/Shanghai",
 		d.Host, d.Port, d.User, d.Password, d.DBName, d.SSLMode)
 }
 
-// RedisConfig Redis配置
-// Mode 支持: "standalone"（默认单节点）, "sentinel"（哨兵高可用）, "cluster"（集群分片）
+// RedisConfig Redis 配置
+// Mode 支持: "standalone"（默认单节点）、"sentinel"（哨兵高可用）；"cluster" 暂不支持
 type RedisConfig struct {
-	Mode          string `mapstructure:"mode"` // standalone | sentinel | cluster
+	Mode          string `mapstructure:"mode"` // standalone | sentinel（cluster 暂不支持）
 	Host          string `mapstructure:"host"`
 	Port          int    `mapstructure:"port"`
 	Password      string `mapstructure:"password"`
@@ -132,7 +132,7 @@ type MqttGatewayConfig struct {
 // DeviceConfig 设备离线检测配置（Redis 状态为准，离线后同步 PostgreSQL）
 type DeviceConfig struct {
 	OfflineScanInterval int `mapstructure:"offline-scan-interval"` // 扫描间隔（秒），默认 30
-	OfflineThreshold    int `mapstructure:"offline-threshold"`    // 离线判定阈值（秒），默认 120（2×心跳周期）
+	OfflineThreshold    int `mapstructure:"offline-threshold"`     // 离线判定阈值（秒），默认 120（2×心跳周期）
 }
 
 // CORSConfig 跨域配置

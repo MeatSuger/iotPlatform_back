@@ -20,6 +20,7 @@ type DownlinkCmd struct {
 func (DownlinkCmd) Annotations() []schema.Annotation {
 	return []schema.Annotation{
 		entsql.Table("iot_downlink_cmd"),
+		edge.Annotation{StructTag: `json:"-"`},
 	}
 }
 

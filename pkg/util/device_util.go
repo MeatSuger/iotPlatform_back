@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// DeviceUtil 设备相关工具函数
+// 设备相关工具函数
 
 const (
 	// DeviceOnlineStatus 设备在线状态
@@ -37,8 +37,7 @@ func GenerateShortDeviceID() string {
 	return fmt.Sprintf("%x", hash)[:6]
 }
 
-// MergeDeviceWithStatus 将设备信息合并到状态对象中
-// 返回一个包含设备基本信息和状态的map
+// MergeDeviceWithStatus 合并设备基本信息与运行时状态为 map
 func MergeDeviceWithStatus(deviceID, deviceName string, ownerID uint, status string, lastActiveTime any) map[string]any {
 	result := map[string]any{
 		"deviceId":   deviceID,

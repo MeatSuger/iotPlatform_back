@@ -362,12 +362,12 @@ func TestDownlinkFullFlow(t *testing.T) {
 	assert.Contains(t, resp.Data[0]["type"].(string), "control")
 }
 
-// newJSONBody 构造带 JSON body 的请求
+// newJSONBody 返回空的 ResponseRecorder 与 gin.Engine（参数未使用，占位辅助）
 func newJSONBody(t *testing.T, method, path string, body any) (*httptest.ResponseRecorder, *gin.Engine) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	return httptest.NewRecorder(), gin.New()
 }
 
-// 确保 io 包被使用（上面 bytes.NewReader 需要）
+// 确保 io 包被使用
 var _ io.Reader

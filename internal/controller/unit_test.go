@@ -1,10 +1,8 @@
 package controller
 
 import (
-	"net/http/httptest"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,23 +34,6 @@ func TestParsePayload_EmptyString(t *testing.T) {
 	s, ok := result.(string)
 	require.True(t, ok)
 	assert.Equal(t, ``, s)
-}
-
-func TestListData_ReturnsMessage(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	ctl := &DataController{}
-	r := gin.New()
-	r.GET("/list", ctl.ListData)
-
-	req := httptest.NewRequest("GET", "/list", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	resp := parseResp(w)
-	assert.Equal(t, 200, resp.Code)
-	data, _ := resp.Data.(map[string]any)
-	assert.Equal(t, "请在具体设备下查询数据", data["message"])
 }
 
 func TestAllControllerConstructors(t *testing.T) {

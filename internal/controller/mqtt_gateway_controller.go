@@ -40,8 +40,6 @@ import (
 //  2. MQTT 层：CONNECT 包 username=设备ID / password=设备Token，标准 MQTT 客户端（paho/ESP32 等）
 //
 // 鉴权失败时回 MQTT 标准 CONNACK not authorized(0x05)，而不是 HTTP 拒绝。
-//
-// 链路：设备 --wss--> 网关(框架 Sa-Token 鉴权) --tcp--> 外部 Mosquitto(1883)
 type MqttGatewayController struct {
 	brokerAddr  string
 	dialTimeout time.Duration
@@ -311,7 +309,7 @@ func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protoc
 		}()
 	}
 
-	// 用户自定解析钩子
+	// 用户自定义解析钩子
 	g.onPublish(topic, payload)
 }
 
@@ -319,7 +317,7 @@ func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protoc
 // 此时 frame 已写入 mqtt_publish_log 并转发到外部 broker
 //
 // Topic 约定：/前缀/设备ID/...，如 iot/{deviceId}/telemetry
-// Payload 约定：与 HTTP 上报接口 /api/data/{deviceId}/Data 相同的 JSON 格式：
+// Payload 约定：与 HTTP 上报接口 /api/devices/{deviceId}/sensorData 相同的 JSON 格式：
 //
 //	{"sensors":[{"name":"temp","type":"temperature","value":25.5,"timestamp":"..."}]}
 //
@@ -503,8 +501,6 @@ func parseConnectCredentials(packet []byte) (clientID, username, password string
 
 	return clientID, username, password, protocolLevel, true
 }
-
-// ============ MQTT 帧工具 ============
 
 func mqttPacketTotalLength(packet []byte) (int, bool) {
 	if len(packet) < 2 || packet[0]&0xF0 == 0 {

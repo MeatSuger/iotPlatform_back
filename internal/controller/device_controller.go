@@ -24,16 +24,16 @@ func NewDeviceController(deviceSvc *service.DeviceService, deviceReportSvc *serv
 
 // Register @Summary      注册设备
 // @Tags         devices
-// @Accept       JSON
-// @Produce      JSON
-// @Param        body      service.DeviceRegisterRequest  true  "设备注册请求参数"
-// @Success      200   {object}  common.ApiResponse
+// @Accept       json
+// @Produce      json
+// @Param        body      body  service.DeviceParameters  true  "设备注册请求参数"
+// @Success      200   {object}  common.ApiResponse{data=service.DeviceRegisterResponse}
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
-// @Router       /api/device/register [post]
-// Register 注册设备 (POST /device/register)
+// @Router       /api/devices [post]
+// Register 注册设备 (POST /api/devices)
 func (ctl *DeviceController) Register(c *gin.Context) {
-	var req service.DeviceRegisterRequest
+	var req service.DeviceParameters
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.FailWithMsg(c, common.CodeBadRequest, err.Error())
 		return
@@ -55,13 +55,13 @@ func (ctl *DeviceController) Register(c *gin.Context) {
 
 // List @Summary      查询用户设备列表
 // @Tags         devices
-// @Accept       JSON
-// @Produce      JSON
-// @Success      200   {object}  common.ApiResponse
+// @Accept       json
+// @Produce      json
+// @Success      200   {object}  common.ApiResponse{data=[]ent.Device}
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
-// @Router       /api/device/list [get]
-// List 查询用户设备列表 (GET /device/list)
+// @Router       /api/devices [get]
+// List 查询用户设备列表 (GET /api/devices)
 func (ctl *DeviceController) List(c *gin.Context) {
 	ownerID := middleware.GetUserID(c)
 
@@ -76,14 +76,14 @@ func (ctl *DeviceController) List(c *gin.Context) {
 
 // GetDeviceData @Summary      获取设备详情
 // @Tags         devices
-// @Accept       JSON
-// @Produce      JSON
+// @Accept       json
+// @Produce      json
 // @Param        deviceId  path  string  true  "设备ID"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
 // @Security     UserAuth
-// @Router       /api/device/{deviceId}/Data [get]
-// GetDeviceData 获取设备详情 (GET /device/:deviceId/Data)
+// @Router       /api/devices/{deviceId} [get]
+// GetDeviceData 获取设备详情 (GET /api/devices/{deviceId})
 func (ctl *DeviceController) GetDeviceData(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
@@ -124,16 +124,60 @@ func (ctl *DeviceController) GetDeviceData(c *gin.Context) {
 	common.Success(c, result)
 }
 
+// UpdateDevice @Summary  更新设备信息（增量）
+// @Description  仅设备所有者或设备自身可更新；增量更新，仅请求体中出现的字段会被更新，未传字段保持原值
+// @Tags         devices
+// @Accept       json
+// @Produce      json
+// @Param        deviceId  path      string                            true  "设备ID（6位hex）"
+// @Param        body      body  service.DeviceUpdateParameters  true  "待更新的设备字段（至少一个）"
+// @Success      200       {object}  common.ApiResponse{data=ent.Device}
+// @Failure      400       {object}  common.ApiResponse
+// @Security     UserAuth
+// @Router       /api/devices/{deviceId}/update [post]
+// UpdateDevice 更新设备信息 (POST /api/devices/{deviceId}/update)
+func (ctl *DeviceController) UpdateDevice(c *gin.Context) {
+	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
+
+	var req service.DeviceUpdateParameters
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.FailWithMsg(c, common.CodeBadRequest, err.Error())
+		return
+	}
+
+	// 双认证：用户 Token 更新自己的设备；设备 Token 只能更新自己
+	var ownerID uint
+	switch middleware.GetAuthType(c) {
+	case "device":
+		if middleware.GetDeviceID(c) != deviceID {
+			common.FailWithMsg(c, common.CodeForbidden, "无权操作该设备")
+			return
+		}
+		ownerID = 0 // 设备自更新，跳过归属校验
+	default: // user
+		ownerID = middleware.GetUserID(c)
+	}
+
+	resp, err := ctl.deviceSvc.Update(c.Request.Context(), deviceID, ownerID, req)
+	if err != nil {
+		common.FailWithMsg(c, common.CodeServerError, err.Error())
+		return
+	}
+
+	common.Success(c, resp)
+}
+
 // GetDeviceToken @Summary      获取设备Token
 // @Description  使用设备6位hex ID认证（路径参数），无需额外Token
 // @Tags         devices
-// @Accept       JSON
-// @Produce      JSON
+// @Accept       json
+// @Produce      json
 // @Param        deviceId  path  string  true  "设备ID（6位hex）"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
-// @Router       /api/device/{deviceId}/login [get]
-// GetDeviceToken 获取设备Token (GET /device/:deviceId/login)
+// @Router       /api/devices/{deviceId}/token [get]
+// @Router       /api/devices/{deviceId}/login [get]
+// GetDeviceToken 获取设备Token (GET /api/devices/{deviceId}/token 或 /api/devices/{deviceId}/login)
 func (ctl *DeviceController) GetDeviceToken(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
@@ -161,8 +205,8 @@ func (ctl *DeviceController) GetDeviceToken(c *gin.Context) {
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
 // @Security     UserAuth
-// @Router       /api/device/{deviceId}/delete [post]
-// Delete 删除设备 (POST /device/:deviceId/delete)
+// @Router       /api/devices/{deviceId}/delete [post]
+// Delete 删除设备 (POST /api/devices/{deviceId}/delete)
 func (ctl *DeviceController) Delete(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)

@@ -10,7 +10,7 @@ import (
 )
 
 // Recovery 全局异常恢复中间件
-// 捕获 panic，识别 *common.AppError 并返回相应业务码，否则返回 500
+// 捕获 panic：识别 *common.AppError 并按业务码响应；其余 panic 统一返回 500 业务码（HTTP 200）
 func Recovery() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
@@ -22,14 +22,14 @@ func Recovery() gin.HandlerFunc {
 					zap.String("stack", string(debug.Stack())),
 				)
 
-				// 检查是否为 AppError（统一类型，定义在 common/errors.go）
+				// 识别 *common.AppError（统一业务错误类型，定义在 common/errors.go）
 				if appErr, ok := err.(*common.AppError); ok {
 					common.FailWithMsg(c, appErr.BizCode, appErr.Message)
 					c.Abort()
 					return
 				}
 
-				// 默认500 错误
+				// 其他 panic：返回统一 500 业务码（HTTP 200）
 				c.JSON(http.StatusOK, common.ApiResponse{
 					Code:    common.CodeServerError,
 					Message: "服务器内部错误",

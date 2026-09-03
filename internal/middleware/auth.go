@@ -56,7 +56,7 @@ func setCachedDeviceID(token, deviceID string) {
 	deviceAuthCacheMu.Unlock()
 }
 
-// cleanupAuthCache 定期清理过期条目
+// init 启动后台协程，每 30s 清理一次设备认证缓存中的过期条目
 func init() {
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -135,7 +135,7 @@ func DeviceAuthMiddleware() gin.HandlerFunc {
 		// L1 本地缓存：Token → deviceID（5s TTL，覆盖高频上报场景）
 		loginID, hit := getCachedDeviceID(token)
 		if !hit {
-			// 缓存未命中，走 Sa-Token Redis 查询
+			// 缓存未命中，走 Sa-Token Redis 查询（对踢出/顶号/失效 token 均返回错误）
 			var err error
 			loginID, err = deviceMgr.GetLoginID(token)
 			if err != nil {
@@ -151,6 +151,53 @@ func DeviceAuthMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// UserOrDeviceAuthMiddleware 双认证中间件：优先识别用户 Token（Sa-Token 用户登录态），
+// 否则回退识别设备 Token（X-Device-Token）。两者都无效则返回 401。
+// 注入上下文：
+//   - authType = "user"   + userId
+//   - authType = "device" + deviceId / deviceToken
+func UserOrDeviceAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 1. 优先用户 Token（Header/Cookie/Query 中的 Authorization）
+		if userToken := sagin.GetTokenFromCtx(c); userToken != "" {
+			info, err := stputil.GetTokenInfo(userToken)
+			if err == nil && info != nil {
+				userID, perr := strconv.ParseUint(info.LoginID, 10, 64)
+				if perr == nil {
+					c.Set("authType", "user")
+					c.Set("userId", uint(userID))
+					c.Set("token", userToken)
+					c.Next()
+					return
+				}
+			}
+		}
+
+		// 2. 回退设备 Token
+		if deviceToken := extractDeviceToken(c); deviceToken != "" {
+			loginID, err := deviceMgr.GetLoginID(deviceToken)
+			if err == nil {
+				c.Set("authType", "device")
+				c.Set("deviceId", loginID)
+				c.Set("deviceToken", deviceToken)
+				c.Next()
+				return
+			}
+		}
+
+		common.FailWithMsg(c, common.CodeUnauthorized, "Token无效或已过期")
+		c.Abort()
+	}
+}
+
+// GetAuthType 获取请求认证类型（"user" / "device" / ""）
+func GetAuthType(c *gin.Context) string {
+	if t, exists := c.Get("authType"); exists {
+		return t.(string)
+	}
+	return ""
 }
 
 // DeviceIDAuthMiddleware 设备 ID 认证中间件（6位hex，无需额外Token）
@@ -249,8 +296,8 @@ func extractDeviceToken(c *gin.Context) string {
 	return ""
 }
 
-// GetDeviceToken 提取设备 Token（Header "X-Device-Token" → Cookie → Query）
-// 与 DeviceAuthMiddleware 同一提取逻辑，供非 HTTP 入口（MQTT 网关等）复用
+// GetDeviceToken 提取设备 Token（Header "X-Device-Token" → Cookie → Query），
+// 与 DeviceAuthMiddleware 同一提取逻辑，供 MQTT 网关等入口复用
 func GetDeviceToken(c *gin.Context) string {
 	return extractDeviceToken(c)
 }

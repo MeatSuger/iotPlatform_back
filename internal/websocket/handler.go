@@ -102,7 +102,7 @@ func (h *WsHandler) NotifyOwner(ownerID uint, message []byte) {
 	h.hub.SendToOwner(ownerID, message)
 }
 
-// Handle 处理WebSocket连接（MQTT桥接，已不再使用，保留兼容）
+// Handle 处理WebSocket连接（MQTT 桥接遗留接口，已不再使用，保留兼容）
 func (h *WsHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -180,7 +180,7 @@ func (h *WsHandler) HandleUser(w http.ResponseWriter, r *http.Request) {
 	h.hub.RegisterUser(client)
 	zap.S().Infof("[UserWS] 用户管理端通道建立 [user=%d]", ownerID)
 
-	// 启动读写协程（用户端只需接收，readPump 仅处理 ping/pong/close）
+	// 启动读写协程（readUserPump 处理命令下发与心跳）
 	go h.writePump(client)
 	go h.readUserPump(client)
 }
@@ -208,7 +208,7 @@ func (h *WsHandler) readUserPump(client *Client) {
 			break
 		}
 
-		// 解析消息：带 deviceId + payload 的是命令（与 HTTP POST /device/:deviceId/cmd body 一致，仅多 deviceId）
+		// 解析消息：带 deviceId + payload 的是命令（与 HTTP POST /api/devices/{deviceId}/commands body 一致，仅多 deviceId）
 		// 仅 type="ping" 的是心跳
 		var envelope struct {
 			Type     string          `json:"type"`
@@ -272,7 +272,7 @@ func (h *WsHandler) replyOwner(ownerID uint, msgType string, data map[string]any
 	h.hub.SendToOwner(ownerID, msg)
 }
 
-// readPump 从WebSocket读取消息并转发到MQTT
+// readPump 读取消息并丢弃（MQTT 桥接已移除，仅维持 ping/pong 心跳）
 func (h *WsHandler) readPump(client *Client) {
 	defer func() {
 		h.hub.Unregister(client)
@@ -297,7 +297,7 @@ func (h *WsHandler) readPump(client *Client) {
 	}
 }
 
-// HandleDevice 设备 WebSocket（实时下放通道）— 通过 query token 认证
+// HandleDevice 设备 WebSocket（实时下放通道）— 支持多种方式携带 Token
 func (h *WsHandler) HandleDevice(w http.ResponseWriter, r *http.Request) {
 	// 校验设备 Token
 	if h.validateDevToken == nil {

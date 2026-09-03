@@ -1,4 +1,4 @@
-basePath: /api
+basePath: /
 definitions:
   common.ApiResponse:
     properties:
@@ -6,6 +6,45 @@ definitions:
         type: integer
       data: {}
       message:
+        type: string
+    type: object
+  ent.Device:
+    properties:
+      createdAt:
+        description: CreatedAt holds the value of the "created_at" field.
+        type: string
+      deviceId:
+        description: ID of the ent.
+        type: string
+      deviceName:
+        description: DeviceName holds the value of the "device_name" field.
+        type: string
+      deviceType:
+        description: DeviceType holds the value of the "device_type" field.
+        type: string
+      firmwareVersion:
+        description: FirmwareVersion holds the value of the "firmware_version" field.
+        type: string
+      ipAddress:
+        description: IPAddress holds the value of the "ip_address" field.
+        type: string
+      lastActiveTime:
+        description: LastActiveTime holds the value of the "last_active_time" field.
+        type: string
+      location:
+        description: Location holds the value of the "location" field.
+        type: string
+      macAddress:
+        description: MACAddress holds the value of the "mac_address" field.
+        type: string
+      ownerId:
+        description: OwnerID holds the value of the "owner_id" field.
+        type: integer
+      status:
+        description: Status holds the value of the "status" field.
+        type: string
+      updatedAt:
+        description: UpdatedAt holds the value of the "updated_at" field.
         type: string
     type: object
   ent.User:
@@ -38,6 +77,24 @@ definitions:
         description: UpdateTime holds the value of the "update_time" field.
         type: string
     type: object
+  entity.DeviceConfigReport:
+    properties:
+      config:
+        additionalProperties: {}
+        type: object
+      version:
+        type: integer
+    required:
+    - version
+    type: object
+  entity.DeviceConfigSaveRequest:
+    properties:
+      config:
+        additionalProperties: {}
+        type: object
+    required:
+    - config
+    type: object
   entity.DeviceStatusDTO:
     properties:
       sensors:
@@ -61,44 +118,7 @@ definitions:
     - type
     - value
     type: object
-  mqtt.PublishRequest:
-    properties:
-      payload:
-        type: string
-      qos:
-        description: 可选，默认0
-        maximum: 2
-        minimum: 0
-        type: integer
-      retained:
-        description: 可选，默认false
-        type: boolean
-      topic:
-        type: string
-    required:
-    - payload
-    - topic
-    type: object
-  mqtt.SubscribeRequest:
-    properties:
-      qos:
-        description: 可选，默认0
-        maximum: 2
-        minimum: 0
-        type: integer
-      topic:
-        type: string
-    required:
-    - topic
-    type: object
-  mqtt.TopicRequest:
-    properties:
-      topic:
-        type: string
-    required:
-    - topic
-    type: object
-  service.DeviceRegisterRequest:
+  service.DeviceParameters:
     properties:
       deviceName:
         type: string
@@ -115,11 +135,35 @@ definitions:
     required:
     - deviceName
     type: object
+  service.DeviceRegisterResponse:
+    properties:
+      deviceId:
+        type: string
+      deviceToken:
+        type: string
+    type: object
+  service.DeviceUpdateParameters:
+    properties:
+      deviceName:
+        type: string
+      deviceType:
+        type: string
+      firmwareVersion:
+        type: string
+      ipAddress:
+        type: string
+      location:
+        type: string
+      macAddress:
+        type: string
+    type: object
   service.DownlinkCmdRequest:
     type: object
   service.LoginRequest:
     properties:
       account:
+        type: string
+      device:
         type: string
       passwd:
         type: string
@@ -173,7 +217,7 @@ definitions:
 host: localhost:8182
 info:
   contact:
-    email: support@iot-platform.local
+    email: support@iot-platform.local.local
     name: API Support
   description: IoT 物联网平台后端 API（Go 重构版）
   license:
@@ -183,155 +227,63 @@ info:
   title: IoT Platform Go API
   version: 1.0.0
 paths:
-  /api/data/{deviceId}/Data:
+  /api/devices:
+    get:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/common.ApiResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/ent.Device'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      tags:
+      - devices
     post:
       consumes:
       - application/json
       parameters:
-      - description: 传感器数据
+      - description: 设备注册请求参数
         in: body
         name: body
         required: true
         schema:
-          $ref: '#/definitions/entity.DeviceStatusDTO'
-      - description: 设备ID
-        in: path
-        name: deviceId
-        required: true
-        type: string
+          $ref: '#/definitions/service.DeviceParameters'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/common.ApiResponse'
+            allOf:
+            - $ref: '#/definitions/common.ApiResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/service.DeviceRegisterResponse'
+              type: object
         "400":
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
       security:
-      - DeviceAuth: []
-      summary: 上报传感器数据
+      - UserAuth: []
       tags:
-      - data
-  /api/data/{deviceId}/Data/list:
-    get:
-      consumes:
-      - application/json
-      parameters:
-      - description: 设备ID
-        in: path
-        name: deviceId
-        required: true
-        type: string
-      - description: 数量限制
-        in: query
-        name: limit
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      summary: 查询设备传感器数据
-      tags:
-      - data
-  /api/data/{deviceId}/heartbeat:
-    post:
-      consumes:
-      - application/json
-      parameters:
-      - description: 设备ID
-        in: path
-        name: deviceId
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      security:
-      - DeviceAuth: []
-      summary: 设备心跳
-      tags:
-      - data
-  /api/data/{deviceId}/ping:
-    post:
-      consumes:
-      - application/json
-      parameters:
-      - description: 设备ID
-        in: path
-        name: deviceId
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      security:
-      - DeviceAuth: []
-      summary: 设备心跳
-      tags:
-      - data
-  /api/data/list:
-    get:
-      consumes:
-      - application/json
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      summary: 通用数据查询入口
-      tags:
-      - data
-  /api/data/ping:
-    post:
-      consumes:
-      - application/json
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      summary: InfluxDB连通性检查
-      tags:
-      - data
-  /api/device/{deviceId}/Data:
+      - devices
+  /api/devices/{deviceId}:
     get:
       consumes:
       - application/json
@@ -354,10 +306,9 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
-      summary: 获取设备详情
       tags:
       - devices
-  /api/device/{deviceId}/cmd:
+  /api/devices/{deviceId}/commands:
     get:
       consumes:
       - application/json
@@ -380,7 +331,6 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - DeviceAuth: []
-      summary: 设备拉取待消费命令
       tags:
       - device
     post:
@@ -411,10 +361,93 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
-      summary: 向设备下发命令
       tags:
       - device
-  /api/device/{deviceId}/delete:
+  /api/devices/{deviceId}/config:
+    get:
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      tags:
+      - devices
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      - description: 配置内容
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/entity.DeviceConfigSaveRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      tags:
+      - devices
+  /api/devices/{deviceId}/config/report:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      - description: 实际生效配置与版本
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/entity.DeviceConfigReport'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - DeviceAuth: []
+      tags:
+      - devices
+  /api/devices/{deviceId}/delete:
     post:
       consumes:
       - application/json
@@ -437,10 +470,34 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
-      summary: 删除设备
       tags:
       - devices
-  /api/device/{deviceId}/login:
+  /api/devices/{deviceId}/heartbeat:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - DeviceAuth: []
+      tags:
+      - data
+  /api/devices/{deviceId}/login:
     get:
       consumes:
       - application/json
@@ -462,40 +519,18 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
-      summary: 获取设备Token
       tags:
       - devices
-  /api/device/list:
-    get:
-      consumes:
-      - application/json
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      security:
-      - UserAuth: []
-      summary: 查询用户设备列表
-      tags:
-      - devices
-  /api/device/register:
+  /api/devices/{deviceId}/ping:
     post:
       consumes:
       - application/json
       parameters:
-      - description: 设备注册请求参数
-        in: body
-        name: body
+      - description: 设备ID
+        in: path
+        name: deviceId
         required: true
-        schema:
-          $ref: '#/definitions/service.DeviceRegisterRequest'
+        type: string
       produces:
       - application/json
       responses:
@@ -508,11 +543,43 @@ paths:
           schema:
             $ref: '#/definitions/common.ApiResponse'
       security:
-      - UserAuth: []
-      summary: 注册设备
+      - DeviceAuth: []
       tags:
-      - devices
-  /api/mqtt/{deviceId}/Data:
+      - data
+  /api/devices/{deviceId}/sensorData:
+    get:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        type: string
+      - description: 数量限制，默认50
+        in: query
+        name: limit
+        type: integer
+      - description: 起始时间（RFC3339），默认3天前
+        in: query
+        name: start
+        type: string
+      - description: 结束时间（RFC3339），默认当前时间
+        in: query
+        name: end
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      tags:
+      - data
     post:
       consumes:
       - application/json
@@ -541,15 +608,15 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - DeviceAuth: []
-      summary: MQTT方式上报传感器数据
       tags:
-      - mqtt
-  /api/mqtt/{deviceId}/heartbeat:
-    post:
+      - data
+  /api/devices/{deviceId}/token:
+    get:
       consumes:
       - application/json
+      description: 使用设备6位hex ID认证（路径参数），无需额外Token
       parameters:
-      - description: 设备ID
+      - description: 设备ID（6位hex）
         in: path
         name: deviceId
         required: true
@@ -565,113 +632,94 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
-      security:
-      - DeviceAuth: []
-      summary: MQTT方式心跳
       tags:
-      - mqtt
-  /api/mqtt/{deviceId}/ping:
+      - devices
+  /api/devices/{deviceId}/update:
     post:
       consumes:
       - application/json
+      description: 仅设备所有者或设备自身可更新；增量更新，仅请求体中出现的字段会被更新，未传字段保持原值
       parameters:
-      - description: 设备ID
+      - description: 设备ID（6位hex）
         in: path
         name: deviceId
         required: true
         type: string
+      - description: 待更新的设备字段（至少一个）
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.DeviceUpdateParameters'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/common.ApiResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      security:
-      - DeviceAuth: []
-      summary: MQTT方式心跳
-      tags:
-      - mqtt
-  /api/mqtt/client/connect:
-    post:
-      consumes:
-      - application/json
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
+            allOf:
+            - $ref: '#/definitions/common.ApiResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/ent.Device'
+              type: object
         "400":
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
-      summary: 连接MQTT Broker
       tags:
-      - mqtt
-  /api/mqtt/client/disconnect:
-    post:
-      consumes:
-      - application/json
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      security:
-      - UserAuth: []
-      summary: 断开MQTT连接
-      tags:
-      - mqtt
-  /api/mqtt/client/messages:
+      - devices
+  /api/users:
     get:
       consumes:
       - application/json
       parameters:
-      - description: 数量限制
+      - description: 页码（从0开始，仅 pageSize > 0 时生效）
         in: query
-        name: limit
+        name: pageNum
         type: integer
+      - description: 每页数量（>0 时返回分页 envelope，缺省返回全量数组）
+        in: query
+        name: pageSize
+        type: integer
+      - description: 用户名（模糊匹配，仅分页时生效）
+        in: query
+        name: name
+        type: string
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/common.ApiResponse'
+            allOf:
+            - $ref: '#/definitions/common.ApiResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/ent.User'
+                  type: array
+              type: object
         "400":
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
-      summary: 获取最近的MQTT消息
       tags:
-      - mqtt
-  /api/mqtt/client/publish:
+      - users
     post:
       consumes:
       - application/json
       parameters:
-      - description: 发布消息请求参数
+      - description: 注册请求参数
         in: body
         name: body
         required: true
         schema:
-          $ref: '#/definitions/mqtt.PublishRequest'
+          $ref: '#/definitions/service.RegisterRequest'
       produces:
       - application/json
       responses:
@@ -683,42 +731,49 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
-      security:
-      - UserAuth: []
-      summary: 发布消息
       tags:
-      - mqtt
-  /api/mqtt/client/status:
+      - users
+      - public
+  /api/users/{userId}:
     get:
       consumes:
       - application/json
+      parameters:
+      - description: 用户ID（me=当前登录用户）
+        in: path
+        name: userId
+        required: true
+        type: string
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/common.ApiResponse'
+            allOf:
+            - $ref: '#/definitions/common.ApiResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/ent.User'
+              type: object
         "400":
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
-      summary: 获取MQTT客户端状态
       tags:
-      - mqtt
-  /api/mqtt/client/subscribe:
+      - users
+  /api/users/{userId}/delete:
     post:
       consumes:
       - application/json
       parameters:
-      - description: 订阅请求参数
-        in: body
-        name: body
+      - description: 用户ID（本人或管理员可操作）
+        in: path
+        name: userId
         required: true
-        schema:
-          $ref: '#/definitions/mqtt.SubscribeRequest'
+        type: string
       produces:
       - application/json
       responses:
@@ -732,41 +787,18 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
-      summary: 订阅主题
       tags:
-      - mqtt
-  /api/mqtt/client/unsubscribe:
+      - users
+  /api/users/{userId}/update:
     post:
       consumes:
       - application/json
       parameters:
-      - description: 取消订阅请求参数
-        in: body
-        name: body
+      - description: 用户ID（me=当前用户；本人或管理员可操作）
+        in: path
+        name: userId
         required: true
-        schema:
-          $ref: '#/definitions/mqtt.TopicRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      security:
-      - UserAuth: []
-      summary: 取消订阅
-      tags:
-      - mqtt
-  /api/user:
-    put:
-      consumes:
-      - application/json
-      parameters:
+        type: string
       - description: 用户信息
         in: body
         name: body
@@ -791,36 +823,9 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
-      summary: 更新用户信息
       tags:
       - users
-  /api/user/delete:
-    post:
-      consumes:
-      - application/json
-      parameters:
-      - description: 用户ID
-        in: query
-        name: id
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      security:
-      - UserAuth: []
-      summary: 删除用户
-      tags:
-      - users
-  /api/user/isLogin:
+  /api/users/isLogin:
     get:
       consumes:
       - application/json
@@ -835,38 +840,10 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
-      summary: 检查登录状态
       tags:
       - users
       - public
-  /api/user/list:
-    get:
-      consumes:
-      - application/json
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/common.ApiResponse'
-            - properties:
-                data:
-                  items:
-                    $ref: '#/definitions/ent.User'
-                  type: array
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      security:
-      - UserAuth: []
-      summary: 列出所有用户
-      tags:
-      - users
-  /api/user/login:
+  /api/users/login:
     post:
       consumes:
       - application/json
@@ -893,11 +870,10 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
-      summary: 用户登录
       tags:
       - users
       - public
-  /api/user/logout:
+  /api/users/logout:
     post:
       consumes:
       - application/json
@@ -914,109 +890,30 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
-      summary: 退出登录
       tags:
       - users
-  /api/user/page:
+  /health:
     get:
-      consumes:
-      - application/json
-      parameters:
-      - description: 页码（从0开始）
-        in: query
-        name: pageNum
-        type: integer
-      - description: 每页数量
-        in: query
-        name: pageSize
-        type: integer
-      - description: 用户名
-        in: query
-        name: name
-        type: string
+      description: |-
+        供容器编排/负载均衡探测，不走统一响应结构；
+        探测 PostgreSQL/Redis/InfluxDB，任一失联时返回 HTTP 503
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            allOf:
-            - $ref: '#/definitions/common.ApiResponse'
-            - properties:
-                data:
-                  additionalProperties: true
-                  type: object
-              type: object
-        "400":
-          description: Bad Request
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
           schema:
-            $ref: '#/definitions/common.ApiResponse'
-      security:
-      - UserAuth: []
-      summary: 分页查询用户
+            additionalProperties:
+              type: string
+            type: object
       tags:
-      - users
-  /api/user/profile:
-    get:
-      consumes:
-      - application/json
-      parameters:
-      - description: 用户ID
-        in: query
-        name: id
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/common.ApiResponse'
-            - properties:
-                data:
-                  $ref: '#/definitions/ent.User'
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      security:
-      - UserAuth: []
-      summary: 获取用户信息
-      tags:
-      - users
-  /api/user/register:
-    post:
-      consumes:
-      - application/json
-      parameters:
-      - description: 注册请求参数
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/service.RegisterRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/common.ApiResponse'
-            - properties:
-                data:
-                  $ref: '#/definitions/ent.User'
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/common.ApiResponse'
-      summary: 用户注册
-      tags:
-      - users
-      - public
+      - system
 securityDefinitions:
   DeviceAuth:
     description: 设备 Token（设备注册后获取）

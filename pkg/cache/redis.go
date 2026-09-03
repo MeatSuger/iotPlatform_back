@@ -18,12 +18,9 @@ import (
 // ============================================================
 // RedisCache — 生产级 Redis 缓存层
 //
-// 参考开源项目：
-//   - go-redis/cache (Uptrace) — Cache-Aside + TinyLFU L1
-//   - seaguest/cache — 双层缓存 + loader + singleflight
-//   - viney-shih/go-cache — 多层缓存 + pub-sub 一致性
-//   - jetcache-go — L1(FreeCache) + L2(Redis) + singleflight
-//   - cachex — serve-stale + negative caching + TTL jitter
+// 设计参考：go-redis/cache（Cache-Aside + L1）、seaguest/cache
+// （双层缓存 + singleflight）、viney-shih/go-cache（pub-sub 跨实例失效）、
+// jetcache-go（L1 + L2）、cachex（负缓存 + TTL 抖动）
 // ============================================================
 
 // RedisCache Redis 缓存抽象（L2 层）
@@ -59,13 +56,13 @@ const (
 	TTLDevice       = 10 * time.Minute // 设备元数据（L2）
 	TTLDeviceLocal  = 30 * time.Second // 设备元数据（L1）
 	TTLDeviceStatus = 10 * time.Minute // 设备运行时状态
-	TTLSensorRecent = 8 * time.Minute  // 传感器最新数据（8min，较原5min减少miss，仍小于设备TTL）
+	TTLSensorRecent = 8 * time.Minute  // 传感器最新数据（短于设备元数据 TTL，减少 miss）
 	TTLSensorQuery  = 15 * time.Second // 传感器查询结果（短TTL，保证数据新鲜度）
 	TTLUser         = 15 * time.Minute // 用户信息
 	TTLUserLocal    = 60 * time.Second // 用户信息（L1）
 	TTLDeviceList   = 2 * time.Minute  // 用户设备列表
 	TTLNegCache     = 30 * time.Second // 负缓存（防穿透，短TTL）
-	TTLMQTTMessage  = 24 * time.Hour
+	TTLMQTTMessage  = 24 * time.Hour   // MQTT 消息历史
 )
 
 // ============================================================
@@ -146,15 +143,10 @@ func (c *RedisCache) Pipeline() redis.Pipeliner {
 // 核心模式1：Cache-Aside with Loader（参考 seaguest/cache）
 //
 // 流程：L1 → L2 → 负缓存检查 → Loader → Backfill
-//  1. 查 L1 本地缓存（~50ns）
-//  2. 查 L2 Redis 缓存（~1ms）
-//  3. 查 L2 负缓存（防穿透）
-//  4. 调用 loader 从 DB 加载（~5-50ms）
-//  5. 回填 L2 + L1
 //
 // 内置：
 //  - singleflight 防击穿（并发 miss 只回源一次）
-//  - 负缓存防穿透（L2 缓存"不存在"，L1 + L2 双重检查）
+//  - 负缓存防穿透（"不存在"结果缓存到 L1 + L2，L1/L2 双重检查）
 //  - TTL 抖动防雪崩（±25% 随机偏移，避免批量同时过期）
 // ============================================================
 
@@ -271,8 +263,22 @@ func (c *RedisCache) GetCachedDeviceWithLoader(ctx context.Context, deviceID str
 }
 
 // CacheDevice 缓存设备信息（Write-Through）
+// 先写共享 L2，再同步失效本实例 L1，并发布失效通知让其他实例清掉其 L1。
+// 读者下一次访问会从新 L2 回填 L1，不会命中旧值。
 func (c *RedisCache) CacheDevice(ctx context.Context, deviceID string, device any) error {
-	return c.Set(ctx, PrefixDevice+deviceID, device, TTLDevice)
+	key := PrefixDevice + deviceID
+	data, err := json.Marshal(device)
+	if err != nil {
+		return fmt.Errorf("序列化设备缓存失败: %w", err)
+	}
+	// 1. 写 L2（共享层）
+	if err := c.client.Set(ctx, key, data, jitterTTL(TTLDevice)).Err(); err != nil {
+		return err
+	}
+	// 2. 同步失效本实例 L1，避免写后本实例立即读到旧 L1
+	c.local.Delete(key)
+	// 3. 通知其他实例失效其 L1（L2 已是新值，下次读会回填）
+	return c.PublishInvalidate(ctx, key)
 }
 
 // EvictDeviceCache 失效设备缓存（Write-Invalidate）
@@ -447,7 +453,7 @@ func (c *RedisCache) EvictDeviceAllCaches(ctx context.Context, deviceID string) 
 }
 
 // ============================================================
-// 设备上报快速路径：Pipeline 批量写入（1次往返完成4个操作）
+// 设备上报快速路径：Pipeline 批量写入（一次往返完成 5 个命令）
 // ============================================================
 
 // BufferDeviceReportsKey 上报缓冲队列 key（与 device_data_buffer.go 共享）
@@ -457,7 +463,7 @@ const BufferDeviceReportsKey = "buffer:device_reports"
 const BufferQueueMaxLen = 20000
 
 // FastReportWrite 一次 Pipeline 完成：更新设备状态 Hash + 缓存传感器数据 + 推入缓冲队列
-// 将 3 次 Redis 往返合并为 1 次
+// 将多次 Redis 往返合并为 1 次
 func (c *RedisCache) FastReportWrite(ctx context.Context, deviceID string, status string, lastActiveTime int64, sensors any, bufferData []byte) error {
 	pipe := c.client.Pipeline()
 
@@ -548,6 +554,7 @@ func (c *RedisCache) LPushMQTTMessage(ctx context.Context, deviceID string, msg 
 // 当实例 A 写入新数据后，发布失效消息，实例 B/C 收到后失效本地 L1 缓存
 // ============================================================
 
+// invalidationChannel 跨实例缓存失效通知频道
 const invalidationChannel = "cache:invalidate"
 
 // PublishInvalidate 发布缓存失效通知
@@ -583,7 +590,7 @@ func (c *RedisCache) SubscribeInvalidate(ctx context.Context) {
 // 存储改进：
 //  - 存储原始 JSON bytes，避免 any → struct 类型丢失
 //  - isNeg 标记位支持负缓存（不必在 bytes 中混入 sentinel）
-//  - 随机淘汰（Go map 迭代 + 简单 LRU）
+//  - 随机淘汰（利用 Go map 无序迭代顺序）
 // ============================================================
 
 const localCacheShards = 64
@@ -781,12 +788,11 @@ func jitterTTL(base time.Duration) time.Duration {
 	if base <= 0 {
 		return base
 	}
-	// 防除零：小于 4ns 的 base 直接返回
+	// base 过小（< 4ns）直接返回，避免 rand.Int63n(0) 非法参数
 	if base < 4 {
 		return base
 	}
-	// ±25%: 范围 [base*3/4, base*5/4)
-	// jitter = rand([0, base/2)) - base/4 → 范围 [-base/4, base/4)
+	// ±25%: jitter ∈ [-base/4, base/4)，结果 ∈ [base*3/4, base*5/4)
 	jitter := rand.Int63n(int64(base/2)) - int64(base/4) // nolint:gosec
 	return base + time.Duration(jitter)
 }

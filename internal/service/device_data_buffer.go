@@ -14,15 +14,6 @@ import (
 	"iot-platform.local/pkg/cache"
 )
 
-// DeviceDataBuffer Redis 写缓冲 — 消峰填谷，支撑 1000+ 并发上报
-//
-// 架构：
-//   - 设备上报 → LPush 到 Redis List（内存级速度）
-//   - 后台 worker 定期 BRPop 批量取出 → 批量写 InfluxDB + 批量更新 PostgreSQL
-//
-// 这样即便 1000 并发同时打进来，HTTP/UDP/WS 线程只做一次 Redis LPush 就返回，
-// 后端慢速写入（InfluxDB / PG）由 worker 异步消化。
-
 // BufferedReport 缓冲队列中的单条上报
 type BufferedReport struct {
 	DeviceID  string          `json:"device_id"`
@@ -45,7 +36,13 @@ type BatchWriter interface {
 	FlushReports(ctx context.Context, reports []BufferedReport) error
 }
 
-// DeviceDataBuffer 设备数据缓冲器
+// DeviceDataBuffer Redis 写缓冲 — 消峰填谷，支撑 1000+ 并发上报
+//
+// 架构：
+//   - 设备上报 → LPush 到 Redis List（内存级速度）
+//   - 后台 worker 定期批量 RPop 取出 → 批量写 InfluxDB + 批量更新 PostgreSQL
+//
+// 上报入口线程只做一次 Redis LPush 就返回，后端慢速写入（InfluxDB / PG）由 worker 异步消化。
 type DeviceDataBuffer struct {
 	rdb    *redis.Client
 	writer BatchWriter
@@ -142,7 +139,6 @@ func (b *DeviceDataBuffer) drain(ctx context.Context) {
 			return
 		}
 
-		// 反序列化
 		reports := make([]BufferedReport, 0, len(results))
 		for _, raw := range results {
 			var r BufferedReport
@@ -157,10 +153,9 @@ func (b *DeviceDataBuffer) drain(ctx context.Context) {
 			continue
 		}
 
-		// 批量写入 InfluxDB
+		// 批量写入失败不丢数据：重新推回队列
 		if err := b.writer.FlushReports(ctx, reports); err != nil {
 			zap.L().Error("[DataBuffer] 批量写入 InfluxDB 失败", zap.Error(err))
-			// 失败不丢数据：重新推回队列
 			b.requeue(ctx, reports)
 			return
 		}

@@ -14,14 +14,11 @@ var skipPaths = map[string]bool{
 
 // Logger 使用 Zap 的结构化 HTTP 请求日志中间件
 //
-// 按响应状态码分级输出，配合 pkg/common.InitLogger 的 log-level 实现：
-//   - 5xx → error（生产环境可见）
-//   - 4xx → warn （生产环境可见，仅必要）
-//   - 2xx/3xx → debug（生产环境不输出；debug 环境显示全部请求明细）
+// 按响应状态码分级输出（配合 pkg/common.InitLogger 的 log-level）：
+//   - 5xx → error、4xx → warn、2xx/3xx → debug
 //
-// 效果：
-//   - debug 环境（log-level: debug）→ 记录所有请求，便于开发排查
-//   - 生产环境（log-level: info/warn）→ 只输出失败请求（4xx/5xx），成功请求静默
+// 因此 debug 环境记录全部请求便于排查；生产环境（info/warn）只输出 4xx/5xx，
+// 且 2xx/3xx 在日志级别被过滤时走快路径提前返回，避免构造日志字段的开销。
 func Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -35,6 +32,12 @@ func Logger() gin.HandlerFunc {
 		}
 
 		status := c.Writer.Status()
+
+		// 快路径：2xx/3xx 且 Debug 被日志级别过滤时直接返回，
+		// 避免每请求构造字段（c.ClientIP / UserAgent / time.Format 均有分配）。
+		if status < 400 && !zap.L().Core().Enabled(zap.DebugLevel) {
+			return
+		}
 
 		fields := []zap.Field{
 			zap.Int("status", status),

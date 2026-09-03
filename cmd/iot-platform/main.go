@@ -10,7 +10,7 @@
 // @license.url  https://opensource.org/licenses/MIT
 
 // @host      localhost:8182
-// @BasePath  /api
+// @BasePath  /
 
 // @securityDefinitions.apikey  UserAuth
 // @in                          header
@@ -35,6 +35,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	dbsql "database/sql"
 
 	"entgo.io/ent/dialect/sql"
 	"github.com/redis/go-redis/v9"
@@ -120,7 +122,8 @@ func main() {
 		ActiveTimeout(-1).
 		IsConcurrent(true).
 		IsShare(false).   // 每次登录生成独立 Token（便于多端管理与顶号）
-		MaxLoginCount(5). // 同一账号最多同时在线 5 端
+		MaxLoginCount(5). // 同一账号最多 5 个设备端同时在线；依赖登录时携带 device 标识区分设备端，
+		// 未携带时全部落入默认设备键，该上限不生效
 		IsLog(true).
 		IsReadCookie(true).
 		CookieHttpOnly(true).
@@ -134,10 +137,11 @@ func main() {
 		Storage(saredis.NewStorageFromClient(rdb)).
 		TokenName("X-Device-Token").
 		KeyPrefix("X-Device-Token:").
-		NeverExpire().       // 默认过期时间最长：永不过期
-		NoActiveTimeout().   // 不做活跃超时冻结
-		IsConcurrent(false). // 顶号：一个 deviceId 只保留一个有效 Token
-		IsShare(false).      // 不复用旧 Token，每次登录生成新 Token 并踢掉旧 Token
+		NeverExpire().      // 默认过期时间最长：永不过期
+		NoActiveTimeout().  // 不做活跃超时冻结
+		IsConcurrent(true). // 允许多端并发，无登录数上限
+		IsShare(true).      // 复用旧 Token：已登录且有效时直接返回同一 Token，一个设备一个 Token 一直使用；
+		// 需要轮换时先登出（Logout）再登录，才会签发新 Token
 		IsLog(true).
 		TokenStyle(satoken.TokenStyleUUID).
 		Build()
@@ -272,7 +276,21 @@ func main() {
 	}
 
 	// 11. 设置路由
-	r := router.Setup(svcs, wsHandler, saginPlugin, mqttGateway)
+	// 健康检查探针：HTTP 状态码仅表达后端是否正常（任一依赖失联 → /health 返回 503）
+	pgProbe := func(ctx context.Context) error {
+		db, err := dbsql.Open("postgres", cfg.Database.DSN())
+		if err != nil {
+			return fmt.Errorf("打开数据库连接: %w", err)
+		}
+		defer db.Close()
+		return db.PingContext(ctx)
+	}
+	healthProbes := &router.HealthProbe{
+		PostgreSQL: pgProbe,
+		Redis:      components.Cache.Ping,
+		Influx:     influxSvc.Ping,
+	}
+	r := router.Setup(svcs, wsHandler, saginPlugin, mqttGateway, healthProbes)
 
 	// 12. UDP
 	var udpSrv *server.UDPServer

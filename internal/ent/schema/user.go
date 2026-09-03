@@ -20,6 +20,7 @@ type User struct {
 func (User) Annotations() []schema.Annotation {
 	return []schema.Annotation{
 		entsql.Table("app_user"),
+		edge.Annotation{StructTag: `json:"-"`},
 	}
 }
 

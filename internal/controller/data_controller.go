@@ -27,21 +27,17 @@ func NewDataController(deviceReportSvc *service.DeviceReportService, influxSvc *
 
 // ReportData @Summary      上报传感器数据
 // @Tags         data
-// @Accept       JSON
-// @Produce      JSON
-// @Param        body      entity.DeviceStatusDTO  true  "传感器数据"
+// @Accept       json
+// @Produce      json
+// @Param        body      body  entity.DeviceStatusDTO  true  "传感器数据"
 // @Param        deviceId  path      string                  true  "设备ID"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
 // @Security     DeviceAuth
-// @Router       /api/data/{deviceId}/Data [post]
-// ReportData 上报传感器数据 (POST /data/:deviceId/Data)
-// 优化：中间件已完成 Token 校验，此处直接使用已验证的 deviceID，跳过重复校验
+// @Router       /api/devices/{deviceId}/sensorData [post]
+// ReportData 上报传感器数据 (POST /devices/:deviceId/sensorData)
 func (ctl *DataController) ReportData(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
-
-	// 中间件已验证 Token 并将 deviceId 注入上下文，直接信任
-	// 避免再次调用 deviceMgr.GetLoginID() 产生冗余 Redis 往返
 
 	var dto entity.DeviceStatusDTO
 	if err := c.ShouldBindJSON(&dto); err != nil {
@@ -54,7 +50,7 @@ func (ctl *DataController) ReportData(c *gin.Context) {
 		return
 	}
 
-	// 快速路径：跳过 Token 二次校验（中间件已校验）
+	// 快速路径：中间件已校验 Token，跳过二次校验（避免多余 Redis 往返）
 	if err := ctl.deviceReportSvc.ReportStatusFast(c.Request.Context(), deviceID, dto); err != nil {
 		common.FailWithMsg(c, common.CodeBadRequest, err.Error())
 		return
@@ -65,16 +61,15 @@ func (ctl *DataController) ReportData(c *gin.Context) {
 
 // Heartbeat @Summary      设备心跳
 // @Tags         data
-// @Accept       JSON
-// @Produce      JSON
+// @Accept       json
+// @Produce      json
 // @Param        deviceId  path      string  true  "设备ID"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
 // @Security     DeviceAuth
-// @Router       /api/data/{deviceId}/ping [post]
-// @Router       /api/data/{deviceId}/heartbeat [post]
-// Heartbeat 设备心跳 (POST /data/:deviceId/ping 或 /data/:deviceId/heartbeat)
-// 优化：中间件已完成 Token 校验，跳过重复校验
+// @Router       /api/devices/{deviceId}/heartbeat [post]
+// @Router       /api/devices/{deviceId}/ping [post]
+// Heartbeat 设备心跳 (POST /devices/:deviceId/heartbeat 或 /devices/:deviceId/ping)
 func (ctl *DataController) Heartbeat(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 
@@ -92,16 +87,16 @@ func (ctl *DataController) Heartbeat(c *gin.Context) {
 
 // QueryData @Summary      查询设备传感器数据
 // @Tags         data
-// @Accept       JSON
-// @Produce      JSON
+// @Accept       json
+// @Produce      json
 // @Param        deviceId  path      string  false  "设备ID"
 // @Param        limit     query     int     false  "数量限制，默认50"
 // @Param        start     query     string  false  "起始时间（RFC3339），默认3天前"
 // @Param        end       query     string  false  "结束时间（RFC3339），默认当前时间"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
-// @Router       /api/data/{deviceId}/Data/list [get]
-// QueryData 查询设备传感器数据 (GET /data/:deviceId/Data/list)
+// @Router       /api/devices/{deviceId}/sensorData [get]
+// QueryData 查询设备传感器数据 (GET /devices/:deviceId/sensorData)
 func (ctl *DataController) QueryData(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	limitStr := c.DefaultQuery("limit", "50")
@@ -133,17 +128,4 @@ func parseTimeRange(c *gin.Context) (start, end time.Time) {
 		}
 	}
 	return
-}
-
-// ListData @Summary      通用数据查询入口
-// @Tags         data
-// @Accept       JSON
-// @Produce      JSON
-// @Success      200   {object}  common.ApiResponse
-// @Failure      400   {object}  common.ApiResponse
-// @Router       /api/data/list [get]
-// ListData 通用数据查询入口 (GET /data/list)
-func (ctl *DataController) ListData(c *gin.Context) {
-	// 暂未实现，留作扩展点
-	common.Success(c, gin.H{"message": "请在具体设备下查询数据"})
 }

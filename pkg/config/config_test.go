@@ -41,7 +41,7 @@ func TestRedisConfig_PoolConfig_Defaults(t *testing.T) {
 	assert.Equal(t, 3, readTimeout)
 	assert.Equal(t, 3, writeTimeout)
 	assert.Equal(t, 4, poolTimeout)
-	// maxRetries defaults when 0: now uses default 3 (fixed: <= 0 check)
+	// maxRetries 未配置（<=0）时默认 3
 	assert.Equal(t, 3, maxRetries)
 }
 
@@ -68,7 +68,7 @@ func TestRedisConfig_PoolConfig_Custom(t *testing.T) {
 func TestRedisConfig_PoolConfig_NegativeRetries(t *testing.T) {
 	r := RedisConfig{MaxRetries: -1}
 	_, _, _, _, _, _, maxRetries := r.PoolConfig()
-	assert.Equal(t, 3, maxRetries) // negative → default
+	assert.Equal(t, 3, maxRetries) // 负数 → 默认值
 }
 
 func TestLoad_FileNotFound(t *testing.T) {
@@ -78,7 +78,7 @@ func TestLoad_FileNotFound(t *testing.T) {
 }
 
 func TestLoad_ValidConfig(t *testing.T) {
-	// Create a temporary YAML config
+	// 创建临时 YAML 配置
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
 	content := `

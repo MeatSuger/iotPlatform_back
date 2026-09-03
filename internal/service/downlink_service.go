@@ -55,6 +55,7 @@ type DownlinkCmdResponse struct {
 	CreatedAt time.Time       `json:"createdAt"`
 }
 
+// EnqueueCmd 下发命令：持久化到 PostgreSQL + 写入 Redis 队列 + WebSocket 实时推送
 func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req DownlinkCmdRequest) (*ent.DownlinkCmd, error) {
 	now := time.Now()
 	payloadStr := string(req.Payload)
@@ -111,10 +112,10 @@ func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req D
 	return cmd, nil
 }
 
+// PollCmd 设备轮询命令：Lua 原子取出并删除队列，标记为已发送
 func (s *DownlinkService) PollCmd(ctx context.Context, deviceID string) ([]DownlinkCmdResponse, error) {
 	queueKey := cmdQueuePrefix + deviceID
 
-	// Lua 原子操作：取出全部 + 删除（修复 LRange+Del 非原子的并发竞态）
 	results, err := pollCmdLua.Run(ctx, s.rdb, []string{queueKey}).Result()
 	if err != nil {
 		// Redis 故障不再静默吞掉，上抛给调用方
@@ -146,6 +147,7 @@ func (s *DownlinkService) PollCmd(ctx context.Context, deviceID string) ([]Downl
 	return cmds, nil
 }
 
+// AckCmd 设备确认命令（标记为已送达）
 func (s *DownlinkService) AckCmd(ctx context.Context, cmdID uint) error {
 	if err := s.cmdRepo.MarkDelivered(ctx, cmdID); err != nil {
 		zap.S().Warnf("[Downlink] ACK 更新失败 [cmd=%d]: %v", cmdID, err)
@@ -155,6 +157,7 @@ func (s *DownlinkService) AckCmd(ctx context.Context, cmdID uint) error {
 	return nil
 }
 
+// NotifyOwnerCmd 通过 WebSocket 通知设备 owner 命令已发送
 func (s *DownlinkService) NotifyOwnerCmd(deviceID string, cmd *ent.DownlinkCmd) {
 	if s.wsHub == nil {
 		return

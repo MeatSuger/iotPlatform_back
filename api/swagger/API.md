@@ -1,59 +1,989 @@
-# IoT Platform API 文档
+# IoT Platform API 参考
 
-> Base URL: `https://api.meatsuger.top` / `http://localhost:8182`
+> **Base URL**: `https://api.meatsuger.top`（生产）· `http://localhost:8182`（开发）
+>
+> **版本**: 1.3.0 ｜ **更新时间**: 2026-09-03
+>
+> 本文档参照 Google API 改进提案（AIP）风格组织：资源导向设计（AIP-121）、标准方法（AIP-131 ~ AIP-135）、字段行为标注（AIP-203）、错误模型（AIP-193）、文档规范（AIP-192）。
+>
+> **平台约定**：全 API 仅使用 GET / POST 两个 HTTP 动词（嵌入式客户端兼容），见 [2.6](#26-http-动词约定)。
 
 ---
 
 ## 目录
 
-- [1. 认证说明](#1-认证说明)
-- [2. WebSocket 端点（重点）](#2-websocket-端点重点)
-- [3. 用户接口](#3-用户接口)
-- [4. 设备接口](#4-设备接口)
-- [5. 数据接口](#5-数据接口)
-- [6. MQTT 接口](#6-mqtt-接口)
-- [A. 附录](#a-附录)
+- [1. 概述](#1-概述)
+- [2. 通用约定](#2-通用约定)
+- [3. 认证与授权](#3-认证与授权)
+- [4. 资源模型](#4-资源模型)
+- [5. 方法参考](#5-方法参考)
+  - [5.1 System 资源](#51-system-资源)
+  - [5.2 User 资源](#52-user-资源)
+  - [5.3 Device 资源](#53-device-资源)
+  - [5.4 SensorData 资源](#54-sensordata-资源)
+  - [5.5 DownlinkCmd 资源](#55-downlinkcmd-资源)
+  - [5.6 DeviceConfig 资源](#56-deviceconfig-资源)
+- [6. 实时通道](#6-实时通道)
+- [7. 附录](#7-附录)
 
 ---
 
-## 1. 认证说明
+## 1. 概述
 
-### 用户认证（UserAuth）
+IoT Platform API 是一套面向**设备接入与管理**的 REST API，围绕四类资源组织：
 
-- Header: `Authorization` — 用户登录后获得的 Token（UUID 格式）
-- 获取方式: `POST /api/user/login`
-- 并发限制: 同一账号最多同时在线 5 端，每端 Token 独立；超出后最旧端被自动下线
+| 资源 | 资源名格式 | 说明 |
+|------|-----------|------|
+| `User` | `users/{userId}` | 平台用户，设备的属主 |
+| `Device` | `devices/{deviceId}` | 接入平台的终端设备，`deviceId` 为 6 位十六进制串 |
+| `SensorData` | `devices/{deviceId}/sensorData` | 设备上报的传感器时序数据（存储于 InfluxDB） |
+| `DownlinkCmd` | `devices/{deviceId}/commands/{cmdId}` | 平台向设备下发的控制命令 |
+| `DeviceConfig` | `devices/{deviceId}/config` | 设备配置快照（云端期望配置，版本化下发） |
 
-### 设备认证（DeviceAuth）
+方法分为三类（AIP-130）：
 
-- Header: `X-Device-Token` — 设备注册后通过 login 接口获取的 Token
-- 获取方式: `GET /api/device/{deviceId}/login`（使用设备 6 位 hex ID 认证）
-- 唯一性: 一个 deviceId 只对应一个有效 Token，重复获取会顶掉旧 Token（旧 Token 立即失效）
-- 过期策略: 设备 Token 永不过期；设备 **30 天未上线** 会被自动删除 Token（**不删除设备**），重新登录即可获取新 Token
+- **标准方法**：Get / List / Create，具有一致的语义与签名；
+- **自定义后缀方法**：Update / Delete —— 受[仅 GET / POST 约定](#26-http-动词约定)限制，不使用 PUT / DELETE 动词，改用 `POST + /update`、`POST + /delete` 自定义后缀表达，语义与标准 Update / Delete 方法一致；
+- **自定义方法**：如 `login`（签发 Token）、`token`（获取设备 Token）、`commands`（下发 / 拉取命令）、`config`（配置存储与下发）、传感器数据上报、心跳等，映射到适合设备接入语义的 HTTP 动词（同样仅 GET / POST）。
 
-### 设备 ID 认证（DeviceIDAuth）
+资源与方法总览：
 
-- 路径参数: `{deviceId}` — 6 位十六进制设备 ID
-- 用途: 设备获取 Token 时的身份验证（无需额外 Token）
+```
+users/{userId}                          ← 用户资源
+  Create        POST   /api/users                          （标准：Create）
+  Login         POST   /api/users/login                    （自定义：签发 Token）
+  IsLogin       GET    /api/users/isLogin                  （自定义：会话检查）
+  Logout        POST   /api/users/logout                   （自定义：吊销 Token）
+  List          GET    /api/users                          （标准：List，管理员；可选分页参数）
+  Get           GET    /api/users/{userId}                 （标准：Get，{userId} 支持 me）
+  Update        POST   /api/users/{userId}/update          （POST 自定义后缀方法：Update，仅 GET/POST 约定）
+  Delete        POST   /api/users/{userId}/delete          （POST 自定义后缀方法：Delete，仅 GET/POST 约定）
 
-### Cookie 安全
+devices/{deviceId}                      ← 设备资源
+  Create        POST   /api/devices                        （标准：Create）
+  List          GET    /api/devices                        （标准：List）
+  Get           GET    /api/devices/{deviceId}             （标准：Get）
+  Update        POST   /api/devices/{deviceId}/update      （POST 自定义后缀方法：Update，增量）
+  Delete        POST   /api/devices/{deviceId}/delete      （POST 自定义后缀方法：Delete）
+  GetToken      GET    /api/devices/{deviceId}/token       （自定义：签发设备 Token，/login 为兼容别名）
 
-登录 / 获取设备 Token 后下发的认证 Cookie 统一为 `httpOnly` + `SameSite=Lax`，生产环境（`release`）自动启用 `secure`。
+devices/{deviceId}/sensorData           ← 传感器数据（不可变时序数据）
+  Report        POST   /api/devices/{deviceId}/sensorData  （自定义：批量写入）
+  List          GET    /api/devices/{deviceId}/sensorData  （标准：List）
+  Heartbeat     POST   /api/devices/{deviceId}/heartbeat   （自定义：保活，/ping 为兼容别名）
+
+devices/{deviceId}/commands             ← 下行命令
+  Post          POST   /api/devices/{deviceId}/commands    （自定义：下发）
+  Pull          GET    /api/devices/{deviceId}/commands    （自定义：设备拉取）
+
+devices/{deviceId}/config               ← 设备配置快照
+  Get           GET    /api/devices/{deviceId}/config      （自定义：查询期望配置）
+  Set           POST   /api/devices/{deviceId}/config      （自定义：设置并下发，版本递增）
+  Report        POST   /api/devices/{deviceId}/config/report （自定义：设备回执）
+```
 
 ---
 
-## 2. WebSocket 端点（重点）
+## 2. 通用约定
 
-### 2.1 设备实时下放通道 — `/api/v2/ws/device`
+### 2.1 统一响应结构
 
-设备建立 WebSocket 连接后，**仅接收**平台下发的命令，不发送数据。
+所有 HTTP 接口（**含错误**）均返回 HTTP 200，业务结果由 `code` 字段表达（错误模型见 AIP-193 的业务码映射）：
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {}
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `code` | int | 业务状态码，见 [2.2](#22-业务状态码) |
+| `message` | string | 人类可读的结果描述 |
+| `data` | any | 业务数据；无数据时为 `null` |
+
+> 例外：`GET /health` 面向容器编排探针，直接返回 HTTP 语义响应，不走统一结构。
+
+### 2.2 业务状态码
+
+| code | HTTP 语义 | 说明 | 典型场景 |
+|------|-----------|------|----------|
+| 200 | OK | 成功 | — |
+| 400 | INVALID_ARGUMENT | 请求参数错误 | 缺少必填字段、JSON 格式非法、字段超长 |
+| 401 | UNAUTHENTICATED | 未认证 | Token 缺失 / 无效 / 已过期 / 被踢下线 |
+| 403 | PERMISSION_DENIED | 无权限 | 操作他人资源、非管理员访问管理接口、设备 Token 与路径设备不匹配 |
+| 404 | NOT_FOUND | 资源不存在 | 设备 / 用户不存在 |
+| 500 | INTERNAL | 服务器内部错误 | 数据库 / 缓存 / 时序库异常 |
+
+### 2.3 时间格式
+
+- 响应中的时间统一为 Go 参考布局 `2006-01-02T15:04:05.000-07:00`（毫秒精度，带时区偏移），如 `2026-08-31T20:30:00.000+08:00`；
+- 查询参数中的时间使用 RFC 3339 格式，如 `2026-08-31T00:00:00+08:00`。
+
+### 2.4 资源 ID
+
+| 资源 | ID 格式 | 生成方 | 可变性 |
+|------|---------|--------|--------|
+| User | 自增 uint | 服务端 | 不可变 |
+| Device | **6 位十六进制字符串**（如 `90431b`） | 服务端（注册时生成） | 不可变（AIP-136） |
+
+路径参数中的 `{deviceId}` **大小写不敏感**，服务端统一归一化为小写。
+
+### 2.5 分页（AIP-158）
+
+用户列表 `GET /api/users` 支持**可选**页码分页（原 list / page 两个接口已合并）：
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `pageNum` | int | `0` | 页码，**从 0 开始**（仅 `pageSize > 0` 时生效） |
+| `pageSize` | int | `0` | 每页数量；**大于 0 时启用分页** |
+| `name` | string | — | 按用户名模糊过滤 |
+
+**双响应形态**（`pageSize` 决定）：
+
+- `pageSize > 0`：返回分页 envelope，`data` 结构为 `records`（当前页数据）、`total`（总数）、`size`（每页数量）、`current`（当前页码）、`pages`（总页数）；
+- `pageSize` 缺省或 `<= 0`：返回**全量**用户数组（`data` 为 User 资源数组，可被 `name` 过滤）。
+
+> 设备传感器数据查询（5.4）采用 `limit + 时间窗口` 截断式分页（结果按时间倒序）。
+
+### 2.6 HTTP 动词约定
+
+**仅使用 GET / POST 两个 HTTP 动词**（兼容能力受限的嵌入式客户端）：
+
+- 所有**写操作**（创建 / 更新 / 删除 / 命令下发 / 数据上报 / 登录登出等）一律使用 `POST`；
+- **更新与删除**通过 `POST + /update`、`POST + /delete` 自定义后缀表达（如 `POST /api/devices/{deviceId}/update`、`POST /api/users/{userId}/delete`），语义与标准 Update / Delete 方法一致；
+- `GET` 仅用于**读取 / 幂等操作**（Get / List / 会话检查 / Token 获取 / 命令拉取）。
+
+> 不使用 PUT / PATCH / DELETE 动词。
+
+---
+
+## 3. 认证与授权
+
+### 3.1 认证方式总览
+
+| 方式 | 凭证 | 传递方式 | 适用 |
+|------|------|----------|------|
+| **UserAuth** | 用户 Token（UUID） | Header `Authorization` / Cookie `Authorization` | 用户管理接口 |
+| **DeviceAuth** | 设备 Token（UUID） | Header `X-Device-Token` / Cookie / Query | 数据上报、心跳、命令拉取 |
+| **UserOrDeviceAuth** | 两者之一 | 上述任一方式 | 设备更新接口 |
+| **DeviceIDAuth** | 无 Token | 路径参数 `{deviceId}`（6 位 hex） | 设备获取 Token |
+
+双通道接口（如设备更新）优先识别用户 Token；用户 Token 无效时回退识别设备 Token；两者均无效返回 401。
+
+### 3.2 用户 Token
+
+- 获取：`POST /api/users/login`，返回 `tokenValue`；同时下发 `Authorization` Cookie（httpOnly + SameSite=Lax，release 环境启用 secure）；
+- **有效期：3 天**（72 小时），响应 `tokenTimeout` 字段与 Cookie MaxAge 均为 `259200` 秒，与实际 TTL 一致；
+- **多端登录**：同一账号最多 **5 个设备端**同时在线（`MaxLoginCount=5`）：
+  - 登录请求可携带 `device` 字段标识设备端（推荐传稳定唯一值，如前端 localStorage 生成的 UUID）；
+  - 未携带时服务端回退取 `User-Agent` 生成标识；两者皆无则所有登录视为**同一设备端**，此时多端上限不生效；
+  - 第 6 个设备端登录时，**最旧设备端**的 Token 被自动登出；
+- 每次登录生成**独立** Token（`IsShare=false`），不做 Token 复用；
+- 被顶号 / 被逐出的 Token **立即从服务端删除**，继续使用返回 401。
+
+### 3.3 设备 Token
+
+- 获取：`GET /api/devices/{deviceId}/token`（仅需 6 位 hex 设备 ID，无需其他凭证；兼容别名 `GET /api/devices/{deviceId}/login`，行为完全一致）；
+- **有效期：永久**（`NeverExpire`），但设备 **30 天未上线**会被定时任务清理 Token（**不删除设备**，重新获取 Token 即可）；
+- **复用语义**：同一 deviceId 的有效期内重复调用，返回**同一个 Token**（不会轮换）；需要轮换时先登出（服务端调用 Logout）再重新获取才会签发新 Token；
+- 旧 Token 被替换 / 被清理时**立即物理删除**，不再残留标记。
+
+### 3.4 授权规则
+
+| 操作 | 规则 |
+|------|------|
+| 更新 / 删除 / 查看设备 | 仅设备属主（UserAuth），或设备本身（DeviceAuth 且 Token 与路径设备一致） |
+| 下发命令 | 仅设备属主 |
+| 用户列表 / 用户状态修改 | 仅 `admin` / `super-admin` 角色 |
+| 修改 / 删除用户 | 本人，或管理员 |
+
+---
+
+## 4. 资源模型
+
+字段行为标注（AIP-203）：`REQUIRED` 必填 · `OPTIONAL` 可选 · `OUTPUT_ONLY` 仅由服务端输出 · `IMMUTABLE` 创建后不可变。
+
+### 4.1 User
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `id` | uint | OUTPUT_ONLY | 用户 ID |
+| `account` | string | REQUIRED（注册）· IMMUTABLE | 登录账号，3-50 字符，全平台唯一 |
+| `passwd` | string | REQUIRED（注册）· OUTPUT_ONLY | 密码（bcrypt 存储，响应中不返回） |
+| `name` | string | OPTIONAL | 姓名 |
+| `email` | string | OPTIONAL | 邮箱 |
+| `age` | int | OPTIONAL | 年龄 |
+| `role` | string | OUTPUT_ONLY | 角色：`user` / `admin` / `super-admin` |
+| `status` | string | OPTIONAL | 状态：`ACTIVE` / `DISABLED`（仅管理员可改） |
+| `createTime` / `updateTime` | string | OUTPUT_ONLY | 创建 / 更新时间 |
+
+### 4.2 Device
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `deviceId` | string | OUTPUT_ONLY · IMMUTABLE | 6 位 hex 设备 ID，资源标识 |
+| `deviceName` | string | Create: REQUIRED · Update: OPTIONAL | 设备名称，≤100 字符 |
+| `deviceType` | string | OPTIONAL | 设备类型，≤50 字符 |
+| `firmwareVersion` | string | OPTIONAL | 固件版本，≤50 字符 |
+| `ipAddress` | string | OPTIONAL | IP 地址，≤45 字符（兼容 IPv6） |
+| `macAddress` | string | OPTIONAL | MAC 地址，≤17 字符 |
+| `location` | string | OPTIONAL | 位置，≤255 字符 |
+| `ownerId` | uint | OUTPUT_ONLY · IMMUTABLE | 属主用户 ID（由登录态推导，请求体不可指定） |
+| `status` | string | OUTPUT_ONLY | 运行时状态：`ONLINE` / `OFFLINE` / `ACTIVE`（由心跳与离线检测维护） |
+| `lastActiveTime` | string | OUTPUT_ONLY | 最后活跃时间 |
+| `createdAt` / `updatedAt` | string | OUTPUT_ONLY | 创建 / 更新时间 |
+
+> **增量更新语义**：Update 方法仅修改请求体中**出现**的字段，未出现的字段保持原值；传空串视为显式清空该字段。
+
+### 4.3 SensorData（时序数据，不可变）
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `name` | string | REQUIRED | 传感器名称 |
+| `type` | string | REQUIRED | 传感器类型（如 `temperature`） |
+| `value` | any | REQUIRED | 值（数值 / 字符串 / 布尔） |
+| `timestamp` | string | OPTIONAL | 采样时间，缺省为服务端接收时间 |
+
+存储于 InfluxDB；最新一条缓存于 Redis。数据一经写入不可修改。
+
+### 4.4 DownlinkCmd
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `id` | uint | OUTPUT_ONLY | 命令 ID（ACK 回执使用） |
+| `deviceId` | string | OUTPUT_ONLY | 目标设备 |
+| `type` | string | REQUIRED | 命令类型：`config` / `control` / `ota` / `message` |
+| `payload` | object | REQUIRED | JSON 对象载荷（非字符串） |
+| `status` | string | OUTPUT_ONLY | 状态：`pending` / `sent` / `delivered`，见[附录流转图](#命令状态流转) |
+| `createdAt` | string | OUTPUT_ONLY | 创建时间 |
+
+### 4.5 DeviceConfig（设备配置快照）
+
+每个设备维护一份「当前期望配置」快照，云端每次编辑 `version` 递增并下发；设备回执回写 `reported*` 字段并置 `status=acked`。
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `deviceId` | string | OUTPUT_ONLY · IMMUTABLE | 目标设备（资源标识） |
+| `version` | uint | OUTPUT_ONLY | 期望配置版本，云端每次设置递增（从 1 起） |
+| `payload` | object | REQUIRED（Set） | 期望配置 JSON 对象（分 protocol 区块，见下） |
+| `status` | string | OUTPUT_ONLY | 下发确认态：`pending` / `acked` |
+| `reportedVersion` | uint | OUTPUT_ONLY | 设备已生效的配置版本（0=未上报） |
+| `reportedPayload` | object | OUTPUT_ONLY | 设备实际生效的配置（回执回写） |
+| `updatedAt` | string | OUTPUT_ONLY | 最近更新时间 |
+
+`payload` 按设备协议分区（参考新大陆 / 联犀等平台风格），示例：
+
+```json
+{
+  "network":  { "wifi": {"ssid": "", "password": ""},
+                "mqtt": {"host": "", "port": 1883, "tls": false} },
+  "sensor":   { "reportInterval": 60,
+                "thresholds": {"temperature": {"min": 0, "max": 100}} },
+  "actuator": { "mode": "auto",
+                "schedule": {"on": "08:00", "off": "20:00"}, "pwm": 512 },
+  "camera":   { "protocol": "smtp",
+                "smtp": {"host": "smtp.example.com", "port": 465, "ssl": true,
+                         "username": "", "password": ""},
+                "snapshotInterval": 30 },
+  "ota":      { "fwUrl": "", "fwVersion": "", "md5": "" }
+}
+```
+
+> 分区说明：`network` 网络连接、`sensor` 传感器采样/阈值、`actuator` 执行器（继电器/电机等）、`camera` 摄像头协议（SMTP/RTSP/ONVIF 等）、`ota` 固件升级（**预留扩展点，暂不实现升级流程**）。`payload` 为整体快照，`version` 标识其代数。
+
+---
+
+## 5. 方法参考
+
+每个方法按统一模板描述：**HTTP 请求** → **路径 / 查询参数** → **请求体** → **响应体** → **示例** → **错误码**。
+
+### 5.1 System 资源
+
+#### Health — 健康检查
+
+供容器编排 / 负载均衡探测，无需认证，不走统一响应结构。
+
+**HTTP 请求**
+
+```
+GET /health
+```
+
+**响应体**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `status` | string | 固定 `"ok"` |
+| `service` | string | 固定 `"iot-platform"` |
+| `time` | string | RFC3339 当前时间 |
+
+**示例**
+
+```json
+{"status": "ok", "service": "iot-platform", "time": "2026-08-31T20:30:00+08:00"}
+```
+
+---
+
+### 5.2 User 资源
+
+#### Create — 注册用户 `POST /api/users`
+
+创建新用户账号，角色固定为 `user`。
+
+**授权**：无需认证
+
+**请求体**（JSON）：
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `account` | string | REQUIRED | 账号，3-50 字符，唯一 |
+| `passwd` | string | REQUIRED | 密码，6-100 字符 |
+| `name` | string | OPTIONAL | 姓名 |
+| `email` | string | OPTIONAL | 邮箱 |
+
+**示例**
+
+```json
+// 请求
+{"account": "meatsuger", "passwd": "123456", "name": "可选姓名", "email": "可选邮箱"}
+
+// 响应
+{"code": 200, "message": "注册成功", "data": null}
+```
+
+**错误码**
+
+| code | 场景 |
+|------|------|
+| 400 | 参数校验失败；`account` 已存在 |
+
+---
+
+#### Login — 用户登录 `POST /api/users/login`
+
+校验账号密码，签发用户 Token。支持 JSON Body / Query / Form 三种传参方式。
+
+**授权**：无需认证
+
+**请求体**（JSON）：
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `account` | string | REQUIRED | 账号 |
+| `passwd` | string | REQUIRED | 密码 |
+| `device` | string | OPTIONAL | **设备端标识**，用于多端登录计数（见 [3.2](#32-用户-token)）；缺省回退 `User-Agent` |
+
+**响应体** `data`（LoginResponse）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `tokenName` | string | 固定 `"Authorization"` |
+| `tokenValue` | string | 用户 Token，后续放入 `Authorization` Header |
+| `isLogin` | bool | 固定 `true` |
+| `loginId` | string | 用户 ID（字符串形式） |
+| `tokenTimeout` | int64 | Token 有效期秒数（259200 = 3 天），同时为 Cookie MaxAge |
+| `loginDevice` | string | 本次登录的设备端标识（归一化后） |
+| `userInfo` | object | 用户资源（不含密码） |
+
+**示例**
+
+```json
+// 请求
+{"account": "meatsuger", "passwd": "123456", "device": "web-chrome-uuid-123"}
+
+// 响应
+{
+  "code": 200,
+  "message": "登录成功",
+  "data": {
+    "tokenName": "Authorization",
+    "tokenValue": "uuid-token-string",
+    "isLogin": true,
+    "loginId": "1",
+    "loginType": "login",
+    "tokenTimeout": 259200,
+    "sessionTimeout": 259200,
+    "tokenSessionTimeout": -2,
+    "tokenActivityTimeout": -1,
+    "loginDevice": "web-chrome-uuid-123",
+    "userInfo": {"id": 1, "account": "meatsuger", "name": "...", "role": "user", "status": "ACTIVE"}
+  }
+}
+```
+
+**错误码**
+
+| code | 场景 |
+|------|------|
+| 400 | 账号或密码为空；账号不存在；密码错误；账号已被禁用 |
+
+---
+
+#### IsLogin — 检查登录状态 `GET /api/users/isLogin`
+
+检查请求携带的 Token（Header / Cookie）是否有效。
+
+**授权**：无需认证
+
+**响应体** `data`：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `isLogin` | bool | 是否已登录 |
+| `loginId` | string | 已登录时返回用户 ID |
+| `loginDevice` | string | Token 所属设备端标识 |
+| `user` | object | 用户资源（已登录时） |
+
+**示例**
+
+```json
+// 已登录
+{"code": 200, "message": "已登录", "data": {"isLogin": true, "loginId": "1", "loginDevice": "web-chrome-uuid-123", "user": {...}}}
+
+// 未登录
+{"code": 200, "message": "未登录", "data": {"isLogin": false}}
+```
+
+---
+
+#### Logout — 退出登录 `POST /api/users/logout`
+
+吊销当前请求携带的 Token（仅当前设备端，不影响其他端）。
+
+**授权**：UserAuth
+
+**响应体**：`data` 为 `null`
+
+```json
+{"code": 200, "message": "退出登录成功", "data": null}
+```
+
+---
+
+#### List — 用户列表 `GET /api/users`
+
+列表与分页合并为一个端点：分页参数全部可选，见 [2.5 分页](#25-分页aip-158)。
+
+**授权**：UserAuth + **管理员**。
+
+**查询参数**（全部可选）：
+
+| 参数 | 类型 | 行为 | 默认 | 说明 |
+|------|------|------|------|------|
+| `pageNum` | int | OPTIONAL | `0` | 页码，**从 0 开始**（仅 `pageSize > 0` 时生效） |
+| `pageSize` | int | OPTIONAL | `0` | 每页数量；**大于 0 时启用分页** |
+| `name` | string | OPTIONAL | — | 按用户名模糊过滤 |
+
+**双响应形态**：
+
+- `pageSize > 0`：`data` 为分页 envelope（`records` / `total` / `size` / `current` / `pages`）；
+- 其他：`data` 为全量 User 资源数组（可被 `name` 过滤）。
+
+**示例**
+
+```
+GET /api/users?pageNum=0&pageSize=10&name=meat
+```
+
+```json
+{"code": 200, "message": "success", "data": {"records": [{...}], "total": 1, "size": 10, "current": 0, "pages": 1}}
+```
+
+```
+GET /api/users
+```
+
+```json
+{"code": 200, "message": "success", "data": [{"id": 1, "account": "meatsuger", "...": "..."}, {...}]}
+```
+
+---
+
+#### Get — 获取用户 `GET /api/users/{userId}`
+
+**授权**：UserAuth。`{userId}` 支持 `me` 表示当前登录用户；为数字 ID 时仅本人或管理员可访问（否则 403）。
+
+**路径参数**：
+
+| 参数 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `userId` | string | REQUIRED | 用户 ID（数字），或 `me`（当前登录用户） |
+
+```
+GET /api/users/me
+```
+
+**响应体** `data`：User 资源（不含密码）。
+
+**错误码**：403（查看他人且非管理员）、404（用户不存在）
+
+---
+
+#### Update — 更新用户 `POST /api/users/{userId}/update`
+
+**授权**：UserAuth。`{userId}` 支持 `me`（当前登录用户）或数字 ID；普通用户只能更新 `me` / 本人 ID，管理员可更新任意用户（否则 403）。
+
+**路径参数**：
+
+| 参数 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `userId` | string | REQUIRED | 用户 ID（数字），或 `me`（当前登录用户） |
+
+**请求体**（JSON，全部 OPTIONAL，仅出现的字段被更新）：
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `name` | string | OPTIONAL | 姓名 |
+| `email` | string | OPTIONAL | 邮箱 |
+| `age` | int | OPTIONAL | 年龄 |
+| `status` | string | OPTIONAL | `ACTIVE` / `DISABLED`（仅管理员） |
+
+**示例**
+
+```json
+// 请求
+POST /api/users/me/update
+{"name": "新名字", "email": "new@email.com"}
+
+// 响应
+{"code": 200, "message": "success", "data": {"id": 1, "account": "meatsuger", "name": "新名字", "...": "..."}}
+```
+
+**错误码**
+
+| code | 场景 |
+|------|------|
+| 400 | 试图修改 `account` 等不可变更字段 |
+| 403 | 普通用户修改 `status`；普通用户操作他人信息 |
+| 404 | 目标用户不存在 |
+
+---
+
+#### Delete — 删除用户 `POST /api/users/{userId}/delete`
+
+删除用户并**吊销其全部设备端的 Token**（最多 5 端同时清除）。
+
+**授权**：UserAuth。`{userId}` 支持 `me` / 本人 ID；管理员可删除任意用户（否则 403）。
+
+**路径参数**：
+
+| 参数 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `userId` | string | REQUIRED | 用户 ID（数字），或 `me`（当前登录用户） |
+
+```
+POST /api/users/2/delete
+```
+
+---
+
+### 5.3 Device 资源
+
+#### Create — 注册设备 `POST /api/devices`
+
+注册新设备，`deviceId` 与归属用户由服务端推导，请求体不可指定。
+
+**授权**：UserAuth（设备归属当前登录用户）
+
+**请求体**（JSON）：
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `deviceName` | string | REQUIRED | 设备名称 |
+| `deviceType` | string | OPTIONAL | 设备类型（如 `ESP32`） |
+| `firmwareVersion` | string | OPTIONAL | 固件版本 |
+| `ipAddress` | string | OPTIONAL | IP 地址 |
+| `macAddress` | string | OPTIONAL | MAC 地址 |
+| `location` | string | OPTIONAL | 位置 |
+
+**示例**
+
+```json
+// 请求
+{
+  "deviceName": "ESP32温湿度传感器",
+  "deviceType": "ESP32",
+  "firmwareVersion": "1.0.0",
+  "ipAddress": "192.168.1.100",
+  "macAddress": "AA:BB:CC:DD:EE:FF",
+  "location": "客厅"
+}
+
+// 响应
+{
+  "code": 200,
+  "message": "success",
+  "data": {"deviceId": "90431b", "deviceToken": "uuid-device-token"}
+}
+```
+
+> 注册成功同时下发 `X-Device-Token` Cookie。`deviceToken` 用于数据上报 / WebSocket / MQTT 接入。
+
+---
+
+#### List — 设备列表 `GET /api/devices`
+
+**授权**：UserAuth。返回当前用户的全部设备（`data` 为 Device 资源数组，按 deviceId 倒序）。
+
+---
+
+#### Get — 获取设备详情 `GET /api/devices/{deviceId}`
+
+**授权**：UserAuth（仅设备属主，否则 403）。
+
+**响应体** `data`：完整 Device 资源 + `sensors` 数组（最近一次上报的传感器数据）。
+
+> `status` 优先取 Redis 实时状态（`ONLINE` / `OFFLINE`）。
+
+**示例**
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "deviceId": "90431b",
+    "deviceName": "ESP32温湿度传感器",
+    "status": "ONLINE",
+    "ownerId": 1,
+    "lastActiveTime": "2026-08-31T20:30:00+08:00",
+    "sensors": [
+      {"name": "temperature", "type": "temperature", "value": 25.5, "timestamp": "2026-08-31T20:30:00.000+08:00"}
+    ]
+  }
+}
+```
+
+---
+
+#### Update — 更新设备（增量） `POST /api/devices/{deviceId}/update`
+
+**双认证**：UserAuth（仅设备属主）**或** DeviceAuth（设备更新自身，Token 对应的 deviceId 必须与路径一致，否则 403）。
+
+**路径参数**：
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `deviceId` | string | 6 位 hex 设备 ID |
+
+**请求体**（JSON，全部 OPTIONAL，**增量语义**：仅出现的字段被更新，未传字段保持原值；至少传一个字段）：
+
+| 字段 | 类型 | 行为 |
+|------|------|------|
+| `deviceName` | string | OPTIONAL |
+| `deviceType` | string | OPTIONAL |
+| `firmwareVersion` | string | OPTIONAL |
+| `ipAddress` | string | OPTIONAL |
+| `macAddress` | string | OPTIONAL |
+| `location` | string | OPTIONAL |
+
+**示例**
+
+```json
+// 请求 —— 只改名称与位置，其余字段不受影响
+POST /api/devices/90431b/update
+{"deviceName": "客厅温湿度传感器", "location": "客厅"}
+
+// 响应 —— 返回更新后的完整设备资源
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "deviceId": "90431b",
+    "deviceName": "客厅温湿度传感器",
+    "deviceType": "ESP32",
+    "firmwareVersion": "1.0.0",
+    "ipAddress": "192.168.1.100",
+    "macAddress": "AA:BB:CC:DD:EE:FF",
+    "location": "客厅",
+    "ownerId": 1,
+    "status": "ONLINE",
+    "lastActiveTime": "2026-08-31T20:30:00+08:00",
+    "createdAt": "2026-07-13T20:30:00+08:00",
+    "updatedAt": "2026-08-31T20:30:00+08:00"
+  }
+}
+```
+
+**错误码**
+
+| code | 场景 |
+|------|------|
+| 400 | 请求体为空 / 无任何可更新字段（"无更新字段"） |
+| 403 | DeviceAuth 的 Token 与路径 deviceId 不一致；用户非设备属主 |
+| 500 | 设备不存在 / 数据库异常 |
+
+---
+
+#### Delete — 删除设备 `POST /api/devices/{deviceId}/delete`
+
+**授权**：UserAuth（仅设备属主，否则 403）。
+
+级联清理：设备全部缓存、命令队列、MQTT 消息历史。
+
+```json
+{"code": 200, "message": "删除成功", "data": null}
+```
+
+---
+
+#### GetToken — 获取设备 Token `GET /api/devices/{deviceId}/token`
+
+别名端点：`GET /api/devices/{deviceId}/login`（兼容别名，行为完全一致）。
+
+**授权**：DeviceIDAuth（仅需 6 位 hex 设备 ID）。
+
+**Token 语义**（见 [3.3](#33-设备-token)）：
+
+- 有效期内重复调用返回**同一个 Token**（复用，不轮换）；
+- 需要轮换时先登出再重新获取；
+- 设备 30 天未上线 Token 被清理，重新调用即可。
+
+**示例**
+
+```
+GET /api/devices/90431b/token
+```
+
+```json
+{"code": 200, "message": "success", "data": {"deviceId": "90431b", "deviceToken": "uuid-device-token"}}
+```
+
+---
+
+### 5.4 SensorData 资源
+
+#### Report — 上报传感器数据 `POST /api/devices/{deviceId}/sensorData`
+
+**授权**：DeviceAuth（`X-Device-Token` Header）。
+
+**路径参数**：
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `deviceId` | string | 6 位 hex 设备 ID |
+
+**请求体**（JSON）：
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `sensors` | array | REQUIRED | 传感器数据数组（不能为空） |
+| `sensors[].name` | string | REQUIRED | 传感器名称 |
+| `sensors[].type` | string | REQUIRED | 传感器类型 |
+| `sensors[].value` | any | REQUIRED | 值 |
+| `sensors[].timestamp` | string | OPTIONAL | 采样时间，缺省为服务端时间 |
+
+**示例**
+
+```json
+// 请求
+{
+  "sensors": [
+    {"name": "temperature", "type": "temperature", "value": 25.5},
+    {"name": "humidity", "type": "humidity", "value": 68.2}
+  ]
+}
+
+// 响应 —— data 为服务端接收时间
+{"code": 200, "message": "状态上报已接收", "data": "2026-08-31T20:30:00.000+08:00"}
+```
+
+> 数据经 Redis 缓冲后异步批量写入 InfluxDB；上报同时更新设备在线状态与最新数据缓存。
+
+**错误码**：400（`sensors` 为空 / 字段缺失）、401（Token 无效）
+
+---
+
+#### List — 查询传感器数据 `GET /api/devices/{deviceId}/sensorData`
+
+**授权**：UserAuth。
+
+**路径参数**：`deviceId`（6 位 hex）。
+
+**查询参数**：
+
+| 参数 | 类型 | 行为 | 默认 | 说明 |
+|------|------|------|------|------|
+| `limit` | int | OPTIONAL | `50` | 返回条数上限 |
+| `start` | string | OPTIONAL | 3 天前 | 起始时间（RFC3339） |
+| `end` | string | OPTIONAL | 当前时间 | 结束时间（RFC3339） |
+
+```
+GET /api/devices/90431b/sensorData?limit=100
+```
+
+```json
+{"code": 200, "message": "success", "data": [
+  {"name": "temperature", "type": "temperature", "value": 25.5, "timestamp": "2026-08-31T20:30:00.000"}
+]}
+```
+
+> 结果按时间倒序；缺省时间范围（最近 3 天）可命中 Redis 查询缓存（15 秒 TTL）。
+
+---
+
+#### Heartbeat — 设备心跳 `POST /api/devices/{deviceId}/heartbeat`
+
+别名端点：`POST /api/devices/{deviceId}/ping`（兼容别名，行为完全一致）。
+
+**授权**：DeviceAuth。
+
+更新设备在线状态与活跃时间。
+
+```json
+{"code": 200, "message": "success", "data": {"serverTime": "2026-08-31T20:30:00.000+08:00", "nextInterval": 60}}
+```
+
+> `nextInterval`：建议的下一次心跳间隔（秒）。设备离线判定阈值为其 2 倍（默认 120 秒，见 `device.offline-threshold` 配置）。
+
+---
+
+### 5.5 DownlinkCmd 资源
+
+#### Post — 下发命令 `POST /api/devices/{deviceId}/commands`
+
+**授权**：UserAuth（仅设备属主，否则 403）。
+
+**请求体**（JSON）：
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `type` | string | REQUIRED | `config` / `control` / `ota` / `message` |
+| `payload` | object | REQUIRED | JSON 对象（非字符串） |
+
+**示例**
+
+```json
+// 请求
+{"type": "control", "payload": {"led": true}}
+
+// 响应
+{"code": 200, "message": "命令已下发", "data": {"id": 42, "type": "control", "payload": {"led": true}}}
+```
+
+> 命令写入数据库（`pending`）与 Redis 队列；设备在线时经 WebSocket 实时推送，离线时等待 HTTP 轮询拉取。
+
+---
+
+#### Pull — 设备拉取命令 `GET /api/devices/{deviceId}/commands`
+
+**授权**：DeviceAuth。
+
+拉取并**消费**队列中的命令（拉取后从队列删除，状态标记 `sent`）。设备处理完成后应通过 WebSocket 发送 ACK（见 [6.1](#61-设备实时通道--getapiwsdevice)），状态转为 `delivered`。
+
+```json
+{"code": 200, "message": "success", "data": [
+  {"id": 42, "type": "control", "payload": {"led": true}, "createdAt": "2026-07-13T20:30:00+08:00"}
+]}
+```
+
+---
+
+### 5.6 DeviceConfig 资源
+
+设备配置以**整体快照**持久化，云端设置后 `version+1` 并复用下行命令通道（`type=config`）下发：设备在线时经 WebSocket 实时推送，离线时下次轮询 `/commands` 拉取。设备端也可主动经 `/config` 查询期望配置，并经 `/config/report` 回执。
+
+#### Get — 查询配置快照 `GET /api/devices/{deviceId}/config`
+
+**授权**：UserAuth（仅设备属主，否则 403）。
+
+**路径参数**：`deviceId`（6 位 hex）。
+
+**示例**
+
+```
+GET /api/devices/90431b/config
+```
+
+```json
+// 已配置
+{"code": 200, "message": "success", "data": {
+  "deviceId": "90431b", "version": 3, "status": "acked",
+  "payload": {"sensor": {"reportInterval": 60}},
+  "reportedVersion": 3, "reportedPayload": {"sensor": {"reportInterval": 60}},
+  "updatedAt": "2026-09-03T10:00:00+08:00"
+}}
+
+// 尚未配置
+{"code": 200, "message": "success", "data": {
+  "deviceId": "90431b", "version": 0, "status": "",
+  "payload": null, "reportedVersion": 0, "reportedPayload": null
+}}
+```
+
+**错误码**：403（非属主）、404（设备不存在）
+
+---
+
+#### Set — 设置并下发配置 `POST /api/devices/{deviceId}/config`
+
+**授权**：UserAuth（仅设备属主，否则 403）。
+
+**请求体**（JSON）：
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `config` | object | REQUIRED | 完整配置快照（整体覆盖，结构见 [4.5](#45-deviceconfig设备配置快照)） |
+
+**示例**
+
+```json
+// 请求
+{"config": {"sensor": {"reportInterval": 120}, "camera": {"smtp": {"host": "smtp.example.com", "port": 465, "ssl": true, "username": "cam@x.com", "password": "***"}}}}
+
+// 响应 —— version 自动递增，配置已持久化并下发（status=pending 表示已入队列）
+{"code": 200, "message": "配置已保存并下发", "data": {"deviceId": "90431b", "version": 4, "status": "pending"}}
+```
+
+> 下发复用 `type=config` 命令：在线设备经 WS 实时收到 `{"type":"cmd","cmdType":"config","payload":{"version":4,"config":{...}}}`；离线设备经 `GET /commands` 轮询拉到。若下发失败（如 Redis 异常），配置仍已持久化，设备可经 `GET /config` 兜底拉取。
+
+**错误码**：400（`config` 缺失）、403（非属主）、404（设备不存在）、500（下发失败）
+
+---
+
+#### Report — 设备回执 `POST /api/devices/{deviceId}/config/report`
+
+**授权**：DeviceAuth（`X-Device-Token`）。
+
+**请求体**（JSON）：
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `version` | uint | REQUIRED | 设备实际生效的配置版本 |
+| `config` | object | REQUIRED | 设备实际生效的配置快照 |
+
+**示例**
+
+```json
+// 请求
+{"version": 4, "config": {"sensor": {"reportInterval": 120}}}
+
+// 响应
+{"code": 200, "message": "配置回执已记录", "data": null}
+```
+
+> 回执后服务端将 `status` 置为 `acked`，`reportedVersion/reportedPayload` 记录设备实际生效值（用于平台侧「期望 vs 实际」比对）。
+
+**错误码**：400（字段缺失）
+
+---
+
+## 6. 实时通道
+
+### 6.1 设备实时通道 — `GET /api/ws/device`
+
+设备建立 WebSocket 连接后，可实时接收平台下发的命令，也可发送上行消息（数据上报 / 心跳 / ACK）。
 
 | 项目 | 说明 |
 |------|------|
-| **端点** | `GET /api/v2/ws/device` |
+| **端点** | `GET /api/ws/device` |
 | **认证** | 必须（Device Token） |
-| **数据方向** | **单向**（服务端 → 设备） |
-| **用途** | 实时接收平台下发的命令（config / control / ota / message） |
+| **数据方向** | 双向（下发命令 + 上行数据 / 心跳 / ACK） |
+| **用途** | 实时接收命令、上报数据、心跳保活 |
 
 #### 认证方式（4 种，按优先级）
 
@@ -62,19 +992,19 @@
 | 1 | Header `X-Device-Token` | Go/Python 原生客户端 | 服务端 SDK |
 | 2 | Header `Authorization` | ESP32 `setAuthorization()` | 嵌入式设备 |
 | 3 | Cookie `X-Device-Token` | 浏览器已登录 | Web 调试 |
-| 4 | Query `?X-Device-Token=xxx` | `ws://host/api/v2/ws/device?X-Device-Token=xxx` | 浏览器 / 最简单 |
+| 4 | Query `?X-Device-Token=xxx` | `wss://host/api/ws/device?X-Device-Token=xxx` | 浏览器 / 最简单 |
 
 > **推荐 ESP32 使用 Query 方式，最简单可靠。**
 
-#### 设备收到下放命令的消息格式
+#### 服务端 → 设备：下发命令
 
 ```json
 {
   "type": "cmd",
   "id": 42,
   "cmdType": "control",
-  "payload": { "led": true },
-  "createdAt": "2026-07-13 20:30:00 +0800"
+  "payload": {"led": true},
+  "createdAt": "2026-07-13T20:30:00.000+08:00"
 }
 ```
 
@@ -86,16 +1016,16 @@
 | `payload` | object | 命令载荷（JSON 对象） |
 | `createdAt` | string | 命令创建时间 |
 
-#### 设备回应命令（ACK 确认）
-
-设备处理完命令后，通过同一条 WebSocket 发回确认消息。支持两种格式：
+#### 设备 → 服务端：ACK 确认（两种格式）
 
 **格式一（推荐 ESP32）:**
+
 ```json
 {"type": "response", "id": 42, "status": "ok"}
 ```
 
 **格式二（兼容）:**
+
 ```json
 {"type": "ack", "cmdId": 42}
 ```
@@ -103,21 +1033,21 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `type` | string | `"response"` 或 `"ack"` |
-| `id` / `cmdId` | uint | 命令 ID（对应 cmd 消息中的 id） |
+| `id` / `cmdId` | uint | 命令 ID（对应 cmd 消息中的 `id`） |
 | `status` | string | 仅 response: `"ok"` / `"skipped"` |
 
-> 收到 ACK 后，服务端将命令状态从 `pending` 更新为 `delivered`。
+> 收到 ACK 后，服务端将命令状态从 `pending`/`sent` 更新为 `delivered`。
 
-#### 设备可发送的上行消息
-
-设备 WebSocket 还支持发送以下类型的上行消息：
+#### 设备 → 服务端：上行消息
 
 **传感器数据上报:**
+
 ```json
 {"type": "data", "sensors": [{"name": "temp", "type": "temperature", "value": 25.5}]}
 ```
 
 **心跳:**
+
 ```json
 {"type": "ping"}
 ```
@@ -130,18 +1060,18 @@
 #include <WebSocketsClient.h>
 
 const char *WSS_HOST = "api.meatsuger.top";
-const char *WSS_URL = "/api/v2/ws/device";
+const char *WSS_URL = "/api/ws/device";
 
 WebSocketsClient webSocket;
 String token = "your-device-token-uuid";
 
 void setup() {
     // 方式 A: Query 参数（推荐）
-    String wsUrl = String("/api/v2/ws/device?X-Device-Token=") + token;
-    webSocket.beginSSL("api.meatsuger.top", 443, wsUrl.c_str());
+    String wsUrl = String("/api/ws/device?X-Device-Token=") + token;
+    webSocket.beginSSL(WSS_HOST, 443, wsUrl.c_str());
 
     // 方式 B: Authorization 头
-    // webSocket.beginSSL("api.meatsuger.top", 443, "/api/v2/ws/device");
+    // webSocket.beginSSL(WSS_HOST, 443, WSS_URL);
     // webSocket.setAuthorization(token.c_str());
 
     webSocket.onEvent(webSocketEvent);
@@ -159,9 +1089,10 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
 ```
 
 **浏览器:**
+
 ```js
 const token = 'your-device-token';
-const ws = new WebSocket(`wss://api.meatsuger.top/api/v2/ws/device?X-Device-Token=${token}`);
+const ws = new WebSocket(`wss://api.meatsuger.top/api/ws/device?X-Device-Token=${token}`);
 
 ws.onmessage = (event) => {
     const cmd = JSON.parse(event.data);
@@ -172,327 +1103,226 @@ ws.onmessage = (event) => {
 ```
 
 **Go 客户端:**
+
 ```go
 header := http.Header{}
 header.Set("X-Device-Token", deviceToken)
-conn, _, err := websocket.DefaultDialer.Dial("wss://api.meatsuger.top/api/v2/ws/device", header)
+conn, _, err := websocket.DefaultDialer.Dial("wss://api.meatsuger.top/api/ws/device", header)
 ```
 
----
+### 6.2 用户管理端通道 — `GET /api/ws/user`
 
-### 2.2 MQTT 转发通道 — `/api/v2/ws/mqtt`
+用户（管理端）建立连接后，可接收其名下所有设备的实时事件，并可直接下发命令。
 
 | 项目 | 说明 |
 |------|------|
-| **端点** | `GET /api/v2/ws/mqtt` |
-| **认证** | 无 |
-| **数据方向** | **双向**（读写） |
-| **用途** | WebSocket → MQTT Broker 消息转发 |
+| **端点** | `GET /api/ws/user` |
+| **认证** | 必须（User Token） |
+| **数据方向** | 双向（接收设备事件 + 下发命令） |
+| **用途** | 管理端实时看板 / 命令下发 |
 
-#### 客户端 → 服务端（发布）
+#### 认证方式（3 种，按优先级）
 
-```json
-{"topic": "iot/90431b/telemetry", "qos": 1, "payload": "{\"temp\":25}"}
-```
+| 优先级 | 方式 | 说明 |
+|--------|------|------|
+| 1 | Header `Authorization` | 用户 Token |
+| 2 | Cookie `Authorization` | 浏览器已登录 |
+| 3 | Query `?token=xxx` | 兜底方式 |
 
-#### 服务端 → 客户端（收到 MQTT 消息时广播）
+#### 服务端 → 用户：推送消息
 
-```json
-{"topic": "iot/90431b/telemetry", "payload": "...", "qos": 1, "retained": false}
-```
-
-> 注意：该端点默认不启用认证，生产环境需评估安全风险。
-
----
-
-## 3. 用户接口
-
-### 3.1 注册 `POST /api/user/register`
-
-```
-Content-Type: application/json
-
-{
-  "account": "meatsuger",
-  "passwd": "123456",
-  "name": "可选姓名",
-  "email": "可选邮箱"
-}
-```
-
-**响应:**
-```json
-{"code": 200, "data": {"id": 1, "account": "meatsuger", ...}, "message": "success"}
-```
-
-### 3.2 登录 `POST /api/user/login`
-
-```
-Content-Type: application/json
-
-{"account": "meatsuger", "passwd": "123456"}
-```
-
-**响应:**
-```json
-{
-  "code": 200,
-  "data": {
-    "token": "uuid-token-string",
-    "userInfo": { "id": 1, "account": "meatsuger", "name": "...", ... }
-  },
-  "message": "success"
-}
-```
-
-> 后续请求将 `token` 放在 `Authorization` Header 中即可。
-
-### 3.3 检查登录状态 `GET /api/user/isLogin`
-
-无需认证，检查当前 Cookie/Header 中的 Token 是否有效。
-
-### 3.4 退出 `POST /api/user/logout`
-
-需要 `Authorization` Header。
-
-### 3.5 更新信息 `PUT /api/user`
-
-需要 `Authorization` Header。
+**设备上线 / 下线通知:**
 
 ```json
-{"name": "新名字", "email": "new@email.com"}
+{"type": "deviceOnline", "deviceId": "90431b", "timestamp": "2026-08-31T20:30:00.000+08:00"}
+{"type": "deviceOffline", "deviceId": "90431b", "timestamp": "2026-08-31T20:35:00.000+08:00"}
 ```
 
-> `status` 字段仅管理员/超级管理员可修改；普通用户传 `status` 会返回 `403`。
+**命令下发回执:**
 
-### 3.6 获取个人信息 `GET /api/user/profile?id=1`
+```json
+{"type": "cmdAck", "deviceId": "90431b", "cmdType": "control", "cmdId": 42, "success": true}
+```
 
-需要 `Authorization` Header。
+失败时携带 `error` 字段（`success: false`）。
 
-### 3.7 用户列表 `GET /api/user/list`
-
-需要 `Authorization` Header。
-
-### 3.8 分页查询 `GET /api/user/page?page=1&size=10&name=keyword`
-
-需要 `Authorization` Header。
-
-### 3.9 删除 `POST /api/user/delete?id=1`
-
-需要 `Authorization` Header。
-
----
-
-## 4. 设备接口
-
-### 4.1 注册设备 `POST /api/device/register`
-
-需要 `Authorization` Header。
+**命令送达通知（设备拉取 / 收到后）:**
 
 ```json
 {
-  "deviceName": "ESP32温湿度传感器",
-  "deviceType": "ESP32",
-  "firmwareVersion": "1.0.0",
-  "ipAddress": "192.168.1.100",
-  "location": "客厅",
-  "macAddress": "AA:BB:CC:DD:EE:FF"
+  "type": "cmdSent",
+  "deviceId": "90431b",
+  "cmdId": 42,
+  "cmdType": "control",
+  "payload": {"led": true},
+  "status": "sent",
+  "createdAt": "2026-07-13T20:30:00+08:00"
 }
 ```
 
-**响应:**
+**心跳响应:**
+
 ```json
-{
-  "code": 200,
-  "data": {
-    "deviceId": "90431b",
-    "deviceName": "ESP32温湿度传感器",
-    ...
-  },
-  "message": "success"
-}
+{"type": "pong"}
 ```
 
-> `deviceId` 是 6 位十六进制 ID，设备后续操作的核心标识。
+#### 用户 → 服务端：上行消息
 
-### 4.2 获取设备 Token `GET /api/device/{deviceId}/login`
-
-设备使用 6 位 hex ID 认证（无需其他 Token）。
-
-**响应:**
-```json
-{
-  "code": 200,
-  "data": {
-    "token": "uuid-device-token",
-    "deviceId": "90431b"
-  },
-  "message": "success"
-}
-```
-
-> 获取的 `token` 用于 WebSocket 连接和数据上报的 `X-Device-Token` Header。
->
-> 一个 deviceId 只对应一个有效 Token：重复调用本接口会顶掉旧 Token，旧 Token 立即失效。
-
-### 4.3 获取设备详情 `GET /api/device/{deviceId}/Data`
-
-需要 `Authorization` Header。
-
-### 4.4 设备列表 `GET /api/device/list`
-
-需要 `Authorization` Header，返回当前用户的所有设备。
-
-### 4.5 删除设备 `POST /api/device/{deviceId}/delete`
-
-需要 `Authorization` Header。
-
-### 4.6 下发命令 `POST /api/device/{deviceId}/cmd`
-
-需要 `Authorization` Header。
+**下发命令（格式对齐 HTTP `POST /api/devices/{deviceId}/commands`，多一个 `deviceId` 字段）:**
 
 ```json
 {
   "type": "control",
-  "payload": { "led": true }
+  "deviceId": "90431b",
+  "payload": {"led": true}
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `type` | string | `config` / `control` / `ota` / `message` |
-| `payload` | object | JSON 对象（非字符串） |
+**心跳:**
 
-**响应:**
 ```json
-{
-  "code": 200,
-  "data": {
-    "id": 42,
-    "type": "control",
-    "payload": { "led": true }
-  },
-  "message": "命令已下发"
-}
+{"type": "ping"}
 ```
 
-> 命令会通过 WebSocket 实时推送给设备（如果设备在线），同时写入 Redis 队列供设备 HTTP 轮询。
+### 6.3 MQTT over WebSocket 网关 — `GET /api/ws/mqtt/broker`
 
-### 4.7 设备拉取命令 `GET /api/device/{deviceId}/cmd`
+设备使用**真 MQTT 协议**经 WebSocket 接入，网关透明转发到外部 MQTT Broker（Mosquitto），并在转发链路上完成 PUBLISH 日志记录与数据入库。
 
-需要设备 `X-Device-Token` Header。
+| 项目 | 说明 |
+|------|------|
+| **端点** | `GET /api/ws/mqtt/broker`（WebSocket 子协议 `mqtt`） |
+| **认证** | 设备 Token（两种方式二选一，见下） |
+| **协议** | MQTT 3.1.1 / 5.0，二进制帧透传 |
+| **用途** | 标准 MQTT 客户端（paho / ESP32 / mqtt.js）接入 |
 
-**响应:**
+#### 鉴权方式（二选一）
+
+| 方式 | 凭证位置 | 适用客户端 |
+|------|----------|------------|
+| 1 | HTTP 层 `X-Device-Token`（Header / Cookie / Query `?X-Device-Token=xxx`） | mqtt.js 等可拼 URL 的客户端 |
+| 2 | MQTT CONNECT 包 `username=设备ID` / `password=设备Token` | 标准 MQTT 客户端（paho / ESP32） |
+
+> 鉴权失败时返回 MQTT 标准 CONNACK `not authorized (0x05)`，而不是 HTTP 拒绝。
+
+#### Topic 与 Payload 约定
+
+- Topic: `iot/{deviceId}/telemetry`（`/` 分隔，第 2 段为设备 ID）
+- Payload: 与 HTTP 上报接口完全相同的 JSON：
+
 ```json
-{
-  "code": 200,
-  "data": [
-    {
-      "id": 42,
-      "type": "control",
-      "payload": { "led": true },
-      "createdAt": "2026-07-13 20:30:00"
-    }
-  ]
-}
+{"sensors": [{"name": "temp", "type": "temperature", "value": 25.5}]}
 ```
 
-> 拉取后命令从队列中删除，数据库状态标记为 `sent`。设备处理完后应通过 WebSocket 发 ACK，状态变为 `delivered`。
+> 匹配约定的 PUBLISH 消息会自动走数据入库链路（更新状态缓存 → Redis 缓冲 → InfluxDB），并写入 `mqtt_publish_log` 表。
+
+#### 连接示例
+
+```
+wss://api.meatsuger.top/api/ws/mqtt/broker?X-Device-Token=<token>
+```
+
+或标准 MQTT 客户端配置: `host=api.meatsuger.top, port=443, path=/api/ws/mqtt/broker, username=<deviceId>, password=<deviceToken>`。
+
+### 6.4 MQTT 转发通道（兼容保留） — `GET /api/ws/mqtt`
+
+| 项目 | 说明 |
+|------|------|
+| **端点** | `GET /api/ws/mqtt` |
+| **认证** | 无 |
+| **数据方向** | 双向（读写） |
+| **用途** | 早期 WebSocket → MQTT Broker 消息转发，已被 6.3 网关取代，保留兼容 |
+
+> 注意：该端点无认证，生产环境请评估安全风险，新接入请使用 `/api/ws/mqtt/broker`。
 
 ---
 
-## 5. 数据接口
+## 7. 附录
 
-### 5.1 上报传感器数据 `POST /api/data/{deviceId}/Data`
+### 端点总览
 
-需要设备 `X-Device-Token` Header。
+| 方法 | 端点 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/health` | 无 | 健康检查 |
+| POST | `/api/users` | 无 | 注册用户（Create） |
+| POST | `/api/users/login` | 无 | 用户登录（支持 `device` 标识） |
+| GET | `/api/users/isLogin` | 无 | 检查登录状态 |
+| POST | `/api/users/logout` | UserAuth | 退出登录 |
+| GET | `/api/users` | UserAuth + 管理员 | 用户列表（可选分页，双响应形态见 2.5） |
+| GET | `/api/users/{userId}` | UserAuth | 获取用户信息（`{userId}` 支持 `me`） |
+| POST | `/api/users/{userId}/update` | UserAuth | 更新用户信息 |
+| POST | `/api/users/{userId}/delete` | UserAuth | 删除用户 |
+| POST | `/api/devices` | UserAuth | 注册设备（Create） |
+| GET | `/api/devices` | UserAuth | 设备列表 |
+| GET | `/api/devices/{deviceId}` | UserAuth | 设备详情 |
+| POST | `/api/devices/{deviceId}/update` | UserAuth / DeviceAuth | 更新设备信息（增量） |
+| POST | `/api/devices/{deviceId}/delete` | UserAuth | 删除设备 |
+| GET | `/api/devices/{deviceId}/token` | DeviceIDAuth | 获取设备 Token |
+| GET | `/api/devices/{deviceId}/login` | DeviceIDAuth | 获取设备 Token（兼容别名） |
+| POST | `/api/devices/{deviceId}/sensorData` | DeviceAuth | 上报传感器数据 |
+| GET | `/api/devices/{deviceId}/sensorData` | UserAuth | 查询设备传感器数据 |
+| POST | `/api/devices/{deviceId}/heartbeat` | DeviceAuth | 设备心跳 |
+| POST | `/api/devices/{deviceId}/ping` | DeviceAuth | 设备心跳（兼容别名） |
+| POST | `/api/devices/{deviceId}/commands` | UserAuth | 下发命令 |
+| GET | `/api/devices/{deviceId}/commands` | DeviceAuth | 设备拉取命令 |
+| GET | `/api/devices/{deviceId}/config` | UserAuth | 查询设备配置快照 |
+| POST | `/api/devices/{deviceId}/config` | UserAuth | 设置并下发设备配置 |
+| POST | `/api/devices/{deviceId}/config/report` | DeviceAuth | 设备配置回执 |
+| GET | `/api/ws/device` | DeviceAuth | 设备 WebSocket 实时通道 |
+| GET | `/api/ws/user` | UserAuth | 用户管理端 WebSocket 通道 |
+| GET | `/api/ws/mqtt/broker` | DeviceAuth（MQTT 层） | MQTT over WebSocket 网关 |
+| GET | `/api/ws/mqtt` | 无 | MQTT 转发（兼容保留） |
+| GET | `/api/swagger/*` | 无 | Swagger UI（生产环境默认关闭） |
+
+### UDP 上报通道
+
+非 HTTP 接口：设备可通过 UDP 直接上报传感器数据（端口 `8183`，配置项 `server.udp-port`，`0` 表示禁用）。
+
+**数据报格式（JSON）:**
 
 ```json
 {
+  "deviceId": "90431b",
+  "token": "uuid-device-token",
   "sensors": [
-    { "name": "temperature", "type": "temperature", "value": 25.5 },
-    { "name": "humidity",    "type": "humidity",    "value": 68.2 }
+    {"name": "temperature", "type": "temperature", "value": 25.5}
   ]
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `sensors[].name` | string | 传感器名称 |
-| `sensors[].type` | string | 传感器类型 |
-| `sensors[].value` | any | 传感器值（数值/字符串/布尔） |
-| `sensors[].timestamp` | string | 可选，时间戳 |
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `deviceId` | string | REQUIRED | 6 位 hex 设备 ID |
+| `token` | string | OPTIONAL | 设备 Token（走与 HTTP 上报一致的 Token 校验） |
+| `sensors` | array | REQUIRED | 传感器数据数组，格式同 [Report](#report--上报传感器数据-postapidevicesdeviceidsensordata) |
 
-### 5.2 心跳 `POST /api/data/{deviceId}/heartbeat`
-
-需要设备 `X-Device-Token` Header。更新设备在线状态。
-
-### 5.3 查询传感器数据 `GET /api/data/{deviceId}/Data/list?limit=100`
-
-### 5.4 通用数据查询 `GET /api/data/list`
-
-### 5.5 InfluxDB 连通性检查 `POST /api/data/ping`
-
-公开接口。
-
----
-
-## 6. MQTT 接口
-
-> **默认开发环境关闭**（`config.yaml` 中 `mqtt.enabled: false`），生产环境开启。
-
-### 客户端管理 `/api/mqtt/client/*`
-
-全部需要 `Authorization` Header。
-
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| POST | `/connect` | 连接 MQTT Broker |
-| POST | `/disconnect` | 断开连接 |
-| POST | `/subscribe` | 订阅主题 `{"topic":"...","qos":1}` |
-| POST | `/unsubscribe` | 取消订阅 `{"topic":"..."}` |
-| POST | `/publish` | 发布消息 `{"topic":"...","payload":"...","qos":1}` |
-| GET | `/status` | 查看客户端状态 |
-| GET | `/messages` | 获取最近消息 |
-
-### 设备 MQTT 通道 `/api/mqtt/{deviceId}/*`
-
-需要设备 `X-Device-Token` Header。
-
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| POST | `/Data` | MQTT 方式上报传感器数据 |
-| POST | `/heartbeat` | MQTT 方式心跳 |
-
----
-
-## A. 附录
+> UDP 为单向通道（无响应），入库链路与 HTTP 上报一致。单包不超过 2048 字节。
 
 ### 命令状态流转
 
 ```
 pending ──→ sent ──→ delivered
-  │            │
-  │   (WS推送到设备 / 设备HTTP拉取)
-  │                          │
-  │               (设备通过WS发ACK)
+   │          │
+   │  (WS推送到设备 / 设备HTTP拉取)
+   │                    │
+   │          (设备通过WS发ACK)
 ```
 
 | 状态 | 说明 |
 |------|------|
 | `pending` | 已下发，等待设备消费 |
-| `sent` | 已推送到设备（Redis 队列被拉取）/ WebSocket 已推送 |
+| `sent` | 已推送到设备（Redis 队列被拉取 / WebSocket 已推送） |
 | `delivered` | 设备通过 WebSocket 确认收到 |
 
 ### 设备数据上报通道对比
 
-| 通道 | 端点 | 协议 | 认证 | 适用场景 |
+| 通道 | 端点 / Topic | 协议 | 认证 | 适用场景 |
 |------|------|------|------|----------|
-| HTTP | `/api/data/{deviceId}/Data` | HTTP POST | Device Token | 常规上报 |
-| MQTT | `iot/+/telemetry` | MQTT | Broker 认证 | 高频 / 低功耗 |
-| WebSocket | `/api/v2/ws/device` | WSS | Device Token | 上报 + 实时接收命令 |
+| HTTP | `POST /api/devices/{deviceId}/sensorData` | HTTP | Device Token | 常规上报 |
+| MQTT | `iot/{deviceId}/telemetry`（经 `/api/ws/mqtt/broker`） | MQTT over WSS | Device Token | 标准 MQTT 客户端 / 高频上报 |
+| WebSocket | `GET /api/ws/device` | WSS | Device Token | 上报 + 实时接收命令 |
+| UDP | `udp://<host>:8183` | UDP JSON | Device Token（报文内携带） | 低功耗 / 最小开销单向上报 |
 
-### 设备实时下放流程
+### 设备实时下发流程
 
 ```
 用户/平台                  IoT Backend                 ESP32 设备
@@ -506,3 +1336,12 @@ pending ──→ sent ──→ delivered
     |                          |-- DB → delivered         |
     |<--- "命令已下发" --------|                          |
 ```
+
+### 变更记录
+
+| 版本 | 日期 | 变更 |
+|------|------|------|
+| 1.3.0 | 2026-09-03 | 新增设备配置能力：`DeviceConfig` 资源（整体配置快照，`version` 版本化）。新增 `GET /api/devices/{deviceId}/config`（查询期望配置）、`POST /api/devices/{deviceId}/config`（设置并下发，`version` 递增）、`POST /api/devices/{deviceId}/config/report`（设备回执，回写 `reported*` 并置 `acked`）。配置复用下行命令通道下发（`type=config`）；`payload` 分区覆盖 `network`/`sensor`/`actuator`/`camera`(SMTP 等)/`ota`（OTA 预留扩展点，暂不实现升级流程） |
+| 1.2.0 | 2026-09-01 | REST API 重构为资源导向路径（**仅使用 GET / POST 两个动词**，写操作一律 POST，更新 / 删除通过 `POST + /update`、`/delete` 后缀表达）。关键映射：`/api/user/*` → `/api/users/*`（`POST /api/user/register` → `POST /api/users`；`GET /api/user/profile?id=` → `GET /api/users/{userId}`，`{userId}` 支持 `me`；`PUT /api/user` → `POST /api/users/{userId}/update`；`GET /api/user/list` + `GET /api/user/page` → `GET /api/users`（可选分页，双响应形态）；`POST /api/user/delete?id=` → `POST /api/users/{userId}/delete`）；`/api/device/*` → `/api/devices/*`（`GET /api/device/{id}/Data` → `GET /api/devices/{deviceId}`；`GET /api/device/{id}/login` → `GET /api/devices/{deviceId}/token`）；数据接口并入设备子资源（`POST /api/data/{id}/Data` → `POST /api/devices/{deviceId}/sensorData`；`GET /api/data/{id}/Data/list` → `GET /api/devices/{deviceId}/sensorData`；`POST /api/data/{id}/ping` → `POST /api/devices/{deviceId}/heartbeat`）；命令接口 `POST|GET /api/device/{id}/cmd` → `POST|GET /api/devices/{deviceId}/commands`；**移除 `GET /api/data/list`**（通用数据查询扩展点）。保留兼容别名：`GET /api/devices/{id}/login`（token 别名）、`POST /api/devices/{id}/ping`（heartbeat 别名）。**破坏性变更：旧路径全部失效**，前端与设备固件需同步更新 |
+| 1.1.0 | 2026-09-01 | 登录支持 `device` 设备端标识（多端上限按设备端计数）；设备 Token 改为复用语义（重复获取返回同一 Token）；设备更新接口改为增量更新并支持设备 Token 自更新；被踢 / 被顶号的 Token 立即物理删除；修正用户 Token 有效期为 3 天（Cookie MaxAge 同步） |
+| 1.0.0 | 2026-08-31 | 首版完整文档 |

@@ -22,6 +22,8 @@ type Device struct {
 func (Device) Annotations() []schema.Annotation {
 	return []schema.Annotation{
 		entsql.Table("iot_device"),
+		// 生成实体时把 Edges 字段的 json tag 设为 "-"，避免 API 返回 ent 实体时带出 "edges":{}
+		edge.Annotation{StructTag: `json:"-"`},
 	}
 }
 
@@ -92,11 +94,6 @@ func (Device) Fields() []ent.Field {
 			Optional().
 			UpdateDefault(time.Now).
 			StructTag(`json:"updatedAt"`),
-		field.String("category_id").
-			MaxLen(100).
-			Default("").
-			Optional().
-			StructTag(`json:"categoryId"`),
 	}
 }
 
@@ -118,6 +115,10 @@ func (Device) Edges() []ent.Edge {
 		// 下行指令 (M2O / O2M): 一个设备有多个下行指令
 		// ON DELETE CASCADE: 删除设备时级联删除其下行指令
 		edge.To("cmds", DownlinkCmd.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
+		// 配置快照 (O2O): 一个设备对应一份配置；删除设备时级联删除其配置
+		edge.To("config", DeviceConfig.Type).
+			Unique().
 			Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }

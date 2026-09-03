@@ -12,10 +12,12 @@ type DownlinkCmdRepo struct {
 	client *ent.Client
 }
 
+// NewDownlinkCmdRepo 创建下放命令仓库
 func NewDownlinkCmdRepo(client *ent.Client) *DownlinkCmdRepo {
 	return &DownlinkCmdRepo{client: client}
 }
 
+// Create 创建下放命令记录
 func (r *DownlinkCmdRepo) Create(ctx context.Context, cmd *ent.DownlinkCmd) (*ent.DownlinkCmd, error) {
 	return r.client.DownlinkCmd.Create().
 		SetDeviceID(cmd.DeviceID).
@@ -26,6 +28,7 @@ func (r *DownlinkCmdRepo) Create(ctx context.Context, cmd *ent.DownlinkCmd) (*en
 		Save(ctx)
 }
 
+// ListPending 查询设备待下发命令（status=pending，按 ID 升序，最多 50 条）
 func (r *DownlinkCmdRepo) ListPending(ctx context.Context, deviceID string) ([]*ent.DownlinkCmd, error) {
 	return r.client.DownlinkCmd.Query().
 		Where(
@@ -37,6 +40,7 @@ func (r *DownlinkCmdRepo) ListPending(ctx context.Context, deviceID string) ([]*
 		All(ctx)
 }
 
+// MarkSent 将一批命令标记为已发送（sent）
 func (r *DownlinkCmdRepo) MarkSent(ctx context.Context, ids []uint) error {
 	if len(ids) == 0 {
 		return nil
@@ -47,6 +51,7 @@ func (r *DownlinkCmdRepo) MarkSent(ctx context.Context, ids []uint) error {
 		Exec(ctx)
 }
 
+// MarkDelivered 将命令标记为已送达（delivered）
 func (r *DownlinkCmdRepo) MarkDelivered(ctx context.Context, id uint) error {
 	return r.client.DownlinkCmd.UpdateOneID(id).
 		SetStatus("delivered").

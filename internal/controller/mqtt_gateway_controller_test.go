@@ -107,7 +107,7 @@ func TestParseConnectCredentials(t *testing.T) {
 }
 
 // ============ 端到端桥接测试 ============
-// mockMqttBroker 模拟外部 MQTT Docker：记录收到的帧，可按需回包
+// mockMqttBroker 模拟外部 MQTT broker：记录收到的帧，可按需回包
 type mockMqttBroker struct {
 	ln     net.Listener
 	mu     sync.Mutex
@@ -402,7 +402,7 @@ func TestMqttGatewayControllerFragmentedConnect(t *testing.T) {
 	ts := httptest.NewServer(e)
 	defer ts.Close()
 
-	// 标准 MQTT 客户端：CONNECT username=设备ID / password=设备Token（框架签发的 Sa-Token）
+	// 构造带 username/password 的 CONNECT（框架签发的 Sa-Token），经原始 WebSocket 发送
 	token := deviceLogin(t, "dev-003")
 	wsURL := "ws" + ts.URL[len("http"):] + "/api/ws/mqtt/broker"
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)

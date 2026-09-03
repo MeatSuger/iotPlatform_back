@@ -36,7 +36,7 @@ func (d *debugTimingDriver) Query(ctx context.Context, query string, args, v any
 }
 
 func logDBQuery(op, query string, d time.Duration) {
-	// 只记录慢查询与耗时，避免刷屏；query 为参数化 SQL（$1/$2 占位），不含明文值
+	// Debug 级别输出每条查询（query 为参数化 SQL $1/$2，不含明文值）
 	zap.L().Debug("[DB]",
 		zap.String("op", op),
 		zap.String("query", query),

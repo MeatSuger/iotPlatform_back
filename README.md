@@ -53,7 +53,7 @@ back/
 ├── scripts/                 # 开发工具脚本
 │   ├── dev.sh               #   热重载启动（air）
 │   ├── tunnel.sh            #   sshuttle 隧道
-│   └── k6-test.js           #   k6 性能测试
+│   └── k6-bench.js          #   k6 综合压测（唯一压测脚本）
 ├── go.mod / go.sum          # Go 模块
 ├── Makefile                 # 构建 / 运行 / 打包
 ├── .air.toml               # air 热重载配置
@@ -122,10 +122,9 @@ make dev          # 启动隧道 + 热重载（air）
 make build        # 编译 Linux amd64 + 格式化 + 测试
 make deps         # 更新 Go 依赖
 make clean        # 清理构建产物
-make swagger      # 生成 Swagger 文档
+make html         # 生成 Swagger 文档（api/swagger/）
 make push         # 编译并上传到远程服务器
 make deploy       # push + 同步 deployments/ 到远程
-make gen-swagger  # 生成 Swagger 文档
 ```
 
 ---
@@ -181,16 +180,18 @@ cors:
 - WebSocket 双向通信协议
 - ESP32 完整示例代码
 
+REST 接口仅使用 GET / POST 两个动词（嵌入式客户端兼容），更新/删除通过 POST + `/update`、`/delete` 后缀表达。
+
 ---
 
 ## 认证体系
 
 | 类型 | Token 名称 | 存储 | 过期 | 说明 |
 |------|-----------|------|------|------|
-| 用户 | `Authorization` | Redis `Authorization:token:xxx` | 30 天 | 同一账号最多同时在线 5 端，每端独立 Token |
-| 设备 | `X-Device-Token` | Redis `X-Device-Token:token:xxx` | 永不过期 | 一个 deviceId 只对应一个有效 Token（重新获取顶掉旧 Token） |
+| 用户 | `Authorization` | Redis `Authorization:token:xxx` | 3 天 | 同一账号最多同时在线 5 端，每端独立 Token |
+| 设备 | `X-Device-Token` | Redis `X-Device-Token:token:xxx` | 永不过期 | 有效期内复用同一 Token，登出后再登录才轮换 |
 
-- 设备 Token 通过 `GET /api/device/:deviceId/login` 获取，使用设备 6 位 hex ID 认证（**无需用户登录**）。
+- 设备 Token 通过 `GET /api/devices/{deviceId}/token` 获取（保留 `/login` 兼容别名），使用设备 6 位 hex ID 认证（**无需用户登录**）。
 - 设备若 **30 天未上线**，其 Token 会被自动清理（**不删除设备**），设备重新登录即可获取新 Token。
 - 认证 Cookie 统一为 `httpOnly` + `SameSite=Lax`，生产环境（`release`）自动启用 `secure`。
 

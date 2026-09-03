@@ -1,7 +1,9 @@
 package router
 
 import (
+	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -19,6 +21,78 @@ import (
 	"iot-platform.local/pkg/config"
 )
 
+// HealthProbe 健康检查依赖探针。
+// 任一探针失败时 /health 返回 HTTP 503（HTTP 状态码仅表达后端是否正常），
+// 全部为 nil 时 /health 恒返回 200（保持向后兼容）。
+type HealthProbe struct {
+	PostgreSQL func(ctx context.Context) error
+	Redis      func(ctx context.Context) error
+	Influx     func(ctx context.Context) error
+}
+
+// probeTimeout 单次健康探测总超时，防止依赖无响应拖垮健康检查
+const probeTimeout = 2 * time.Second
+
+// healthCheck @Summary      健康检查
+// @Description  供容器编排/负载均衡探测，不走统一响应结构；
+// @Description  探测 PostgreSQL/Redis/InfluxDB，任一失联时返回 HTTP 503
+// @Tags         system
+// @Produce      json
+// @Success      200  {object}  map[string]string
+// @Failure      503  {object}  map[string]string
+// @Router       /health [get]
+// healthCheck 健康检查 (GET /health)
+func healthCheck(probes *HealthProbe) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		status := "ok"
+		httpCode := http.StatusOK
+		deps := map[string]string{}
+
+		if probes != nil {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), probeTimeout)
+			defer cancel()
+
+			var wg sync.WaitGroup
+			var mu sync.Mutex
+			check := func(name string, fn func(ctx context.Context) error) {
+				if fn == nil {
+					return
+				}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					err := fn(ctx)
+					mu.Lock()
+					defer mu.Unlock()
+					if err != nil {
+						deps[name] = "error: " + err.Error()
+						status = "error"
+						httpCode = http.StatusServiceUnavailable
+					} else {
+						deps[name] = "ok"
+					}
+				}()
+			}
+
+			check("postgresql", probes.PostgreSQL)
+			check("redis", probes.Redis)
+			check("influxdb", probes.Influx)
+			wg.Wait()
+		}
+
+		body := gin.H{
+			"status":       status,
+			"service":      "iot-platform",
+			"time":         time.Now().Format(time.RFC3339),
+			"dependencies": deps,
+		}
+		if probes == nil {
+			delete(body, "dependencies")
+		}
+		c.JSON(httpCode, body)
+	}
+}
+
 // Services 服务集合（用于依赖注入）
 type Services struct {
 	User     *service.UserService
@@ -26,10 +100,11 @@ type Services struct {
 	Report   *service.DeviceReportService
 	InfluxDB *service.InfluxDBService
 	Downlink *service.DownlinkService
+	Config   *service.DeviceConfigService
 }
 
 // Setup 配置路由
-func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plugin, mqttGateway *controller.MqttGatewayController) *gin.Engine {
+func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plugin, mqttGateway *controller.MqttGatewayController, probes *HealthProbe) *gin.Engine {
 	// 设置Gin模式
 	if config.Cfg.Server.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
@@ -54,18 +129,13 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 	}
 	r.Use(cors.New(corsCfg))
 
-	// ===== 健康检查（无需认证，供容器编排/负载均衡探测） =====
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "ok",
-			"service": "iot-platform",
-			"time":    time.Now().Format(time.RFC3339),
-		})
-	})
+	// ===== 健康检查（无需认证，供容器编排/负载均衡探测；依赖失联返回 503） =====
+	r.GET("/health", healthCheck(probes))
 
 	// 中间件快捷变量
 	userAuth := middleware.AuthMiddleware()                                         // 用户 Sa-Token 认证
-	deviceAuth := middleware.DeviceAuthMiddleware()                                 // 设备 Sa-Token 认证（保留用于兼容）
+	userOrDeviceAuth := middleware.UserOrDeviceAuthMiddleware()                     // 双认证：用户 Token 或设备 Token
+	deviceAuth := middleware.DeviceAuthMiddleware()                                 // 设备 Sa-Token 认证（数据上报/命令拉取）
 	deviceIdAuth := middleware.DeviceIDAuthMiddleware()                             // 设备 6位hex ID 认证（无需额外Token）
 	requireAdmin := middleware.CheckRole(service.RoleSuperAdmin, service.RoleAdmin) // 管理员角色校验（sa-token-go）
 
@@ -74,19 +144,13 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 	deviceCtl := controller.NewDeviceController(svcs.Device, svcs.Report)
 	dataCtl := controller.NewDataController(svcs.Report, svcs.InfluxDB)
 	downlinkCtl := controller.NewDownlinkController(svcs.Downlink, svcs.Device)
+	configCtl := controller.NewDeviceConfigController(svcs.Config, svcs.Device)
 
-	// API路由组（TokenInterceptor 自动从 Header/Cookie/Query 提取 token 到 context）
+	// API 路由组（TokenInterceptor 在下方对整组应用，自动从 Header/Cookie/Query 提取 token 到 context）
 	api := r.Group("/api")
 
-	// 设备数据上报/心跳路由组：不需要 TokenInterceptor（使用独立的 DeviceAuth 中间件）
-	// 提前注册以跳过不必要的中间件
-	dataGroup := api.Group("/data")
-	dataGroup.Use(deviceAuth)
-	{
-		dataGroup.POST("/:deviceId/Data", dataCtl.ReportData)
-		dataGroup.POST("/:deviceId/ping", dataCtl.Heartbeat)
-		dataGroup.POST("/:deviceId/heartbeat", dataCtl.Heartbeat)
-	}
+	// 设备数据上报/心跳路由组：在 TokenInterceptor 应用前注册，走独立的 DeviceAuth 中间件
+	// （已取消：TokenInterceptor 仅提取 token 不拦截，全部 REST 路由统一注册在其之后）
 
 	// 其余 API 使用 TokenInterceptor
 	api.Use(userPlugin.TokenInterceptor())
@@ -116,46 +180,44 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 			api.GET("/ws/mqtt/broker", mqttGateway.HandleWebSocket)
 		}
 
-		// ===== 用户相关路由 =====
-		userGroup := api.Group("/user")
-		{
-			// 公开路径（无需认证）
-			userGroup.POST("/register", userCtl.Register)
-			userGroup.POST("/login", userCtl.Login)
-			userGroup.GET("/isLogin", userCtl.IsLogin)
+		// ====================================================================
+		// REST 资源路由（Google AIP 风格，仅使用 GET / POST 两个动词，
+		// 兼容嵌入式客户端；更新/删除通过 POST + /update /delete 后缀表达）
+		// ====================================================================
 
-			// 需要登录的路径
-			userGroup.POST("/logout", userAuth, userCtl.Logout)
-			userGroup.PUT("", userAuth, userCtl.Update)
-			userGroup.GET("/profile", userAuth, userCtl.GetProfile)
-			userGroup.GET("/list", userAuth, requireAdmin, userCtl.List)
-			userGroup.GET("/page", userAuth, requireAdmin, userCtl.Page)
-			userGroup.POST("/delete", userAuth, userCtl.Delete)
-		}
+		// ===== User 资源 /api/users =====
+		api.POST("/users", userCtl.Create)                          // Create：注册用户（无需认证）
+		api.POST("/users/login", userCtl.Login)                     // Login：登录签发 Token（无需认证）
+		api.GET("/users/isLogin", userCtl.IsLogin)                  // IsLogin：会话检查（无需认证）
+		api.POST("/users/logout", userAuth, userCtl.Logout)         // Logout：吊销当前 Token
+		api.GET("/users", userAuth, requireAdmin, userCtl.List)     // List：用户列表（可选分页）
+		api.GET("/users/:userId", userAuth, userCtl.Get)            // Get：详情（me=当前用户）
+		api.POST("/users/:userId/update", userAuth, userCtl.Update) // Update：本人或管理员
+		api.POST("/users/:userId/delete", userAuth, userCtl.Delete) // Delete：本人或管理员
 
-		// ===== 设备相关路由 =====
-		deviceGroup := api.Group("/device")
-		{
-			// 设备注册：需要用户登录
-			deviceGroup.POST("/register", userAuth, deviceCtl.Register)
-			// 需要用户登录
-			deviceGroup.GET("/list", userAuth, deviceCtl.List)
-			deviceGroup.GET("/:deviceId/Data", userAuth, deviceCtl.GetDeviceData)
-			// 设备 Token 获取（6位hex ID 认证，无需用户Token）
-			deviceGroup.GET("/:deviceId/login", deviceIdAuth, deviceCtl.GetDeviceToken)
-			deviceGroup.GET("/:deviceId/token", deviceIdAuth, deviceCtl.GetDeviceToken)
-			deviceGroup.POST("/:deviceId/delete", userAuth, deviceCtl.Delete)
-			// 下放命令
-			deviceGroup.POST("/:deviceId/cmd", userAuth, downlinkCtl.PostCmd) // 用户下发
-			deviceGroup.GET("/:deviceId/cmd", deviceAuth, downlinkCtl.GetCmd) // 设备拉取（UUID设备Token认证）
-		}
+		// ===== Device 资源 /api/devices =====
+		api.POST("/devices", userAuth, deviceCtl.Register)
+		api.GET("/devices", userAuth, deviceCtl.List)
+		api.GET("/devices/:deviceId", userAuth, deviceCtl.GetDeviceData)
+		api.POST("/devices/:deviceId/update", userOrDeviceAuth, deviceCtl.UpdateDevice)
+		api.POST("/devices/:deviceId/delete", userAuth, deviceCtl.Delete)
+		api.GET("/devices/:deviceId/token", deviceIdAuth, deviceCtl.GetDeviceToken)
+		api.GET("/devices/:deviceId/login", deviceIdAuth, deviceCtl.GetDeviceToken) // 兼容别名
 
-		// ===== 数据查询路由（用户认证） =====
-		dataQueryGroup := api.Group("/data")
-		{
-			dataQueryGroup.GET("/:deviceId/Data/list", userAuth, dataCtl.QueryData)
-			dataQueryGroup.GET("/list", userAuth, dataCtl.ListData)
-		}
+		// ===== SensorData 子资源 =====
+		api.POST("/devices/:deviceId/sensorData", deviceAuth, dataCtl.ReportData)
+		api.GET("/devices/:deviceId/sensorData", userAuth, dataCtl.QueryData)
+		api.POST("/devices/:deviceId/heartbeat", deviceAuth, dataCtl.Heartbeat)
+		api.POST("/devices/:deviceId/ping", deviceAuth, dataCtl.Heartbeat) // 兼容别名
+
+		// ===== DownlinkCmd 子资源 =====
+		api.POST("/devices/:deviceId/commands", userAuth, downlinkCtl.PostCmd)
+		api.GET("/devices/:deviceId/commands", deviceAuth, downlinkCtl.GetCmd)
+
+		// ===== DeviceConfig 子资源 =====
+		api.GET("/devices/:deviceId/config", userAuth, configCtl.GetConfig)
+		api.POST("/devices/:deviceId/config", userAuth, configCtl.SaveConfig)
+		api.POST("/devices/:deviceId/config/report", deviceAuth, configCtl.ReportConfig)
 	}
 
 	return r

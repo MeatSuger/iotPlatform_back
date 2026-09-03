@@ -34,9 +34,9 @@ func TestIsValidDeviceID_ShouldValidateHex6(t *testing.T) {
 		{"123456", true},
 		{"abcdef", true},
 		{"ABCDEF", true},   // 大写自动转小写后合法
-		{"abc12", false},   // too short
-		{"abc1234", false}, // too long
-		{"ghijk1", false},  // invalid hex
+		{"abc12", false},   // 过短
+		{"abc1234", false}, // 过长
+		{"ghijk1", false},  // 非法十六进制
 		{"", false},
 		{"!@#$%^", false},
 	}

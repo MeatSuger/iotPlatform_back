@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// DateTime 自定义时间类型，JSON 序列化为 "yyyy-MM-dd HH:mm:ss±07:00"
-// 对齐 Java @JsonFormat 格式 + 时区标记
+// DateTime 自定义时间类型，JSON 序列化为 "2006-01-02T15:04:05.000-07:00"
+// 对齐 Java @JsonFormat（"yyyy-MM-dd'T'HH:mm:ss.SSSXXX"）格式 + 时区标记
 type DateTime struct {
 	time.Time
 }
@@ -74,7 +74,7 @@ func (dt DateTime) Value() (driver.Value, error) {
 	return dt.Time, nil
 }
 
-// Scan 实现 sql.Scanner（GORM 从 DB 读取）
+// Scan 实现 sql.Scanner（从 DB 读取）
 func (dt *DateTime) Scan(value any) error {
 	if value == nil {
 		dt.Time = time.Time{}

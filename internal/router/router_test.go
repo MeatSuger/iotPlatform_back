@@ -17,7 +17,6 @@ func TestServices_Struct(t *testing.T) {
 
 func TestServices_FieldAssignment(t *testing.T) {
 	svcs := &Services{}
-	// Verify field types compile and assign correctly
 	svcs.User = nil
 	svcs.Device = nil
 	svcs.Report = nil

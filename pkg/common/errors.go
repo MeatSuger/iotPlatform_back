@@ -3,7 +3,7 @@ package common
 import "errors"
 
 // AppError 统一业务错误类型
-// 对标 middleware/recovery.go 和 service/device_report_service.go 中原本重复定义的 AppError
+// middleware/recovery.go 与 service/device_report_service.go 共用此类型
 type AppError struct {
 	HTTPCode int    // HTTP 状态码（如 400, 401, 404）
 	BizCode  int    // 业务状态码
@@ -25,7 +25,7 @@ func NewAppError(httpCode, bizCode int, msg string) *AppError {
 }
 
 // ========================================
-// 业务错误哨兵（从 auth 包迁移）
+// 业务错误哨兵
 // ========================================
 var (
 	ErrUserNotFound      = errors.New("用户不存在")

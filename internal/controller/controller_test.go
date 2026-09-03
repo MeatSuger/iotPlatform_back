@@ -453,9 +453,9 @@ func TestRegister_RequestValidation(t *testing.T) {
 
 	t.Run("空 body 返回 400", func(t *testing.T) {
 		r := gin.New()
-		r.POST("/register", ctl.Register)
+		r.POST("/api/users", ctl.Create)
 		w := httptest.NewRecorder()
-		req := newJSONReq("POST", "/register", map[string]string{}, nil)
+		req := newJSONReq("POST", "/api/users", map[string]string{}, nil)
 		r.ServeHTTP(w, req)
 		resp := parseResp(w)
 		assert.Equal(t, common.CodeBadRequest, resp.Code)

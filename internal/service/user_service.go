@@ -34,9 +34,13 @@ type RegisterRequest struct {
 }
 
 // LoginRequest 登录请求
+// Device 为可选的设备端标识（如前端 localStorage 生成的 UUID、App 设备名）：
+// Sa-Token 按该标识区分多端登录，同一账号最多 MaxLoginCount 个设备端同时在线；
+// 不传时服务端回退用 User-Agent 生成，完全缺失则视为同一默认设备。
 type LoginRequest struct {
 	Account string `json:"account" binding:"required"`
 	Passwd  string `json:"passwd" binding:"required"`
+	Device  string `json:"device"`
 }
 
 // LoginResponse Sa-Token 风格登录响应
@@ -55,16 +59,17 @@ type LoginResponse struct {
 }
 
 const (
-	RoleSuperAdmin = "super-admin"
-	RoleAdmin      = "admin"
-	RoleUser       = "user"
+	RoleSuperAdmin = "super-admin" // RoleSuperAdmin 超级管理员角色
+	RoleAdmin      = "admin"       // RoleAdmin 管理员角色
+	RoleUser       = "user"        // RoleUser 普通用户角色
 )
 
 const (
-	UserStatusActive   = "ACTIVE"
-	UserStatusDisabled = "DISABLED"
+	UserStatusActive   = "ACTIVE"   // UserStatusActive 用户启用状态
+	UserStatusDisabled = "DISABLED" // UserStatusDisabled 用户禁用状态
 )
 
+// Register 注册用户（bcrypt 加密存储密码）
 func (s *UserService) Register(ctx context.Context, req RegisterRequest) (*ent.User, error) {
 	exist, err := s.repo.GetByAccount(ctx, req.Account)
 	if err != nil && !ent.IsNotFound(err) {
@@ -97,6 +102,7 @@ func (s *UserService) Register(ctx context.Context, req RegisterRequest) (*ent.U
 	return user, nil
 }
 
+// Login 用户登录：校验账号密码与状态，签发 Sa-Token 并返回登录信息
 func (s *UserService) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
 	user, err := s.repo.GetByAccount(ctx, req.Account)
 	if err != nil {
@@ -122,14 +128,17 @@ func (s *UserService) Login(ctx context.Context, req LoginRequest) (*LoginRespon
 	}
 
 	loginID := fmt.Sprintf("%d", user.ID)
-	token, err := stputil.Login(user.ID)
+	device := normalizeLoginDevice(req.Device)
+	token, err := stputil.Login(user.ID, device)
 	if err != nil {
 		return nil, fmt.Errorf("生成Token失败: %w", err)
 	}
 	_ = stputil.SetRoles(loginID, []string{role})
 
-	expireSeconds := int64(60 * 60 * 24)
-	zap.S().Infof("[User] 账号 %s (ID=%d, role=%s) 登录成功", user.Account, user.ID, role)
+	// 与 main.go 中 userMgr Timeout 保持一致（3 天）；该值同时用作响应 tokenTimeout
+	// 字段与认证 Cookie 的 MaxAge，必须与真实 Token TTL 一致，避免 Cookie 提前失效
+	expireSeconds := int64(60 * 60 * 24 * 3)
+	zap.S().Infof("[User] 账号 %s (ID=%d, role=%s, device=%s) 登录成功", user.Account, user.ID, role, device)
 	user.UpdateTime = time.Now()
 	if err := s.repo.Update(ctx, user); err != nil {
 		zap.S().Warnf("[User] 更新用户登录时间失败: %v", err)
@@ -144,9 +153,33 @@ func (s *UserService) Login(ctx context.Context, req LoginRequest) (*LoginRespon
 		SessionTimeout:       expireSeconds,
 		TokenSessionTimeout:  -2,
 		TokenActivityTimeout: -1,
-		LoginDevice:          "default-device",
+		LoginDevice:          device,
 		UserInfo:             user,
 	}, nil
+}
+
+// normalizeLoginDevice 规范化登录设备端标识：
+// 仅保留字母/数字/下划线/连字符并截断到 50 字符（该值会进入 Redis 键 account:<loginID>:<device>），
+// 为空或清洗后为空时回退 "default"（Sa-Token 默认设备键）。
+func normalizeLoginDevice(device string) string {
+	device = strings.TrimSpace(device)
+	if device == "" {
+		return "default"
+	}
+	cleaned := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		}
+		return -1
+	}, device)
+	if cleaned == "" {
+		return "default"
+	}
+	if len(cleaned) > 50 {
+		cleaned = cleaned[:50]
+	}
+	return cleaned
 }
 
 // GetByID 获取用户（Cache-Aside：L1本地 → L2 Redis → PostgreSQL回源）
@@ -173,7 +206,13 @@ func (s *UserService) Update(ctx context.Context, user *ent.User) error {
 
 // Delete 删除用户（Write-Invalidate：删DB后失效缓存）
 func (s *UserService) Delete(ctx context.Context, id uint) error {
-	_ = stputil.Kickout(id)
+	// 完整删除该用户全部 token（同一账号最多同时在线 5 端）；
+	// Logout 事件会删除 token/account/renew 三个 key，不留 KICK_OUT 标记
+	if tokens, err := stputil.GetTokenValueList(id); err == nil {
+		for _, t := range tokens {
+			_ = stputil.LogoutByToken(t)
+		}
+	}
 	if err := s.repo.Delete(ctx, id); err != nil {
 		return err
 	}
@@ -181,10 +220,12 @@ func (s *UserService) Delete(ctx context.Context, id uint) error {
 	return nil
 }
 
+// List 查询全部用户
 func (s *UserService) List(ctx context.Context) ([]*ent.User, error) {
 	return s.repo.List(ctx)
 }
 
+// Page 分页查询用户（page/size 非法时使用默认值，name 模糊匹配）
 func (s *UserService) Page(ctx context.Context, page, size int, name string) ([]*ent.User, int64, error) {
 	if page <= 0 {
 		page = 1
@@ -196,10 +237,12 @@ func (s *UserService) Page(ctx context.Context, page, size int, name string) ([]
 	return users, int64(total), err
 }
 
+// IsExist 判断用户是否存在
 func (s *UserService) IsExist(ctx context.Context, id uint) (bool, error) {
 	return s.repo.IsExist(ctx, id)
 }
 
+// UpgradePasswordHash 将密码升级为 bcrypt 哈希（兼容旧明文密码的迁移场景）
 func (s *UserService) UpgradePasswordHash(ctx context.Context, userID uint, plainPassword string) error {
 	hashed, err := bcrypt.GenerateFromPassword([]byte(plainPassword), bcrypt.DefaultCost)
 	if err != nil {

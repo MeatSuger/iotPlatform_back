@@ -86,14 +86,14 @@ func TestDateTime_UnmarshalJSON_Invalid(t *testing.T) {
 }
 
 func TestDateTime_Value(t *testing.T) {
-	// Non-zero
+	// 非零值
 	tm := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	dt := DateTimeFrom(tm)
 	v, err := dt.Value()
 	assert.NoError(t, err)
 	assert.Equal(t, tm, v)
 
-	// Zero
+	// 零值
 	zero := DateTime{}
 	v, err = zero.Value()
 	assert.NoError(t, err)
