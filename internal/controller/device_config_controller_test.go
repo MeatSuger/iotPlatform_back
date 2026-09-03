@@ -135,7 +135,7 @@ func TestConfigController_SaveAndGet(t *testing.T) {
 	var saveResp struct {
 		Code int `json:"code"`
 		Data struct {
-			Version uint `json:"version"`
+			Version uint   `json:"version"`
 			Status  string `json:"status"`
 		} `json:"data"`
 	}
