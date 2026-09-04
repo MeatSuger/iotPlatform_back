@@ -14,7 +14,7 @@ import (
 )
 
 // Device 设备实体，对应表 iot_device
-// 注意: 库中还存在一个 ent 未建模的 id bigint identity 列（历史遗留，无业务使用）
+// 主键为 device_id（6位hex，历史上曾存在遗留的 id bigint identity 列，已于 2026-09 清理）
 type Device struct {
 	ent.Schema
 }
@@ -119,6 +119,9 @@ func (Device) Edges() []ent.Edge {
 		// 配置快照 (O2O): 一个设备对应一份配置；删除设备时级联删除其配置
 		edge.To("config", DeviceConfig.Type).
 			Unique().
+			Annotations(entsql.OnDelete(entsql.Cascade)),
+		// 传感器定义 (O2M): 一个设备有多个传感器定义；删除设备时级联删除
+		edge.To("sensors", DeviceSensor.Type).
 			Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }
