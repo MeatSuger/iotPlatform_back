@@ -101,6 +101,7 @@ type Services struct {
 	InfluxDB *service.InfluxDBService
 	Downlink *service.DownlinkService
 	Config   *service.DeviceConfigService
+	Sensors  *service.DeviceSensorService
 }
 
 // Setup 配置路由
@@ -145,6 +146,7 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 	dataCtl := controller.NewDataController(svcs.Report, svcs.InfluxDB)
 	downlinkCtl := controller.NewDownlinkController(svcs.Downlink, svcs.Device)
 	configCtl := controller.NewDeviceConfigController(svcs.Config, svcs.Device)
+	sensorCtl := controller.NewDeviceSensorController(svcs.Sensors, svcs.Device)
 
 	// API 路由组（TokenInterceptor 在下方对整组应用，自动从 Header/Cookie/Query 提取 token 到 context）
 	api := r.Group("/api")
@@ -215,9 +217,17 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 		api.GET("/devices/:deviceId/commands", deviceAuth, downlinkCtl.GetCmd)
 
 		// ===== DeviceConfig 子资源 =====
-		api.GET("/devices/:deviceId/config", userAuth, configCtl.GetConfig)
+		api.GET("/devices/:deviceId/config", userOrDeviceAuth, configCtl.GetConfig) // Get：设备属主或设备本人
 		api.POST("/devices/:deviceId/config", userAuth, configCtl.SaveConfig)
 		api.POST("/devices/:deviceId/config/report", deviceAuth, configCtl.ReportConfig)
+
+		// ===== Sensor 子资源（传感器定义 / 物模型） =====
+		api.GET("/devices/:deviceId/sensors", userAuth, sensorCtl.ListSensors)
+		api.GET("/devices/:deviceId/sensors/:sensorId", userAuth, sensorCtl.GetSensor)
+		api.POST("/devices/:deviceId/sensors", userAuth, sensorCtl.CreateSensor)
+		api.POST("/devices/:deviceId/sensors/apply", userAuth, sensorCtl.ApplySensors)
+		api.POST("/devices/:deviceId/sensors/:sensorId/update", userAuth, sensorCtl.UpdateSensor)
+		api.POST("/devices/:deviceId/sensors/:sensorId/delete", userAuth, sensorCtl.DeleteSensor)
 	}
 
 	return r

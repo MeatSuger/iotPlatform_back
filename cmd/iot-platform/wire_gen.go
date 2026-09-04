@@ -38,7 +38,9 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 	downlinkService := service.NewDownlinkService(downlinkCmdRepo, deviceRepo, rdb, hub)
 	deviceConfigRepo := repository.NewDeviceConfigRepo(entClient)
 	deviceConfigService := service.NewDeviceConfigService(deviceConfigRepo, downlinkService)
-	services := provideRouterServices(userService, deviceService, deviceReportService, influxDBService, downlinkService, deviceConfigService)
+	deviceSensorRepo := repository.NewDeviceSensorRepo(entClient)
+	deviceSensorService := service.NewDeviceSensorService(deviceSensorRepo, deviceConfigService)
+	services := provideRouterServices(userService, deviceService, deviceReportService, influxDBService, downlinkService, deviceConfigService, deviceSensorService)
 	wsHandler := websocket.NewWsHandler(hub)
 	appComponents := &AppComponents{
 		Services:  services,
@@ -82,6 +84,7 @@ func provideRouterServices(
 	influxSvc *service.InfluxDBService,
 	downlinkSvc *service.DownlinkService,
 	configSvc *service.DeviceConfigService,
+	sensorSvc *service.DeviceSensorService,
 ) *router.Services {
 	return &router.Services{
 		User:     userSvc,
@@ -90,5 +93,6 @@ func provideRouterServices(
 		InfluxDB: influxSvc,
 		Downlink: downlinkSvc,
 		Config:   configSvc,
+		Sensors:  sensorSvc,
 	}
 }

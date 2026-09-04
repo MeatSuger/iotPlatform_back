@@ -33,14 +33,25 @@ func NewDeviceConfigController(configSvc *service.DeviceConfigService, deviceSvc
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
 // @Security     UserAuth
+// @Security     DeviceAuth
 // @Router       /api/devices/{deviceId}/config [get]
-// GetConfig 查询设备配置快照 (GET /api/devices/{deviceId}/config，用户侧)
+// GetConfig 查询设备配置快照 (GET /api/devices/{deviceId}/config)
+//
+// 双认证：设备属主（UserAuth）或设备本人（DeviceAuth 且 Token 与路径设备一致）。
+// 设备端主动拉取期望配置的兜底通道（配合下行命令通道使用）。
 func (ctl *DeviceConfigController) GetConfig(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
-	ownerID := middleware.GetUserID(c)
 
-	if err := ctl.checkOwnership(c, deviceID, ownerID); err != nil {
-		return
+	switch middleware.GetAuthType(c) {
+	case "device":
+		if middleware.GetDeviceID(c) != deviceID {
+			common.FailWithMsg(c, common.CodeForbidden, "设备Token与路径设备不一致")
+			return
+		}
+	default:
+		if err := ctl.checkOwnership(c, deviceID, middleware.GetUserID(c)); err != nil {
+			return
+		}
 	}
 
 	cfg, err := ctl.configSvc.Get(c.Request.Context(), deviceID)

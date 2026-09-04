@@ -2,7 +2,7 @@
 
 > **Base URL**: `https://api.meatsuger.top`（生产）· `http://localhost:8182`（开发）
 >
-> **版本**: 1.3.0 ｜ **更新时间**: 2026-09-03
+> **版本**: 1.4.0 ｜ **更新时间**: 2026-09-04
 >
 > 本文档参照 Google API 改进提案（AIP）风格组织：资源导向设计（AIP-121）、标准方法（AIP-131 ~ AIP-135）、字段行为标注（AIP-203）、错误模型（AIP-193）、文档规范（AIP-192）。
 >
@@ -23,6 +23,7 @@
   - [5.4 SensorData 资源](#54-sensordata-资源)
   - [5.5 DownlinkCmd 资源](#55-downlinkcmd-资源)
   - [5.6 DeviceConfig 资源](#56-deviceconfig-资源)
+  - [5.7 Sensor 资源](#57-sensor-资源)
 - [6. 实时通道](#6-实时通道)
 - [7. 附录](#7-附录)
 
@@ -36,6 +37,7 @@ IoT Platform API 是一套面向**设备接入与管理**的 REST API，围绕�
 |------|-----------|------|
 | `User` | `users/{userId}` | 平台用户，设备的属主 |
 | `Device` | `devices/{deviceId}` | 接入平台的终端设备，`deviceId` 为 6 位十六进制串 |
+| `Sensor` | `devices/{deviceId}/sensors/{sensorId}` | 设备传感器定义（物模型），`sensorId` 为设备内唯一标识符 |
 | `SensorData` | `devices/{deviceId}/sensorData` | 设备上报的传感器时序数据（存储于 InfluxDB） |
 | `DownlinkCmd` | `devices/{deviceId}/commands/{cmdId}` | 平台向设备下发的控制命令 |
 | `DeviceConfig` | `devices/{deviceId}/config` | 设备配置快照（云端期望配置，版本化下发） |
@@ -77,9 +79,17 @@ devices/{deviceId}/commands             ← 下行命令
   Pull          GET    /api/devices/{deviceId}/commands    （自定义：设备拉取）
 
 devices/{deviceId}/config               ← 设备配置快照
-  Get           GET    /api/devices/{deviceId}/config      （自定义：查询期望配置）
+  Get           GET    /api/devices/{deviceId}/config      （自定义：查询期望配置，用户/设备双认证）
   Set           POST   /api/devices/{deviceId}/config      （自定义：设置并下发，版本递增）
   Report        POST   /api/devices/{deviceId}/config/report （自定义：设备回执）
+
+devices/{deviceId}/sensors              ← 传感器定义（物模型）
+  List          GET    /api/devices/{deviceId}/sensors     （标准：List）
+  Get           GET    /api/devices/{deviceId}/sensors/{sensorId} （标准：Get）
+  Create        POST   /api/devices/{deviceId}/sensors     （标准：Create）
+  Update        POST   /api/devices/{deviceId}/sensors/{sensorId}/update （POST 自定义后缀方法：Update，增量）
+  Delete        POST   /api/devices/{deviceId}/sensors/{sensorId}/delete （POST 自定义后缀方法：Delete）
+  Apply         POST   /api/devices/{deviceId}/sensors/apply （自定义：编译进 config 并版本化下发）
 ```
 
 ---
@@ -282,6 +292,12 @@ devices/{deviceId}/config               ← 设备配置快照
                 "mqtt": {"host": "", "port": 1883, "tls": false} },
   "sensor":   { "reportInterval": 60,
                 "thresholds": {"temperature": {"min": 0, "max": 100}} },
+  "sensors":  [ {"id": "temperature", "name": "温度", "type": "temperature",
+                 "dataType": "float", "unit": "°C",
+                 "specs": {"min": -40, "max": 125, "step": 0.1},
+                 "reportInterval": 60,
+                 "thresholds": {"min": 0, "max": 100, "alarm": true},
+                 "attrs": {}, "enabled": true} ],
   "actuator": { "mode": "auto",
                 "schedule": {"on": "08:00", "off": "20:00"}, "pwm": 512 },
   "camera":   { "protocol": "smtp",
@@ -292,7 +308,46 @@ devices/{deviceId}/config               ← 设备配置快照
 }
 ```
 
-> 分区说明：`network` 网络连接、`sensor` 传感器采样/阈值、`actuator` 执行器（继电器/电机等）、`camera` 摄像头协议（SMTP/RTSP/ONVIF 等）、`ota` 固件升级（**预留扩展点，暂不实现升级流程**）。`payload` 为整体快照，`version` 标识其代数。
+> 分区说明：`network` 网络连接、`sensor` 传感器全局采样/阈值、`sensors` 传感器定义列表（物模型，结构见 [4.6](#46-sensor传感器定义物模型)，由 `POST /sensors/apply` 编译写入）、`actuator` 执行器（继电器/电机等）、`camera` 摄像头协议（SMTP/RTSP/ONVIF 等）、`ota` 固件升级（**预留扩展点，暂不实现升级流程**）。`payload` 为整体快照，`version` 标识其代数。
+
+### 4.6 Sensor（传感器定义 / 物模型）
+
+传感器定义描述「设备里有哪些传感器、如何采样、何时告警」，是设备物模型的组成部分。设计参考新大陆 NLECloud 传感器模型（`ApiTag`/`Name`/`DataType`/`TypeAttrs`）与阿里云 IoT TSL 物模型（`identifier`/`dataType`/`specs`）。
+
+定义本身仅持久化（`iot_device_sensor` 表），经 `Apply` 方法编译进 `DeviceConfig.payload.sensors` 后，复用现有 `type=config` 下行通道版本化下发；设备回执经 `POST /config/report` 回写，实现「期望 vs 实际」比对。
+
+| 字段 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `id` | string | Create: REQUIRED · IMMUTABLE | 传感器标识符：小写字母开头，仅含小写字母/数字/下划线，≤50 字符（对应新大陆 `ApiTag`），设备内唯一 |
+| `name` | string | Create: REQUIRED · Update: OPTIONAL | 传感器名称，≤100 字符 |
+| `type` | string | Create: REQUIRED · Update: OPTIONAL | 传感器类别，≤50 字符（如 `temperature` / `humidity` / `light` / `switch` / `custom`） |
+| `dataType` | string | OPTIONAL | 值类型：`float`（默认）/ `int` / `bool` / `text` / `enum` |
+| `unit` | string | OPTIONAL | 单位，≤32 字符（如 `°C` / `%RH`） |
+| `specs` | object | OPTIONAL | 量程规格（阿里云 TSL 风格）：`{"min": number, "max": number, "step": number}`；传 `{}` 显式清空 |
+| `reportInterval` | int | OPTIONAL | 采样/上报周期（秒），`0`=继承设备全局配置 |
+| `thresholds` | object | OPTIONAL | 告警阈值：`{"min": number, "max": number, "alarm": bool}`；传 `{}` 显式清空 |
+| `attrs` | object | OPTIONAL | 扩展属性（新大陆 `TypeAttrs` 风格，自由键值）；传 `{}` 显式清空 |
+| `enabled` | bool | OPTIONAL | 是否启用，默认 `true`（禁用后设备应停止该传感器采样） |
+| `createdAt` / `updatedAt` | string | OUTPUT_ONLY | 创建 / 更新时间 |
+
+**完整示例**
+
+```json
+{
+  "id": "temperature",
+  "name": "温度",
+  "type": "temperature",
+  "dataType": "float",
+  "unit": "°C",
+  "specs": {"min": -40, "max": 125, "step": 0.1},
+  "reportInterval": 60,
+  "thresholds": {"min": 0, "max": 100, "alarm": true},
+  "attrs": {"gpio": 4, "driver": "dht22"},
+  "enabled": true
+}
+```
+
+> **增量更新语义**：Update 方法仅修改请求体中**出现**的字段；`specs` / `thresholds` / `attrs` 传 `{}` 视为显式清空。`id` 为资源标识，创建后不可变（AIP-136）。
 
 ---
 
@@ -889,7 +944,7 @@ GET /api/devices/90431b/sensorData?limit=100
 
 #### Get — 查询配置快照 `GET /api/devices/{deviceId}/config`
 
-**授权**：UserAuth（仅设备属主，否则 403）。
+**授权**：**UserOrDeviceAuth** —— 设备属主（UserAuth），或设备本人（DeviceAuth 且 Token 与路径设备一致，否则 403）。设备端可经此端点主动拉取期望配置（下行命令通道的兜底通道）。
 
 **路径参数**：`deviceId`（6 位 hex）。
 
@@ -969,6 +1024,140 @@ GET /api/devices/90431b/config
 > 回执后服务端将 `status` 置为 `acked`，`reportedVersion/reportedPayload` 记录设备实际生效值（用于平台侧「期望 vs 实际」比对）。
 
 **错误码**：400（字段缺失）
+
+---
+
+### 5.7 Sensor 资源
+
+传感器定义（物模型）的 CRUD 与下发。定义结构见 [4.6](#46-sensor传感器定义物模型)；`Apply` 将全部定义编译进 `DeviceConfig.payload.sensors` 并复用 `type=config` 通道版本化下发。
+
+#### List — 传感器定义列表 `GET /api/devices/{deviceId}/sensors`
+
+**授权**：UserAuth（仅设备属主，否则 403）。
+
+**示例**
+
+```
+GET /api/devices/90431b/sensors
+```
+
+```json
+{"code": 200, "message": "success", "data": [
+  {"id": "temperature", "name": "温度", "type": "temperature", "dataType": "float",
+   "unit": "°C", "specs": {"min": -40, "max": 125, "step": 0.1}, "reportInterval": 60,
+   "thresholds": {"min": 0, "max": 100, "alarm": true}, "attrs": {}, "enabled": true,
+   "createdAt": "2026-09-04T10:00:00.000+08:00", "updatedAt": "2026-09-04T10:00:00.000+08:00"}
+]}
+```
+
+---
+
+#### Get — 查询传感器定义 `GET /api/devices/{deviceId}/sensors/{sensorId}`
+
+**授权**：UserAuth（仅设备属主，否则 403）。
+
+**路径参数**：
+
+| 参数 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `sensorId` | string | REQUIRED | 传感器标识符 |
+
+**错误码**：403（非属主）、404（设备 / 传感器不存在）
+
+---
+
+#### Create — 创建传感器定义 `POST /api/devices/{deviceId}/sensors`
+
+**授权**：UserAuth（仅设备属主，否则 403）。
+
+**请求体**（JSON，结构见 [4.6](#46-sensor传感器定义物模型)）：
+
+| 字段 | 类型 | 行为 |
+|------|------|------|
+| `id` | string | REQUIRED（IMMUTABLE） |
+| `name` | string | REQUIRED |
+| `type` | string | REQUIRED |
+| `dataType` / `unit` / `specs` / `reportInterval` / `thresholds` / `attrs` / `enabled` | — | OPTIONAL |
+
+**示例**
+
+```json
+// 请求
+{"id": "temperature", "name": "温度", "type": "temperature", "dataType": "float",
+ "unit": "°C", "specs": {"min": -40, "max": 125, "step": 0.1}, "reportInterval": 60,
+ "thresholds": {"min": 0, "max": 100, "alarm": true}}
+
+// 响应 —— data 为创建后的完整定义
+{"code": 200, "message": "传感器已创建", "data": {"id": "temperature", "name": "温度", "...": "..."}}
+```
+
+> 创建仅持久化定义，**不触发下发**；下发由 `Apply` 显式触发。
+
+**错误码**：400（校验失败 / `id` 已存在）、403（非属主）、404（设备不存在）
+
+---
+
+#### Update — 增量更新传感器定义 `POST /api/devices/{deviceId}/sensors/{sensorId}/update`
+
+**授权**：UserAuth（仅设备属主，否则 403）。
+
+**请求体**（JSON，全部 OPTIONAL，**增量语义**：仅出现的字段被更新；`specs` / `thresholds` / `attrs` 传 `{}` 显式清空；至少传一个字段）：
+
+`name` / `type` / `dataType` / `unit` / `specs` / `reportInterval` / `thresholds` / `attrs` / `enabled`
+
+**示例**
+
+```json
+// 请求 —— 只改上报周期，其余字段不受影响
+POST /api/devices/90431b/sensors/temperature/update
+{"reportInterval": 120}
+
+// 响应 —— data 为更新后的完整定义
+{"code": 200, "message": "success", "data": {"id": "temperature", "reportInterval": 120, "...": "..."}}
+```
+
+**错误码**：400（校验失败 / 无更新字段）、403（非属主）、404（设备 / 传感器不存在）
+
+---
+
+#### Delete — 删除传感器定义 `POST /api/devices/{deviceId}/sensors/{sensorId}/delete`
+
+**授权**：UserAuth（仅设备属主，否则 403）。
+
+```json
+{"code": 200, "message": "删除成功", "data": null}
+```
+
+**错误码**：403（非属主）、404（设备 / 传感器不存在）
+
+---
+
+#### Apply — 下发传感器配置 `POST /api/devices/{deviceId}/sensors/apply`
+
+**授权**：UserAuth（仅设备属主，否则 403）。
+
+将设备**全部**传感器定义编译为 `config.payload.sensors` 数组（保留其余配置分区），经 `DeviceConfigService` 版本 +1 并复用 `type=config` 下行通道下发。无请求体。
+
+**响应体** `data`：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `deviceId` | string | 设备 ID |
+| `version` | uint | 下发后的配置版本 |
+| `status` | string | 下发确认态（`pending`） |
+| `count` | int | 本次编译的传感器定义数量 |
+
+**示例**
+
+```json
+// 响应
+{"code": 200, "message": "传感器配置已下发",
+ "data": {"deviceId": "90431b", "version": 5, "status": "pending", "count": 2}}
+```
+
+> 设备侧接收路径与 `POST /config` 一致：在线设备经 WS 收到 `{"type":"cmd","cmdType":"config","payload":{"version":5,"config":{"sensors":[...], ...}}}`；离线设备经 `GET /commands` 拉取；也可经 `GET /config`（设备 Token）兜底获取。设备生效后经 `POST /config/report` 回执。
+
+**错误码**：403（非属主）、404（设备不存在）、500（保存 / 下发失败）
 
 ---
 
@@ -1215,6 +1404,19 @@ conn, _, err := websocket.DefaultDialer.Dial("wss://api.meatsuger.top/api/ws/dev
 
 > 匹配约定的 PUBLISH 消息会自动走数据入库链路（更新状态缓存 → Redis 缓冲 → InfluxDB），并写入 `mqtt_publish_log` 表。
 
+#### Topic 规划（预留，暂未实现）
+
+参考阿里云 Alink 按上下行拆分 topic 的设计，规划以下 topic。**当前仅 `telemetry` 上行已实现**，其余为协议预留，设备端固件可按此约定开发，平台侧实现排期另行安排：
+
+| Topic | 方向 | Payload | 说明 |
+|-------|------|---------|------|
+| `iot/{deviceId}/telemetry` | 上行 | 同 HTTP `sensorData` 上报 | **已实现** |
+| `iot/{deviceId}/config` | 下行 | `{"version": 4, "config": {...}}`（ConfigEnvelope） | 预留：配置下发（对应 `type=config` 命令的 MQTT 通道） |
+| `iot/{deviceId}/config/report` | 上行 | `{"version": 4, "config": {...}}` | 预留：配置回执（对应 `POST /config/report`） |
+| `iot/{deviceId}/status` | 上行 | `{"status": "online"}` | 预留：设备状态 / 心跳（对应 `POST /heartbeat`） |
+
+> 下行 topic 由平台向设备方向 PUBLISH（设备 SUBSCRIBE）；实现时沿用「网关透明转发 + PUBLISH 日志」架构，配置下发将同时经 WS / HTTP 轮询 / MQTT 三通道触达。
+
 #### 连接示例
 
 ```
@@ -1264,9 +1466,15 @@ wss://api.meatsuger.top/api/ws/mqtt/broker?X-Device-Token=<token>
 | POST | `/api/devices/{deviceId}/ping` | DeviceAuth | 设备心跳（兼容别名） |
 | POST | `/api/devices/{deviceId}/commands` | UserAuth | 下发命令 |
 | GET | `/api/devices/{deviceId}/commands` | DeviceAuth | 设备拉取命令 |
-| GET | `/api/devices/{deviceId}/config` | UserAuth | 查询设备配置快照 |
+| GET | `/api/devices/{deviceId}/config` | UserAuth / DeviceAuth | 查询设备配置快照（设备本人需 Token 与路径一致） |
 | POST | `/api/devices/{deviceId}/config` | UserAuth | 设置并下发设备配置 |
 | POST | `/api/devices/{deviceId}/config/report` | DeviceAuth | 设备配置回执 |
+| GET | `/api/devices/{deviceId}/sensors` | UserAuth | 传感器定义列表 |
+| GET | `/api/devices/{deviceId}/sensors/{sensorId}` | UserAuth | 查询传感器定义 |
+| POST | `/api/devices/{deviceId}/sensors` | UserAuth | 创建传感器定义 |
+| POST | `/api/devices/{deviceId}/sensors/{sensorId}/update` | UserAuth | 增量更新传感器定义 |
+| POST | `/api/devices/{deviceId}/sensors/{sensorId}/delete` | UserAuth | 删除传感器定义 |
+| POST | `/api/devices/{deviceId}/sensors/apply` | UserAuth | 下发传感器配置（编译进 config，版本递增） |
 | GET | `/api/ws/device` | DeviceAuth | 设备 WebSocket 实时通道 |
 | GET | `/api/ws/user` | UserAuth | 用户管理端 WebSocket 通道 |
 | GET | `/api/ws/mqtt/broker` | DeviceAuth（MQTT 层） | MQTT over WebSocket 网关 |
@@ -1341,6 +1549,7 @@ pending ──→ sent ──→ delivered
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.4.0 | 2026-09-04 | 新增传感器物模型能力：`Sensor` 资源（`devices/{deviceId}/sensors/{sensorId}`），JSON 格式融合新大陆 NLECloud 传感器模型（`ApiTag`/`TypeAttrs`）与阿里云 TSL（`dataType`/`specs`）。新增 `List/Get/Create/Update/Delete` 标准方法与 `Apply` 自定义方法（`POST /sensors/apply` 编译进 `DeviceConfig.payload.sensors` 并版本化下发）。`GET /config` 改为 **UserOrDeviceAuth** 双认证（设备可经 Token 主动拉取期望配置）。新增 MQTT Topic 规划（`iot/{deviceId}/config` 下行等，**预留暂未实现**） |
 | 1.3.0 | 2026-09-03 | 新增设备配置能力：`DeviceConfig` 资源（整体配置快照，`version` 版本化）。新增 `GET /api/devices/{deviceId}/config`（查询期望配置）、`POST /api/devices/{deviceId}/config`（设置并下发，`version` 递增）、`POST /api/devices/{deviceId}/config/report`（设备回执，回写 `reported*` 并置 `acked`）。配置复用下行命令通道下发（`type=config`）；`payload` 分区覆盖 `network`/`sensor`/`actuator`/`camera`(SMTP 等)/`ota`（OTA 预留扩展点，暂不实现升级流程） |
 | 1.2.0 | 2026-09-01 | REST API 重构为资源导向路径（**仅使用 GET / POST 两个动词**，写操作一律 POST，更新 / 删除通过 `POST + /update`、`/delete` 后缀表达）。关键映射：`/api/user/*` → `/api/users/*`（`POST /api/user/register` → `POST /api/users`；`GET /api/user/profile?id=` → `GET /api/users/{userId}`，`{userId}` 支持 `me`；`PUT /api/user` → `POST /api/users/{userId}/update`；`GET /api/user/list` + `GET /api/user/page` → `GET /api/users`（可选分页，双响应形态）；`POST /api/user/delete?id=` → `POST /api/users/{userId}/delete`）；`/api/device/*` → `/api/devices/*`（`GET /api/device/{id}/Data` → `GET /api/devices/{deviceId}`；`GET /api/device/{id}/login` → `GET /api/devices/{deviceId}/token`）；数据接口并入设备子资源（`POST /api/data/{id}/Data` → `POST /api/devices/{deviceId}/sensorData`；`GET /api/data/{id}/Data/list` → `GET /api/devices/{deviceId}/sensorData`；`POST /api/data/{id}/ping` → `POST /api/devices/{deviceId}/heartbeat`）；命令接口 `POST|GET /api/device/{id}/cmd` → `POST|GET /api/devices/{deviceId}/commands`；**移除 `GET /api/data/list`**（通用数据查询扩展点）。保留兼容别名：`GET /api/devices/{id}/login`（token 别名）、`POST /api/devices/{id}/ping`（heartbeat 别名）。**破坏性变更：旧路径全部失效**，前端与设备固件需同步更新 |
 | 1.1.0 | 2026-09-01 | 登录支持 `device` 设备端标识（多端上限按设备端计数）；设备 Token 改为复用语义（重复获取返回同一 Token）；设备更新接口改为增量更新并支持设备 Token 自更新；被踢 / 被顶号的 Token 立即物理删除；修正用户 Token 有效期为 3 天（Cookie MaxAge 同步） |

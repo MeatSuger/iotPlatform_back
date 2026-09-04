@@ -35,6 +35,7 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 		repository.NewDeviceRepo,
 		repository.NewDownlinkCmdRepo,
 		repository.NewDeviceConfigRepo,
+		repository.NewDeviceSensorRepo,
 
 		// Service 层
 		service.NewUserService,
@@ -43,6 +44,7 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 		service.NewDeviceReportService,
 		service.NewDownlinkService,
 		service.NewDeviceConfigService,
+		service.NewDeviceSensorService,
 
 		// WebSocket（网关架构下 WS 不直接发布 MQTT，由 MQTT 桥接网关负责转发）
 		websocket.NewHub,
@@ -80,6 +82,7 @@ func provideRouterServices(
 	influxSvc *service.InfluxDBService,
 	downlinkSvc *service.DownlinkService,
 	configSvc *service.DeviceConfigService,
+	sensorSvc *service.DeviceSensorService,
 ) *router.Services {
 	return &router.Services{
 		User:     userSvc,
@@ -88,5 +91,6 @@ func provideRouterServices(
 		InfluxDB: influxSvc,
 		Downlink: downlinkSvc,
 		Config:   configSvc,
+		Sensors:  sensorSvc,
 	}
 }

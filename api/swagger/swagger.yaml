@@ -104,6 +104,36 @@ definitions:
     required:
     - sensors
     type: object
+  entity.SensorCreateRequest:
+    properties:
+      attrs:
+        additionalProperties: {}
+        type: object
+      dataType:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      name:
+        type: string
+      reportInterval:
+        type: integer
+      specs:
+        additionalProperties: {}
+        type: object
+      thresholds:
+        additionalProperties: {}
+        type: object
+      type:
+        type: string
+      unit:
+        type: string
+    required:
+    - id
+    - name
+    - type
+    type: object
   entity.SensorData:
     properties:
       name:
@@ -117,6 +147,8 @@ definitions:
     - name
     - type
     - value
+    type: object
+  entity.SensorUpdateRequest:
     type: object
   service.DeviceParameters:
     properties:
@@ -384,6 +416,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      - DeviceAuth: []
       tags:
       - devices
     post:
@@ -610,6 +643,174 @@ paths:
       - DeviceAuth: []
       tags:
       - data
+  /api/devices/{deviceId}/sensors:
+    get:
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      tags:
+      - devices
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      - description: 传感器定义
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/entity.SensorCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      tags:
+      - devices
+  /api/devices/{deviceId}/sensors/{sensorId}:
+    get:
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      - description: 传感器标识符
+        in: path
+        name: sensorId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      tags:
+      - devices
+  /api/devices/{deviceId}/sensors/{sensorId}/delete:
+    post:
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      - description: 传感器标识符
+        in: path
+        name: sensorId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      tags:
+      - devices
+  /api/devices/{deviceId}/sensors/{sensorId}/update:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      - description: 传感器标识符
+        in: path
+        name: sensorId
+        required: true
+        type: string
+      - description: 更新字段（增量）
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/entity.SensorUpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      tags:
+      - devices
+  /api/devices/{deviceId}/sensors/apply:
+    post:
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      tags:
+      - devices
   /api/devices/{deviceId}/token:
     get:
       consumes:
