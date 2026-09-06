@@ -1,8 +1,13 @@
 package controller
 
 import (
+	"context"
+
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"iot-platform.local/internal/middleware"
+	entity "iot-platform.local/internal/model"
 	"iot-platform.local/internal/service"
 	"iot-platform.local/pkg/common"
 	"iot-platform.local/pkg/util"
@@ -12,17 +17,23 @@ import (
 type DeviceController struct {
 	deviceSvc       *service.DeviceService
 	deviceReportSvc *service.DeviceReportService
+	sensorSvc       *service.DeviceSensorService
+	actuatorSvc     *service.DeviceActuatorService
 }
 
 // NewDeviceController 创建设备控制器
-func NewDeviceController(deviceSvc *service.DeviceService, deviceReportSvc *service.DeviceReportService) *DeviceController {
+func NewDeviceController(deviceSvc *service.DeviceService, deviceReportSvc *service.DeviceReportService,
+	sensorSvc *service.DeviceSensorService, actuatorSvc *service.DeviceActuatorService) *DeviceController {
 	return &DeviceController{
 		deviceSvc:       deviceSvc,
 		deviceReportSvc: deviceReportSvc,
+		sensorSvc:       sensorSvc,
+		actuatorSvc:     actuatorSvc,
 	}
 }
 
-// Register @Summary      注册设备
+// Register 注册设备 (POST /api/devices)
+// @Summary      注册设备
 // @Tags         devices
 // @Accept       json
 // @Produce      json
@@ -31,7 +42,6 @@ func NewDeviceController(deviceSvc *service.DeviceService, deviceReportSvc *serv
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/devices [post]
-// Register 注册设备 (POST /api/devices)
 func (ctl *DeviceController) Register(c *gin.Context) {
 	var req service.DeviceParameters
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -53,7 +63,8 @@ func (ctl *DeviceController) Register(c *gin.Context) {
 	common.Success(c, resp)
 }
 
-// List @Summary      查询用户设备列表
+// List 查询用户设备列表 (GET /api/devices)
+// @Summary      查询用户设备列表
 // @Tags         devices
 // @Accept       json
 // @Produce      json
@@ -61,7 +72,6 @@ func (ctl *DeviceController) Register(c *gin.Context) {
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/devices [get]
-// List 查询用户设备列表 (GET /api/devices)
 func (ctl *DeviceController) List(c *gin.Context) {
 	ownerID := middleware.GetUserID(c)
 
@@ -74,16 +84,22 @@ func (ctl *DeviceController) List(c *gin.Context) {
 	common.Success(c, devices)
 }
 
-// GetDeviceData @Summary      获取设备详情
+// GetDeviceData 获取设备详情（物模型视图）。
+//
+// 响应 data.sensors 为传感器物模型数组：每项 = 定义字段 + latest（最近一次上报值，null = 从未上报）；
+// data.actuators 为执行器物模型数组；设备无定义时两者均为 []。服务端已完成定义 ↔ 最近遥测的 join
+// （上报 name 优先匹配定义 id，其次匹配定义 name），一次请求即可渲染完整设备页。
+// @Summary      获取设备详情（物模型视图：定义 + 最近遥测 + 执行器）
+// @Description  设备元信息 + 在线状态 + sensors（定义+latest）/ actuators（定义）物模型数组
 // @Tags         devices
 // @Accept       json
 // @Produce      json
-// @Param        deviceId  path  string  true  "设备ID"
+// @Param        deviceId  path  string  true  "设备ID（6位hex）"
 // @Success      200       {object}  common.ApiResponse
-// @Failure      400       {object}  common.ApiResponse
+// @Failure      403       {object}  common.ApiResponse
+// @Failure      404       {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/devices/{deviceId} [get]
-// GetDeviceData 获取设备详情 (GET /api/devices/{deviceId})
 func (ctl *DeviceController) GetDeviceData(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
@@ -100,7 +116,7 @@ func (ctl *DeviceController) GetDeviceData(c *gin.Context) {
 		return
 	}
 
-	// 获取设备状态
+	// 获取设备状态（含最近一次遥测快照，Redis 实时优先）
 	status, _ := ctl.deviceReportSvc.GetDeviceStatus(c.Request.Context(), deviceID)
 
 	// 合并返回
@@ -114,17 +130,49 @@ func (ctl *DeviceController) GetDeviceData(c *gin.Context) {
 	result["createdAt"] = device.CreatedAt
 	result["updatedAt"] = device.UpdatedAt
 
+	var recent []entity.SensorData
 	if status != nil {
-		result["sensors"] = status.Sensors
+		recent = status.Sensors
 		if status.Status != "" {
 			result["status"] = status.Status
 		}
 	}
 
+	sensors, actuators := ctl.buildThingModel(c.Request.Context(), deviceID, recent)
+	result["sensors"] = sensors
+	result["actuators"] = actuators
+
 	common.Success(c, result)
 }
 
-// UpdateDevice @Summary  更新设备信息（增量）
+// buildThingModel 组装设备物模型（传感器定义 + 最近遥测 join、执行器定义）。
+// 物模型读取失败仅降级为空列表并告警（详情主链路不因物模型异常而失败），
+// 定义列表本身走缓存（见 DeviceSensorService.List），详情页一次请求即可渲染。
+func (ctl *DeviceController) buildThingModel(ctx context.Context, deviceID string, recent []entity.SensorData) ([]entity.SensorWithLatest, []entity.Actuator) {
+	sensors := []entity.SensorWithLatest{}
+	actuators := []entity.Actuator{}
+
+	defs, err := ctl.sensorSvc.List(ctx, deviceID)
+	if err != nil {
+		zap.L().Warn("[Device] 读取传感器定义失败，详情物模型降级",
+			zap.String("deviceID", deviceID), zap.Error(err))
+	} else {
+		sensors = entity.AttachLatest(defs, recent)
+	}
+
+	actuatorDefs, err := ctl.actuatorSvc.List(ctx, deviceID)
+	if err != nil {
+		zap.L().Warn("[Device] 读取执行器定义失败，详情物模型降级",
+			zap.String("deviceID", deviceID), zap.Error(err))
+	} else {
+		actuators = actuatorDefs
+	}
+
+	return sensors, actuators
+}
+
+// UpdateDevice 更新设备信息（增量） (POST /api/devices/{deviceId}/update)
+// @Summary      更新设备信息（增量）
 // @Description  仅设备所有者或设备自身可更新；增量更新，仅请求体中出现的字段会被更新，未传字段保持原值
 // @Tags         devices
 // @Accept       json
@@ -167,7 +215,8 @@ func (ctl *DeviceController) UpdateDevice(c *gin.Context) {
 	common.Success(c, resp)
 }
 
-// GetDeviceToken @Summary      获取设备Token
+// GetDeviceToken 获取设备Token (GET /api/devices/{deviceId}/token 或 /api/devices/{deviceId}/login)
+// @Summary      获取设备Token
 // @Description  使用设备6位hex ID认证（路径参数），无需额外Token
 // @Tags         devices
 // @Accept       json
@@ -197,7 +246,8 @@ func (ctl *DeviceController) GetDeviceToken(c *gin.Context) {
 	})
 }
 
-// Delete @Summary      删除设备
+// Delete 删除设备 (POST /api/devices/{deviceId}/delete)
+// @Summary      删除设备
 // @Tags         devices
 // @Accept       json
 // @Produce      json
@@ -206,7 +256,6 @@ func (ctl *DeviceController) GetDeviceToken(c *gin.Context) {
 // @Failure      400       {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/devices/{deviceId}/delete [post]
-// Delete 删除设备 (POST /api/devices/{deviceId}/delete)
 func (ctl *DeviceController) Delete(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)

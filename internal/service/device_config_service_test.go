@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"iot-platform.local/internal/ent"
 	entity "iot-platform.local/internal/model"
@@ -19,8 +21,8 @@ func buildConfigSvc(t *testing.T) (*DeviceConfigService, *ent.Client, *repositor
 	cmdRepo := repository.NewDownlinkCmdRepo(client)
 	_, rdb := newTestRedis(t)
 
-	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil)
-	return NewDeviceConfigService(configRepo, downlinkSvc), client, deviceRepo, configRepo
+	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
+	return NewDeviceConfigService(configRepo, downlinkSvc, nil), client, deviceRepo, configRepo
 }
 
 func TestDeviceConfigService_SaveAndGet(t *testing.T) {
@@ -63,8 +65,8 @@ func TestDeviceConfigService_SaveEnqueuesCommand(t *testing.T) {
 	cmdRepo := repository.NewDownlinkCmdRepo(client)
 	mr, rdb := newTestRedis(t)
 
-	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil)
-	svc := NewDeviceConfigService(configRepo, downlinkSvc)
+	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
+	svc := NewDeviceConfigService(configRepo, downlinkSvc, nil)
 
 	owner := newOwner(t, client)
 	seedDevice(t, deviceRepo, "dev1", owner, "ONLINE")
@@ -115,4 +117,75 @@ func TestDeviceConfigService_DefaultConfigRoundtrip(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, got.Payload, `"camera"`)
 	assert.Contains(t, got.Payload, `"ota"`)
+}
+
+// fakeConfigPublisher 记录 MQTT 发布调用的测试替身
+type fakeConfigPublisher struct {
+	configCalls  []entity.ConfigEnvelope
+	commandCalls [][]byte
+}
+
+func (f *fakeConfigPublisher) PublishConfig(deviceID string, env entity.ConfigEnvelope) error {
+	f.configCalls = append(f.configCalls, env)
+	return nil
+}
+
+func (f *fakeConfigPublisher) PublishCommand(deviceID string, payload []byte) error {
+	f.commandCalls = append(f.commandCalls, append([]byte(nil), payload...))
+	return nil
+}
+
+// errConfigPublisher 模拟 Broker 不可达的发布器
+type errConfigPublisher struct{}
+
+func (errConfigPublisher) PublishConfig(_ string, _ entity.ConfigEnvelope) error {
+	return fmt.Errorf("MQTT 未连接")
+}
+
+func (errConfigPublisher) PublishCommand(_ string, _ []byte) error {
+	return fmt.Errorf("MQTT 未连接")
+}
+
+// buildConfigSvcWithPublisher 构造注入发布器的配置服务（发布器与下行服务共享，镜像生产装配）
+func buildConfigSvcWithPublisher(t *testing.T, pub MqttPublisher) (*DeviceConfigService, *ent.Client, *repository.DeviceRepo) {
+	client := newTestEnt(t)
+	deviceRepo := repository.NewDeviceRepo(client)
+	configRepo := repository.NewDeviceConfigRepo(client)
+	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	_, rdb := newTestRedis(t)
+
+	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, pub)
+	return NewDeviceConfigService(configRepo, downlinkSvc, pub), client, deviceRepo
+}
+
+func TestDeviceConfigService_SavePublishesMQTTConfig(t *testing.T) {
+	// Save 后应把最新快照（version/config）发布给 MQTT 发布器
+	pub := &fakeConfigPublisher{}
+	svc, client, deviceRepo := buildConfigSvcWithPublisher(t, pub)
+	owner := newOwner(t, client)
+	seedDevice(t, deviceRepo, "dev1", owner, "ONLINE")
+
+	_, err := svc.Save(context.Background(), "dev1", map[string]any{"sensor": map[string]any{"reportInterval": 30}})
+	assert.NoError(t, err)
+	require.Len(t, pub.configCalls, 1)
+	assert.Equal(t, uint(1), pub.configCalls[0].Version)
+	assert.Contains(t, pub.configCalls[0].Config, "sensor")
+
+	// 再次保存 version 递增，发布器收到新版本
+	_, err = svc.Save(context.Background(), "dev1", map[string]any{"sensor": map[string]any{"reportInterval": 60}})
+	assert.NoError(t, err)
+	require.Len(t, pub.configCalls, 2)
+	assert.Equal(t, uint(2), pub.configCalls[1].Version)
+}
+
+func TestDeviceConfigService_SaveToleratesPublisherFailure(t *testing.T) {
+	// Broker 不可达时发布失败只告警，配置保存与命令下发流程不受影响
+	svc, client, deviceRepo := buildConfigSvcWithPublisher(t, errConfigPublisher{})
+	owner := newOwner(t, client)
+	seedDevice(t, deviceRepo, "dev1", owner, "ONLINE")
+
+	cfg, err := svc.Save(context.Background(), "dev1", map[string]any{"camera": map[string]any{"protocol": "smtp"}})
+	assert.NoError(t, err)
+	assert.Equal(t, uint(1), cfg.Version)
+	assert.Equal(t, "pending", cfg.Status)
 }

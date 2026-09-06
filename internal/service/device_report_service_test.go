@@ -48,7 +48,7 @@ func newReportCtx(t *testing.T) (*DeviceReportService, *repository.DeviceRepo, *
 	_, rcache := newTestRedisCache(t)
 	influx := NewInfluxDBService(InfluxDBConfig{Database: "iot"})
 	influx.client = nil // 本组测试不连真实 InfluxDB，WriteSensors 走"未连接"错误分支（异步无害）
-	deviceSvc := NewDeviceService(repo, rcache)
+	deviceSvc := NewDeviceService(repo, rcache, nil, nil, nil)
 	svc := NewDeviceReportService(repo, influx, rcache, deviceSvc)
 	return svc, repo, client
 }
@@ -120,7 +120,7 @@ func TestReportStatusFast_FastPathFallback(t *testing.T) {
 	repo2 := repository.NewDeviceRepo(client2)
 	_, rcache2 := newTestRedisCache(t)
 	influx2 := &InfluxDBService{database: "iot"} // client nil
-	svc2 := NewDeviceReportService(repo2, influx2, rcache2, NewDeviceService(repo2, rcache2))
+	svc2 := NewDeviceReportService(repo2, influx2, rcache2, NewDeviceService(repo2, rcache2, nil, nil, nil))
 	seedOnline2(t, client2, repo2)
 	stopPGDebounce(svc2)
 

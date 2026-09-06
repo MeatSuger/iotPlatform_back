@@ -65,8 +65,8 @@ type SensorApplyResponse struct {
 	Count    int    `json:"count"`
 }
 
-// sensorIDPattern 传感器标识符：小写字母开头，仅含小写字母/数字/下划线
-var sensorIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,49}$`)
+// sensorIDPattern 传感器标识符：字母开头，仅含字母/数字/下划线
+var sensorIDPattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,49}$`)
 
 // 允许的数据类型（dataType 字段取值）
 var sensorDataTypes = map[string]bool{
@@ -80,7 +80,7 @@ var sensorDataTypes = map[string]bool{
 // ValidateSensorID 校验传感器标识符格式
 func ValidateSensorID(id string) error {
 	if !sensorIDPattern.MatchString(id) {
-		return fmt.Errorf("传感器标识符格式无效（需小写字母开头，仅含小写字母/数字/下划线，≤50字符）: %s", id)
+		return fmt.Errorf("传感器标识符格式无效（需字母开头，仅含字母/数字/下划线，≤50字符）: %s", id)
 	}
 	return nil
 }
@@ -179,7 +179,8 @@ func (r SensorUpdateRequest) Validate() error {
 	return nil
 }
 
-// validateJSONObject 校验 RawMessage 为合法 JSON 对象（{} 合法，用于显式清空）
+// validateJSONObject 校验 RawMessage 为合法 JSON 对象（{} 合法，用于显式清空；
+// null 视为非法——统一语义为「不传字段不更新，传 {} 清空」）
 func validateJSONObject(raw json.RawMessage) error {
 	if len(raw) == 0 {
 		return fmt.Errorf("字段缺失")
@@ -187,6 +188,9 @@ func validateJSONObject(raw json.RawMessage) error {
 	var obj map[string]any
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return err
+	}
+	if obj == nil {
+		return fmt.Errorf("字段不能为 null（如需清空请传 {}）")
 	}
 	return nil
 }

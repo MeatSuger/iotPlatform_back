@@ -26,7 +26,11 @@ func NewDeviceConfigController(configSvc *service.DeviceConfigService, deviceSvc
 	}
 }
 
-// GetConfig @Summary      查询设备配置快照
+// GetConfig 查询设备配置快照 (GET /api/devices/{deviceId}/config)
+//
+// 双认证：设备属主（UserAuth）或设备本人（DeviceAuth 且 Token 与路径设备一致）。
+// 设备端主动拉取期望配置的兜底通道（配合下行命令通道使用）。
+// @Summary      查询设备配置快照
 // @Tags         devices
 // @Produce      json
 // @Param        deviceId  path  string  true  "设备ID"
@@ -35,10 +39,6 @@ func NewDeviceConfigController(configSvc *service.DeviceConfigService, deviceSvc
 // @Security     UserAuth
 // @Security     DeviceAuth
 // @Router       /api/devices/{deviceId}/config [get]
-// GetConfig 查询设备配置快照 (GET /api/devices/{deviceId}/config)
-//
-// 双认证：设备属主（UserAuth）或设备本人（DeviceAuth 且 Token 与路径设备一致）。
-// 设备端主动拉取期望配置的兜底通道（配合下行命令通道使用）。
 func (ctl *DeviceConfigController) GetConfig(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 
@@ -82,7 +82,8 @@ func (ctl *DeviceConfigController) GetConfig(c *gin.Context) {
 	})
 }
 
-// SaveConfig @Summary      设置设备配置并下发
+// SaveConfig 设置设备配置并下发 (POST /api/devices/{deviceId}/config，用户侧)
+// @Summary      设置设备配置并下发
 // @Tags         devices
 // @Accept       json
 // @Produce      json
@@ -92,7 +93,6 @@ func (ctl *DeviceConfigController) GetConfig(c *gin.Context) {
 // @Failure      400       {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/devices/{deviceId}/config [post]
-// SaveConfig 设置设备配置并下发 (POST /api/devices/{deviceId}/config，用户侧)
 func (ctl *DeviceConfigController) SaveConfig(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
@@ -120,7 +120,8 @@ func (ctl *DeviceConfigController) SaveConfig(c *gin.Context) {
 	})
 }
 
-// ReportConfig @Summary      设备配置回执
+// ReportConfig 设备上报实际生效配置 (POST /api/devices/{deviceId}/config/report，设备侧)
+// @Summary      设备配置回执
 // @Tags         devices
 // @Accept       json
 // @Produce      json
@@ -130,7 +131,6 @@ func (ctl *DeviceConfigController) SaveConfig(c *gin.Context) {
 // @Failure      400       {object}  common.ApiResponse
 // @Security     DeviceAuth
 // @Router       /api/devices/{deviceId}/config/report [post]
-// ReportConfig 设备上报实际生效配置 (POST /api/devices/{deviceId}/config/report，设备侧)
 func (ctl *DeviceConfigController) ReportConfig(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 

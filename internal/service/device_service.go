@@ -18,10 +18,15 @@ import (
 type DeviceService struct {
 	repo  *repository.DeviceRepo
 	cache *cache.RedisCache
+	// 子资源配置仓库：设备删除时显式级联清理（DB 层 FK ON DELETE CASCADE 兜底，
+	// 此处保证即使 FK 约束缺失也不会留下孤儿数据）。任意可为 nil（走 DB 级联）。
+	sensorRepo   *repository.DeviceSensorRepo
+	actuatorRepo *repository.DeviceActuatorRepo
+	configRepo   *repository.DeviceConfigRepo
 }
 
-func NewDeviceService(repo *repository.DeviceRepo, cache *cache.RedisCache) *DeviceService {
-	return &DeviceService{repo: repo, cache: cache}
+func NewDeviceService(repo *repository.DeviceRepo, cache *cache.RedisCache, sensorRepo *repository.DeviceSensorRepo, actuatorRepo *repository.DeviceActuatorRepo, configRepo *repository.DeviceConfigRepo) *DeviceService {
+	return &DeviceService{repo: repo, cache: cache, sensorRepo: sensorRepo, actuatorRepo: actuatorRepo, configRepo: configRepo}
 }
 
 // DeviceParameters 设备创建/更新请求体
@@ -213,6 +218,11 @@ func (s *DeviceService) Delete(ctx context.Context, deviceID string) error {
 	if err != nil {
 		return err
 	}
+
+	// 显式级联删除子资源（配置快照/传感器定义/执行器定义）。
+	// 先删子资源再删设备：任何一步失败仅告警，由 DB 层 FK CASCADE 兜底。
+	s.deleteCascades(ctx, deviceID)
+
 	if err := s.repo.Delete(ctx, device.ID); err != nil {
 		return err
 	}
@@ -229,6 +239,30 @@ func (s *DeviceService) Delete(ctx context.Context, deviceID string) error {
 	}
 
 	return nil
+}
+
+// deleteCascades 显式级联删除设备子资源配置（未注入的 repo 降级为依赖 DB FK）
+func (s *DeviceService) deleteCascades(ctx context.Context, deviceID string) {
+	type cascader struct {
+		name string
+		fn   func() error
+	}
+	cascades := make([]cascader, 0, 3)
+	if s.configRepo != nil {
+		cascades = append(cascades, cascader{"config", func() error { return s.configRepo.Delete(ctx, deviceID) }})
+	}
+	if s.sensorRepo != nil {
+		cascades = append(cascades, cascader{"sensor", func() error { return s.sensorRepo.DeleteByDeviceID(ctx, deviceID) }})
+	}
+	if s.actuatorRepo != nil {
+		cascades = append(cascades, cascader{"actuator", func() error { return s.actuatorRepo.DeleteByDeviceID(ctx, deviceID) }})
+	}
+	for _, c := range cascades {
+		if err := c.fn(); err != nil {
+			zap.L().Warn("[Device] 子资源级联删除失败（由 DB FK 兜底）",
+				zap.String("deviceID", deviceID), zap.String("resource", c.name), zap.Error(err))
+		}
+	}
 }
 
 func (s *DeviceService) GetDeviceToken(ctx context.Context, deviceID string, ownerID uint) (string, error) {

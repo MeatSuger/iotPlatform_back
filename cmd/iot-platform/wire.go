@@ -9,6 +9,7 @@ import (
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
 	"iot-platform.local/internal/ent"
+	"iot-platform.local/internal/mqtt"
 	"iot-platform.local/internal/repository"
 	"iot-platform.local/internal/router"
 	"iot-platform.local/internal/service"
@@ -36,6 +37,7 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 		repository.NewDownlinkCmdRepo,
 		repository.NewDeviceConfigRepo,
 		repository.NewDeviceSensorRepo,
+		repository.NewDeviceActuatorRepo,
 
 		// Service 层
 		service.NewUserService,
@@ -43,8 +45,10 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 		provideInfluxDBService,
 		service.NewDeviceReportService,
 		service.NewDownlinkService,
+		provideMqttPublisher,
 		service.NewDeviceConfigService,
 		service.NewDeviceSensorService,
+		service.NewDeviceActuatorService,
 
 		// WebSocket（网关架构下 WS 不直接发布 MQTT，由 MQTT 桥接网关负责转发）
 		websocket.NewHub,
@@ -75,6 +79,15 @@ func provideInfluxDBService() *service.InfluxDBService {
 	})
 }
 
+// provideMqttPublisher MQTT 下行发布器：网关未启用（Broker 不可达）时返回 nil，
+// 各服务将仅走 HTTP/WS/命令队列通道。wire 注入单实例供多个服务共享。
+func provideMqttPublisher() service.MqttPublisher {
+	if !config.Cfg.MqttGateway.Enabled {
+		return nil
+	}
+	return mqtt.NewPublisher()
+}
+
 func provideRouterServices(
 	userSvc *service.UserService,
 	deviceSvc *service.DeviceService,
@@ -83,14 +96,16 @@ func provideRouterServices(
 	downlinkSvc *service.DownlinkService,
 	configSvc *service.DeviceConfigService,
 	sensorSvc *service.DeviceSensorService,
+	actuatorSvc *service.DeviceActuatorService,
 ) *router.Services {
 	return &router.Services{
-		User:     userSvc,
-		Device:   deviceSvc,
-		Report:   reportSvc,
-		InfluxDB: influxSvc,
-		Downlink: downlinkSvc,
-		Config:   configSvc,
-		Sensors:  sensorSvc,
+		User:      userSvc,
+		Device:    deviceSvc,
+		Report:    reportSvc,
+		InfluxDB:  influxSvc,
+		Downlink:  downlinkSvc,
+		Config:    configSvc,
+		Sensors:   sensorSvc,
+		Actuators: actuatorSvc,
 	}
 }

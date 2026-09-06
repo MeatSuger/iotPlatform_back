@@ -1,5 +1,5 @@
 // @title           IoT Platform Go API
-// @version         1.0.0
+// @version         1.7.0
 // @description     IoT 物联网平台后端 API（Go 重构版）
 // @termsOfService  http://swagger.io/terms/
 
@@ -271,7 +271,7 @@ func main() {
 	var mqttGateway *controller.MqttGatewayController
 	if cfg.MqttGateway.Enabled {
 		logRepo := repository.NewMqttPublishLogRepo(entClient)
-		mqttGateway = controller.NewMqttGatewayController(logRepo, svcs.Report, components.Cache)
+		mqttGateway = controller.NewMqttGatewayController(logRepo, svcs.Report, svcs.Config, components.Cache)
 		zap.L().Info("[Main] MQTT 桥接网关已启用（设备入口: /api/ws/mqtt/broker，转发到 " + cfg.MQTT.BrokerURL + "）")
 	}
 

@@ -33,7 +33,8 @@ type HealthProbe struct {
 // probeTimeout 单次健康探测总超时，防止依赖无响应拖垮健康检查
 const probeTimeout = 2 * time.Second
 
-// healthCheck @Summary      健康检查
+// healthCheck 健康检查（供容器编排/负载均衡探测，依赖失联返回 503）
+// @Summary      健康检查
 // @Description  供容器编排/负载均衡探测，不走统一响应结构；
 // @Description  探测 PostgreSQL/Redis/InfluxDB，任一失联时返回 HTTP 503
 // @Tags         system
@@ -95,13 +96,14 @@ func healthCheck(probes *HealthProbe) gin.HandlerFunc {
 
 // Services 服务集合（用于依赖注入）
 type Services struct {
-	User     *service.UserService
-	Device   *service.DeviceService
-	Report   *service.DeviceReportService
-	InfluxDB *service.InfluxDBService
-	Downlink *service.DownlinkService
-	Config   *service.DeviceConfigService
-	Sensors  *service.DeviceSensorService
+	User      *service.UserService
+	Device    *service.DeviceService
+	Report    *service.DeviceReportService
+	InfluxDB  *service.InfluxDBService
+	Downlink  *service.DownlinkService
+	Config    *service.DeviceConfigService
+	Sensors   *service.DeviceSensorService
+	Actuators *service.DeviceActuatorService
 }
 
 // Setup 配置路由
@@ -142,11 +144,12 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 
 	// 控制器
 	userCtl := controller.NewUserController(svcs.User)
-	deviceCtl := controller.NewDeviceController(svcs.Device, svcs.Report)
+	deviceCtl := controller.NewDeviceController(svcs.Device, svcs.Report, svcs.Sensors, svcs.Actuators)
 	dataCtl := controller.NewDataController(svcs.Report, svcs.InfluxDB)
 	downlinkCtl := controller.NewDownlinkController(svcs.Downlink, svcs.Device)
 	configCtl := controller.NewDeviceConfigController(svcs.Config, svcs.Device)
 	sensorCtl := controller.NewDeviceSensorController(svcs.Sensors, svcs.Device)
+	actuatorCtl := controller.NewDeviceActuatorController(svcs.Actuators, svcs.Device)
 
 	// API 路由组（TokenInterceptor 在下方对整组应用，自动从 Header/Cookie/Query 提取 token 到 context）
 	api := r.Group("/api")
@@ -222,12 +225,23 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 		api.POST("/devices/:deviceId/config/report", deviceAuth, configCtl.ReportConfig)
 
 		// ===== Sensor 子资源（传感器定义 / 物模型） =====
+		// 注意：POST .../sensors/apply 是静态段，gin 静态匹配优先于 :sensorId 参数段；
+		// 而 GET .../sensors/apply 会命中 GetSensor（sensorId=apply）——本组路由不提供 GET apply，
+		// 如未来新增，请改用独立子路径（如 .../sensors/apply/all），避免语义混淆。
 		api.GET("/devices/:deviceId/sensors", userAuth, sensorCtl.ListSensors)
 		api.GET("/devices/:deviceId/sensors/:sensorId", userAuth, sensorCtl.GetSensor)
 		api.POST("/devices/:deviceId/sensors", userAuth, sensorCtl.CreateSensor)
 		api.POST("/devices/:deviceId/sensors/apply", userAuth, sensorCtl.ApplySensors)
 		api.POST("/devices/:deviceId/sensors/:sensorId/update", userAuth, sensorCtl.UpdateSensor)
 		api.POST("/devices/:deviceId/sensors/:sensorId/delete", userAuth, sensorCtl.DeleteSensor)
+
+		// ===== Actuator 子资源（执行器定义 / 物模型） =====
+		api.GET("/devices/:deviceId/actuators", userAuth, actuatorCtl.ListActuators)
+		api.GET("/devices/:deviceId/actuators/:actuatorId", userAuth, actuatorCtl.GetActuator)
+		api.POST("/devices/:deviceId/actuators", userAuth, actuatorCtl.CreateActuator)
+		api.POST("/devices/:deviceId/actuators/apply", userAuth, actuatorCtl.ApplyActuators)
+		api.POST("/devices/:deviceId/actuators/:actuatorId/update", userAuth, actuatorCtl.UpdateActuator)
+		api.POST("/devices/:deviceId/actuators/:actuatorId/delete", userAuth, actuatorCtl.DeleteActuator)
 	}
 
 	return r

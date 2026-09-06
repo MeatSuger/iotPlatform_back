@@ -51,9 +51,9 @@ func newConfigTestEnv(t *testing.T) *configTestEnv {
 	cmdRepo := repository.NewDownlinkCmdRepo(client)
 
 	rcache := cache.NewRedisCache(rdb)
-	deviceSvc := service.NewDeviceService(deviceRepo, rcache)
-	downlinkSvc := service.NewDownlinkService(cmdRepo, deviceRepo, rdb, nil)
-	configSvc := service.NewDeviceConfigService(configRepo, downlinkSvc)
+	deviceSvc := service.NewDeviceService(deviceRepo, rcache, nil, nil, configRepo)
+	downlinkSvc := service.NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
+	configSvc := service.NewDeviceConfigService(configRepo, downlinkSvc, nil)
 
 	return &configTestEnv{
 		ctl:    NewDeviceConfigController(configSvc, deviceSvc),

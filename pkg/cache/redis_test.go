@@ -15,10 +15,13 @@ func TestRedisCacheConstants(t *testing.T) {
 	assert.Equal(t, "cache:device:", PrefixDevice)
 	assert.Equal(t, "cache:sensor_recent:", PrefixSensorRecent)
 	assert.Equal(t, "cache:mqtt_msg:", PrefixMQTTMessage)
+	assert.Equal(t, "cache:def_sensor:", PrefixSensorDefs)
+	assert.Equal(t, "cache:def_actuator:", PrefixActuatorDefs)
 }
 
 func TestTTLConstants(t *testing.T) {
 	assert.Greater(t, TTLDevice, TTLSensorRecent)
+	assert.Greater(t, TTLDefs, TTLDefsLocal)
 }
 
 func TestNewRedisCache_NilClient(t *testing.T) {
@@ -430,4 +433,42 @@ func TestRedisCache_PingAndClose(t *testing.T) {
 	mr, c, _ := newCacheWithMini(t)
 	assert.NoError(t, c.Ping(context.Background()))
 	_ = mr
+}
+
+func TestRedisCache_DefsCacheRoundtrip(t *testing.T) {
+	_, c, _ := newCacheWithMini(t)
+	ctx := context.Background()
+	deviceID := "defs-dev-1"
+
+	// 物模型定义列表（空设备 → 空数组也缓存，防穿透）
+	loadCount := 0
+	loader := func(ctx context.Context) (any, error) {
+		loadCount++
+		return []map[string]any{}, nil
+	}
+	var out []map[string]any
+	assert.NoError(t, c.GetCachedSensorDefsWithLoader(ctx, deviceID, &out, loader))
+	assert.Len(t, out, 0)
+	assert.Equal(t, 1, loadCount)
+
+	// 命中缓存 → loader 不再执行
+	assert.NoError(t, c.GetCachedSensorDefsWithLoader(ctx, deviceID, &out, loader))
+	assert.Equal(t, 1, loadCount)
+
+	// 定义新增（DB 变更）→ 显式失效后再次读取走 loader
+	assert.NoError(t, c.EvictSensorDefsCache(ctx, deviceID))
+	assert.NoError(t, c.GetCachedSensorDefsWithLoader(ctx, deviceID, &out, loader))
+	assert.Equal(t, 2, loadCount)
+
+	// 执行器侧镜像
+	actLoader := func(ctx context.Context) (any, error) {
+		return []string{"servo1"}, nil
+	}
+	var acts []string
+	assert.NoError(t, c.GetCachedActuatorDefsWithLoader(ctx, deviceID, &acts, actLoader))
+	assert.Equal(t, []string{"servo1"}, acts)
+	assert.NoError(t, c.EvictActuatorDefsCache(ctx, deviceID))
+	var acts2 []string
+	assert.NoError(t, c.GetCachedActuatorDefsWithLoader(ctx, deviceID, &acts2, actLoader))
+	assert.Equal(t, []string{"servo1"}, acts2)
 }

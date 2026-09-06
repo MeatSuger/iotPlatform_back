@@ -46,6 +46,9 @@ const (
 	PrefixDeviceList   = "cache:device_list:"   // 用户设备列表
 	PrefixMQTTMessage  = "cache:mqtt_msg:"      // MQTT 消息历史
 	PrefixNegCache     = "cache:neg:"           // 负缓存（防穿透）
+
+	PrefixSensorDefs   = "cache:def_sensor:"   // 传感器定义列表（物模型）
+	PrefixActuatorDefs = "cache:def_actuator:" // 执行器定义列表（物模型）
 )
 
 // ============================================================
@@ -63,6 +66,9 @@ const (
 	TTLDeviceList   = 2 * time.Minute  // 用户设备列表
 	TTLNegCache     = 30 * time.Second // 负缓存（防穿透，短TTL）
 	TTLMQTTMessage  = 24 * time.Hour   // MQTT 消息历史
+
+	TTLDefs      = 30 * time.Minute // 物模型定义列表（L2，低频变更；写路径显式失效，TTL 仅兜底）
+	TTLDefsLocal = 10 * time.Second // 物模型定义列表（L1）
 )
 
 // ============================================================
@@ -377,6 +383,44 @@ func (c *RedisCache) GetCachedSensorRecent(ctx context.Context, deviceID string,
 // EvictSensorRecentCache 清除传感器缓存
 func (c *RedisCache) EvictSensorRecentCache(ctx context.Context, deviceID string) error {
 	key := PrefixSensorRecent + deviceID + ":latest"
+	if err := c.Delete(ctx, key); err != nil {
+		return err
+	}
+	return c.PublishInvalidate(ctx, key)
+}
+
+// ============================================================
+// 物模型定义列表缓存（Cache-Aside + Write-Invalidate）
+// 物模型为低频写（CRUD）、高频读（详情页/物模型页），整设备列表作为
+// 不可变对象缓存；Create/Update/Delete 写路径显式 Evict，TTL 仅兜底自愈。
+// ============================================================
+
+// GetCachedSensorDefsWithLoader 读取设备传感器定义列表（带 DB loader，L1/L2 两层）
+func (c *RedisCache) GetCachedSensorDefsWithLoader(ctx context.Context, deviceID string, dest any, loader func(context.Context) (any, error)) error {
+	key := PrefixSensorDefs + deviceID
+	return c.GetOrLoad(ctx, key, dest, TTLDefs, TTLDefsLocal, loader)
+}
+
+// EvictSensorDefsCache 失效设备传感器定义列表缓存（Write-Invalidate，跨实例通知）
+func (c *RedisCache) EvictSensorDefsCache(ctx context.Context, deviceID string) error {
+	key := PrefixSensorDefs + deviceID
+	c.local.Delete(key)
+	if err := c.Delete(ctx, key); err != nil {
+		return err
+	}
+	return c.PublishInvalidate(ctx, key)
+}
+
+// GetCachedActuatorDefsWithLoader 读取设备执行器定义列表（带 DB loader，L1/L2 两层）
+func (c *RedisCache) GetCachedActuatorDefsWithLoader(ctx context.Context, deviceID string, dest any, loader func(context.Context) (any, error)) error {
+	key := PrefixActuatorDefs + deviceID
+	return c.GetOrLoad(ctx, key, dest, TTLDefs, TTLDefsLocal, loader)
+}
+
+// EvictActuatorDefsCache 失效设备执行器定义列表缓存（Write-Invalidate，跨实例通知）
+func (c *RedisCache) EvictActuatorDefsCache(ctx context.Context, deviceID string) error {
+	key := PrefixActuatorDefs + deviceID
+	c.local.Delete(key)
 	if err := c.Delete(ctx, key); err != nil {
 		return err
 	}

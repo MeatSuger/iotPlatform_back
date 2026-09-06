@@ -25,7 +25,8 @@ func NewDownlinkController(downlinkSvc *service.DownlinkService, deviceSvc *serv
 	}
 }
 
-// PostCmd @Summary      向设备下发命令
+// PostCmd 用户向设备下发命令 POST /api/devices/{deviceId}/commands
+// @Summary      向设备下发命令
 // @Tags         device
 // @Accept       json
 // @Produce      json
@@ -35,7 +36,6 @@ func NewDownlinkController(downlinkSvc *service.DownlinkService, deviceSvc *serv
 // @Failure      400       {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/devices/{deviceId}/commands [post]
-// PostCmd 用户向设备下发命令 POST /api/devices/{deviceId}/commands
 func (ctl *DownlinkController) PostCmd(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
@@ -70,7 +70,8 @@ func (ctl *DownlinkController) PostCmd(c *gin.Context) {
 	})
 }
 
-// GetCmd @Summary      设备拉取待消费命令
+// GetCmd 设备拉取待消费命令 GET /api/devices/{deviceId}/commands（设备认证）
+// @Summary      设备拉取待消费命令
 // @Tags         device
 // @Accept       json
 // @Produce      json
@@ -79,7 +80,6 @@ func (ctl *DownlinkController) PostCmd(c *gin.Context) {
 // @Failure      400       {object}  common.ApiResponse
 // @Security     DeviceAuth
 // @Router       /api/devices/{deviceId}/commands [get]
-// GetCmd 设备拉取待消费命令 GET /api/devices/{deviceId}/commands（设备认证）
 func (ctl *DownlinkController) GetCmd(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 

@@ -9,6 +9,7 @@ import (
 
 	entity "iot-platform.local/internal/model"
 	"iot-platform.local/internal/repository"
+	"iot-platform.local/pkg/cache"
 
 	"iot-platform.local/internal/ent"
 )
@@ -22,10 +23,11 @@ func buildSensorSvc(t *testing.T) (*DeviceSensorService, *DeviceConfigService, *
 	sensorRepo := repository.NewDeviceSensorRepo(client)
 	cmdRepo := repository.NewDownlinkCmdRepo(client)
 	_, rdb := newTestRedis(t)
+	rcache := cache.NewRedisCache(rdb)
 
-	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil)
-	configSvc := NewDeviceConfigService(configRepo, downlinkSvc)
-	return NewDeviceSensorService(sensorRepo, configSvc), configSvc, deviceRepo, client
+	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
+	configSvc := NewDeviceConfigService(configRepo, downlinkSvc, nil)
+	return NewDeviceSensorService(sensorRepo, configSvc, rcache), configSvc, deviceRepo, client
 }
 
 // seedSensorDevice 创建属主用户 + 测试设备（满足 owner 外键约束）
@@ -97,8 +99,8 @@ func TestDeviceSensorService_CreateValidation(t *testing.T) {
 	seedSensorDevice(t, client, deviceRepo)
 
 	cases := []entity.SensorCreateRequest{
-		{ID: "Upper_Case", Name: "x", Type: "t"},                 // 非法标识符：大写
 		{ID: "9lead", Name: "x", Type: "t"},                      // 非法标识符：数字开头
+		{ID: "bad-id", Name: "x", Type: "t"},                     // 非法标识符：连字符
 		{ID: "ok_id", Name: "n", Type: "t", DataType: "unknown"}, // 非法数据类型
 		{ID: "ok_id", Name: "n", Type: "t", ReportInterval: -1},  // 非法上报周期
 	}
@@ -106,6 +108,10 @@ func TestDeviceSensorService_CreateValidation(t *testing.T) {
 		_, err := svc.Create(context.Background(), "dev1", req)
 		assert.Error(t, err, "请求 %+v 应校验失败", req)
 	}
+
+	// 大写标识符合法（规则已放开大小写，与设备上报 name 对齐）
+	_, err := svc.Create(context.Background(), "dev1", entity.SensorCreateRequest{ID: "Pi_AHT20", Name: "温湿度", Type: "temperature"})
+	assert.NoError(t, err)
 }
 
 func TestDeviceSensorService_List(t *testing.T) {
@@ -250,4 +256,78 @@ func TestDeviceSensorService_ApplyEmpty(t *testing.T) {
 	got, err := configSvc.Get(context.Background(), "dev1")
 	assert.NoError(t, err)
 	assert.Contains(t, got.Payload, `"sensors":[]`)
+}
+
+// TestDeviceSensorService_ListCacheConsistency 验证定义列表缓存的写路径失效：
+// Create/Update/Delete 后 List 必须立即可见新状态（缓存陈旧会导致断言失败）。
+func TestDeviceSensorService_ListCacheConsistency(t *testing.T) {
+	svc, _, deviceRepo, client := buildSensorSvc(t)
+	seedSensorDevice(t, client, deviceRepo)
+	ctx := context.Background()
+
+	// 预置两条定义并预热缓存（List 首次回源后缓存整列表）
+	_, err := svc.Create(ctx, "dev1", validSensorReq("temperature"))
+	assert.NoError(t, err)
+	_, err = svc.Create(ctx, "dev1", entity.SensorCreateRequest{
+		ID: "humidity", Name: "湿度", Type: "humidity", DataType: "float", Unit: "%RH",
+	})
+	assert.NoError(t, err)
+	list, err := svc.List(ctx, "dev1")
+	assert.NoError(t, err)
+	assert.Len(t, list, 2)
+
+	// Create 后缓存失效 → List 立即可见
+	_, err = svc.Create(ctx, "dev1", entity.SensorCreateRequest{
+		ID: "light", Name: "光照", Type: "light",
+	})
+	assert.NoError(t, err)
+	list, err = svc.List(ctx, "dev1")
+	assert.NoError(t, err)
+	ids := make([]string, len(list))
+	for i, s := range list {
+		ids[i] = s.ID
+	}
+	// 列表按创建顺序（DB 主键升序）稳定输出
+	assert.Equal(t, []string{"temperature", "humidity", "light"}, ids)
+
+	// Update 后缓存失效 → List 反映新名称
+	newName := "室温"
+	_, err = svc.Update(ctx, "dev1", "temperature", entity.SensorUpdateRequest{
+		Name: &newName,
+	})
+	assert.NoError(t, err)
+	list, err = svc.List(ctx, "dev1")
+	assert.NoError(t, err)
+	for _, s := range list {
+		if s.ID == "temperature" {
+			assert.Equal(t, "室温", s.Name)
+		}
+	}
+
+	// Delete 后缓存失效 → 列表收缩
+	assert.NoError(t, svc.Delete(ctx, "dev1", "humidity"))
+	list, err = svc.List(ctx, "dev1")
+	assert.NoError(t, err)
+	assert.Len(t, list, 2)
+
+	// 连续 List 稳定（命中缓存路径）
+	list, err = svc.List(ctx, "dev1")
+	assert.NoError(t, err)
+	assert.Len(t, list, 2)
+}
+
+// TestDeviceSensorService_ListEmptyDevice 设备无定义时 List 返回空切片且可重复调用
+func TestDeviceSensorService_ListEmptyDevice(t *testing.T) {
+	svc, _, deviceRepo, client := buildSensorSvc(t)
+	seedSensorDevice(t, client, deviceRepo)
+
+	list, err := svc.List(context.Background(), "dev1")
+	assert.NoError(t, err)
+	assert.NotNil(t, list)
+	assert.Len(t, list, 0)
+
+	// 空列表已被缓存，再次调用仍返回空（不报错）
+	list, err = svc.List(context.Background(), "dev1")
+	assert.NoError(t, err)
+	assert.Len(t, list, 0)
 }

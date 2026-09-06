@@ -35,10 +35,11 @@ type DownlinkService struct {
 	deviceRepo *repository.DeviceRepo
 	rdb        *redis.Client
 	wsHub      *websocket.Hub
+	mqttPub    MqttPublisher
 }
 
-func NewDownlinkService(cmdRepo *repository.DownlinkCmdRepo, deviceRepo *repository.DeviceRepo, rdb *redis.Client, wsHub *websocket.Hub) *DownlinkService {
-	return &DownlinkService{cmdRepo: cmdRepo, deviceRepo: deviceRepo, rdb: rdb, wsHub: wsHub}
+func NewDownlinkService(cmdRepo *repository.DownlinkCmdRepo, deviceRepo *repository.DeviceRepo, rdb *redis.Client, wsHub *websocket.Hub, mqttPub MqttPublisher) *DownlinkService {
+	return &DownlinkService{cmdRepo: cmdRepo, deviceRepo: deviceRepo, rdb: rdb, wsHub: wsHub, mqttPub: mqttPub}
 }
 
 // DownlinkCmdRequest 下发命令请求
@@ -107,6 +108,15 @@ func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req D
 			"createdAt": cmd.CreatedAt.Format("2006-01-02T15:04:05.000-07:00"),
 		})
 		s.wsHub.SendToDevice(deviceID, msg)
+	}
+
+	// MQTT 实时下行（QoS1 → iot/{deviceId}/cmd，MQTT 设备订阅即收）。
+	// type=config 不在此发布：配置快照由 DeviceConfigService 经 retained 主题专管，
+	// 避免双通道重复投递；离线期间的命令后续经 HTTP GET /commands 兜底拉取。
+	if s.mqttPub != nil && cmd.Type != "config" {
+		if err := s.mqttPub.PublishCommand(deviceID, cmdJSON); err != nil {
+			zap.S().Warnf("[Downlink] MQTT 命令发布失败 [device=%s cmd=%d]: %v", deviceID, cmd.ID, err)
+		}
 	}
 
 	return cmd, nil

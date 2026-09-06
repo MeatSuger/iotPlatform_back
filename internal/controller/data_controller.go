@@ -25,7 +25,8 @@ func NewDataController(deviceReportSvc *service.DeviceReportService, influxSvc *
 	}
 }
 
-// ReportData @Summary      上报传感器数据
+// ReportData 上报传感器数据 (POST /devices/:deviceId/sensorData)
+// @Summary      上报传感器数据
 // @Tags         data
 // @Accept       json
 // @Produce      json
@@ -35,7 +36,6 @@ func NewDataController(deviceReportSvc *service.DeviceReportService, influxSvc *
 // @Failure      400       {object}  common.ApiResponse
 // @Security     DeviceAuth
 // @Router       /api/devices/{deviceId}/sensorData [post]
-// ReportData 上报传感器数据 (POST /devices/:deviceId/sensorData)
 func (ctl *DataController) ReportData(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 
@@ -59,7 +59,8 @@ func (ctl *DataController) ReportData(c *gin.Context) {
 	common.SuccessWithMsg(c, "状态上报已接收", common.DateTimeNow().Format(common.DateTimeFormatWithZone))
 }
 
-// Heartbeat @Summary      设备心跳
+// Heartbeat 设备心跳 (POST /devices/:deviceId/heartbeat 或 /devices/:deviceId/ping)
+// @Summary      设备心跳
 // @Tags         data
 // @Accept       json
 // @Produce      json
@@ -69,7 +70,6 @@ func (ctl *DataController) ReportData(c *gin.Context) {
 // @Security     DeviceAuth
 // @Router       /api/devices/{deviceId}/heartbeat [post]
 // @Router       /api/devices/{deviceId}/ping [post]
-// Heartbeat 设备心跳 (POST /devices/:deviceId/heartbeat 或 /devices/:deviceId/ping)
 func (ctl *DataController) Heartbeat(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 
@@ -85,7 +85,8 @@ func (ctl *DataController) Heartbeat(c *gin.Context) {
 	})
 }
 
-// QueryData @Summary      查询设备传感器数据
+// QueryData 查询设备传感器数据 (GET /devices/:deviceId/sensorData)
+// @Summary      查询设备传感器数据
 // @Tags         data
 // @Accept       json
 // @Produce      json
@@ -96,7 +97,6 @@ func (ctl *DataController) Heartbeat(c *gin.Context) {
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
 // @Router       /api/devices/{deviceId}/sensorData [get]
-// QueryData 查询设备传感器数据 (GET /devices/:deviceId/sensorData)
 func (ctl *DataController) QueryData(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	limitStr := c.DefaultQuery("limit", "50")

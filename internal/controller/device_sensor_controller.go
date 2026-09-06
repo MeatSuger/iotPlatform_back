@@ -23,7 +23,8 @@ func NewDeviceSensorController(sensorSvc *service.DeviceSensorService, deviceSvc
 	return &DeviceSensorController{sensorSvc: sensorSvc, deviceSvc: deviceSvc}
 }
 
-// ListSensors @Summary      查询设备传感器定义列表
+// ListSensors 传感器定义列表 (GET /api/devices/{deviceId}/sensors，用户侧)
+// @Summary      查询设备传感器定义列表
 // @Tags         devices
 // @Produce      json
 // @Param        deviceId  path  string  true  "设备ID"
@@ -31,7 +32,6 @@ func NewDeviceSensorController(sensorSvc *service.DeviceSensorService, deviceSvc
 // @Failure      403       {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/devices/{deviceId}/sensors [get]
-// ListSensors 传感器定义列表 (GET /api/devices/{deviceId}/sensors，用户侧)
 func (ctl *DeviceSensorController) ListSensors(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
@@ -48,7 +48,8 @@ func (ctl *DeviceSensorController) ListSensors(c *gin.Context) {
 	common.Success(c, sensors)
 }
 
-// GetSensor @Summary      查询单个传感器定义
+// GetSensor 单个传感器定义 (GET /api/devices/{deviceId}/sensors/{sensorId}，用户侧)
+// @Summary      查询单个传感器定义
 // @Tags         devices
 // @Produce      json
 // @Param        deviceId  path  string  true  "设备ID"
@@ -57,7 +58,6 @@ func (ctl *DeviceSensorController) ListSensors(c *gin.Context) {
 // @Failure      404       {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/devices/{deviceId}/sensors/{sensorId} [get]
-// GetSensor 单个传感器定义 (GET /api/devices/{deviceId}/sensors/{sensorId}，用户侧)
 func (ctl *DeviceSensorController) GetSensor(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	sensorID := c.Param("sensorId")
@@ -79,7 +79,8 @@ func (ctl *DeviceSensorController) GetSensor(c *gin.Context) {
 	common.Success(c, sensor)
 }
 
-// CreateSensor @Summary      创建传感器定义
+// CreateSensor 创建传感器定义 (POST /api/devices/{deviceId}/sensors，用户侧)
+// @Summary      创建传感器定义
 // @Tags         devices
 // @Accept       json
 // @Produce      json
@@ -89,7 +90,6 @@ func (ctl *DeviceSensorController) GetSensor(c *gin.Context) {
 // @Failure      400       {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/devices/{deviceId}/sensors [post]
-// CreateSensor 创建传感器定义 (POST /api/devices/{deviceId}/sensors，用户侧)
 func (ctl *DeviceSensorController) CreateSensor(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
@@ -112,7 +112,8 @@ func (ctl *DeviceSensorController) CreateSensor(c *gin.Context) {
 	common.SuccessWithMsg(c, "传感器已创建", sensor)
 }
 
-// UpdateSensor @Summary      增量更新传感器定义
+// UpdateSensor 增量更新传感器定义 (POST /api/devices/{deviceId}/sensors/{sensorId}/update，用户侧)
+// @Summary      增量更新传感器定义
 // @Tags         devices
 // @Accept       json
 // @Produce      json
@@ -123,7 +124,6 @@ func (ctl *DeviceSensorController) CreateSensor(c *gin.Context) {
 // @Failure      400       {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/devices/{deviceId}/sensors/{sensorId}/update [post]
-// UpdateSensor 增量更新传感器定义 (POST /api/devices/{deviceId}/sensors/{sensorId}/update，用户侧)
 func (ctl *DeviceSensorController) UpdateSensor(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	sensorID := c.Param("sensorId")
@@ -151,7 +151,8 @@ func (ctl *DeviceSensorController) UpdateSensor(c *gin.Context) {
 	common.Success(c, sensor)
 }
 
-// DeleteSensor @Summary      删除传感器定义
+// DeleteSensor 删除传感器定义 (POST /api/devices/{deviceId}/sensors/{sensorId}/delete，用户侧)
+// @Summary      删除传感器定义
 // @Tags         devices
 // @Produce      json
 // @Param        deviceId  path  string  true  "设备ID"
@@ -160,7 +161,6 @@ func (ctl *DeviceSensorController) UpdateSensor(c *gin.Context) {
 // @Failure      404       {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/devices/{deviceId}/sensors/{sensorId}/delete [post]
-// DeleteSensor 删除传感器定义 (POST /api/devices/{deviceId}/sensors/{sensorId}/delete，用户侧)
 func (ctl *DeviceSensorController) DeleteSensor(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	sensorID := c.Param("sensorId")
@@ -181,7 +181,8 @@ func (ctl *DeviceSensorController) DeleteSensor(c *gin.Context) {
 	common.SuccessWithMsg(c, "删除成功", nil)
 }
 
-// ApplySensors @Summary      下发传感器配置（编译进 DeviceConfig 并版本化下发）
+// ApplySensors 下发传感器配置 (POST /api/devices/{deviceId}/sensors/apply，用户侧)
+// @Summary      下发传感器配置（编译进 DeviceConfig 并版本化下发）
 // @Tags         devices
 // @Produce      json
 // @Param        deviceId  path  string  true  "设备ID"
@@ -189,7 +190,6 @@ func (ctl *DeviceSensorController) DeleteSensor(c *gin.Context) {
 // @Failure      500       {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/devices/{deviceId}/sensors/apply [post]
-// ApplySensors 下发传感器配置 (POST /api/devices/{deviceId}/sensors/apply，用户侧)
 func (ctl *DeviceSensorController) ApplySensors(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)

@@ -77,6 +77,25 @@ definitions:
         description: UpdateTime holds the value of the "update_time" field.
         type: string
     type: object
+  entity.ActuatorCreateRequest:
+    properties:
+      config:
+        additionalProperties: {}
+        type: object
+      driver:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      name:
+        type: string
+    required:
+    - driver
+    - id
+    type: object
+  entity.ActuatorUpdateRequest:
+    type: object
   entity.DeviceConfigReport:
     properties:
       config:
@@ -257,7 +276,7 @@ info:
     url: https://opensource.org/licenses/MIT
   termsOfService: http://swagger.io/terms/
   title: IoT Platform Go API
-  version: 1.0.0
+  version: 1.7.0
 paths:
   /api/devices:
     get:
@@ -283,6 +302,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 查询用户设备列表
       tags:
       - devices
     post:
@@ -313,12 +333,42 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 注册设备
       tags:
       - devices
   /api/devices/{deviceId}:
     get:
       consumes:
       - application/json
+      description: 设备元信息 + 在线状态 + sensors（定义+latest）/ actuators（定义）物模型数组
+      parameters:
+      - description: 设备ID（6位hex）
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      summary: 获取设备详情（物模型视图：定义 + 最近遥测 + 执行器）
+      tags:
+      - devices
+  /api/devices/{deviceId}/actuators:
+    get:
       parameters:
       - description: 设备ID
         in: path
@@ -332,12 +382,163 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/common.ApiResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      summary: 查询设备执行器定义列表
+      tags:
+      - devices
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      - description: 执行器定义
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/entity.ActuatorCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
         "400":
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 创建执行器定义
+      tags:
+      - devices
+  /api/devices/{deviceId}/actuators/{actuatorId}:
+    get:
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      - description: 执行器标识符
+        in: path
+        name: actuatorId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      summary: 查询单个执行器定义
+      tags:
+      - devices
+  /api/devices/{deviceId}/actuators/{actuatorId}/delete:
+    post:
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      - description: 执行器标识符
+        in: path
+        name: actuatorId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      summary: 删除执行器定义
+      tags:
+      - devices
+  /api/devices/{deviceId}/actuators/{actuatorId}/update:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      - description: 执行器标识符
+        in: path
+        name: actuatorId
+        required: true
+        type: string
+      - description: 更新字段（增量）
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/entity.ActuatorUpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      summary: 增量更新执行器定义
+      tags:
+      - devices
+  /api/devices/{deviceId}/actuators/apply:
+    post:
+      parameters:
+      - description: 设备ID
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/common.ApiResponse'
+      security:
+      - UserAuth: []
+      summary: 下发执行器配置（编译进 DeviceConfig 并版本化下发）
       tags:
       - devices
   /api/devices/{deviceId}/commands:
@@ -363,6 +564,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - DeviceAuth: []
+      summary: 设备拉取待消费命令
       tags:
       - device
     post:
@@ -393,6 +595,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 向设备下发命令
       tags:
       - device
   /api/devices/{deviceId}/config:
@@ -417,6 +620,7 @@ paths:
       security:
       - UserAuth: []
       - DeviceAuth: []
+      summary: 查询设备配置快照
       tags:
       - devices
     post:
@@ -447,6 +651,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 设置设备配置并下发
       tags:
       - devices
   /api/devices/{deviceId}/config/report:
@@ -478,6 +683,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - DeviceAuth: []
+      summary: 设备配置回执
       tags:
       - devices
   /api/devices/{deviceId}/delete:
@@ -503,6 +709,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 删除设备
       tags:
       - devices
   /api/devices/{deviceId}/heartbeat:
@@ -528,6 +735,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - DeviceAuth: []
+      summary: 设备心跳
       tags:
       - data
   /api/devices/{deviceId}/login:
@@ -552,6 +760,7 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
+      summary: 获取设备Token
       tags:
       - devices
   /api/devices/{deviceId}/ping:
@@ -577,6 +786,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - DeviceAuth: []
+      summary: 设备心跳
       tags:
       - data
   /api/devices/{deviceId}/sensorData:
@@ -611,6 +821,7 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
+      summary: 查询设备传感器数据
       tags:
       - data
     post:
@@ -641,6 +852,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - DeviceAuth: []
+      summary: 上报传感器数据
       tags:
       - data
   /api/devices/{deviceId}/sensors:
@@ -664,6 +876,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 查询设备传感器定义列表
       tags:
       - devices
     post:
@@ -694,6 +907,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 创建传感器定义
       tags:
       - devices
   /api/devices/{deviceId}/sensors/{sensorId}:
@@ -722,6 +936,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 查询单个传感器定义
       tags:
       - devices
   /api/devices/{deviceId}/sensors/{sensorId}/delete:
@@ -750,6 +965,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 删除传感器定义
       tags:
       - devices
   /api/devices/{deviceId}/sensors/{sensorId}/update:
@@ -786,6 +1002,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 增量更新传感器定义
       tags:
       - devices
   /api/devices/{deviceId}/sensors/apply:
@@ -809,6 +1026,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 下发传感器配置（编译进 DeviceConfig 并版本化下发）
       tags:
       - devices
   /api/devices/{deviceId}/token:
@@ -833,6 +1051,7 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
+      summary: 获取设备Token
       tags:
       - devices
   /api/devices/{deviceId}/update:
@@ -870,6 +1089,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 更新设备信息（增量）
       tags:
       - devices
   /api/users:
@@ -909,6 +1129,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 列出所有用户
       tags:
       - users
     post:
@@ -932,6 +1153,7 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
+      summary: 用户注册
       tags:
       - users
       - public
@@ -963,6 +1185,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 获取用户信息
       tags:
       - users
   /api/users/{userId}/delete:
@@ -988,6 +1211,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 删除用户
       tags:
       - users
   /api/users/{userId}/update:
@@ -1024,6 +1248,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 更新用户信息
       tags:
       - users
   /api/users/isLogin:
@@ -1041,6 +1266,7 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
+      summary: 检查登录状态
       tags:
       - users
       - public
@@ -1071,6 +1297,7 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/common.ApiResponse'
+      summary: 用户登录
       tags:
       - users
       - public
@@ -1091,6 +1318,7 @@ paths:
             $ref: '#/definitions/common.ApiResponse'
       security:
       - UserAuth: []
+      summary: 退出登录
       tags:
       - users
   /health:
@@ -1113,6 +1341,7 @@ paths:
             additionalProperties:
               type: string
             type: object
+      summary: 健康检查
       tags:
       - system
 securityDefinitions:

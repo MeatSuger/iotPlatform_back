@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 
+	"go.uber.org/zap"
+
 	"iot-platform.local/internal/ent"
 	entity "iot-platform.local/internal/model"
 	"iot-platform.local/internal/repository"
+	"iot-platform.local/pkg/cache"
 	"iot-platform.local/pkg/common"
 )
 
@@ -19,24 +22,29 @@ var ErrSensorNotFound = errors.New("传感器不存在")
 type DeviceSensorService struct {
 	sensorRepo *repository.DeviceSensorRepo
 	configSvc  *DeviceConfigService
+	cache      *cache.RedisCache
 }
 
 // NewDeviceSensorService 创建传感器定义服务
-func NewDeviceSensorService(sensorRepo *repository.DeviceSensorRepo, configSvc *DeviceConfigService) *DeviceSensorService {
-	return &DeviceSensorService{sensorRepo: sensorRepo, configSvc: configSvc}
+func NewDeviceSensorService(sensorRepo *repository.DeviceSensorRepo, configSvc *DeviceConfigService, rcache *cache.RedisCache) *DeviceSensorService {
+	return &DeviceSensorService{sensorRepo: sensorRepo, configSvc: configSvc, cache: rcache}
 }
 
-// List 查询设备全部传感器定义
+// List 查询设备全部传感器定义（整列表缓存：Cache-Aside，写路径显式失效）
 func (s *DeviceSensorService) List(ctx context.Context, deviceID string) ([]entity.Sensor, error) {
-	rows, err := s.sensorRepo.ListByDeviceID(ctx, deviceID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]entity.Sensor, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, sensorToDTO(row))
-	}
-	return out, nil
+	out := []entity.Sensor{}
+	err := s.cache.GetCachedSensorDefsWithLoader(ctx, deviceID, &out, func(ctx context.Context) (any, error) {
+		rows, err := s.sensorRepo.ListByDeviceID(ctx, deviceID)
+		if err != nil {
+			return nil, err
+		}
+		defs := make([]entity.Sensor, 0, len(rows))
+		for _, row := range rows {
+			defs = append(defs, sensorToDTO(row))
+		}
+		return defs, nil
+	})
+	return out, err
 }
 
 // Get 查询单个传感器定义；不存在返回 (nil, nil)
@@ -83,6 +91,7 @@ func (s *DeviceSensorService) Create(ctx context.Context, deviceID string, req e
 		}
 		return nil, fmt.Errorf("创建传感器失败: %w", err)
 	}
+	s.evictDefsCache(ctx, deviceID)
 	dto := sensorToDTO(row)
 	return &dto, nil
 }
@@ -121,6 +130,7 @@ func (s *DeviceSensorService) Update(ctx context.Context, deviceID, sensorID str
 		}
 		return nil, err
 	}
+	s.evictDefsCache(ctx, deviceID)
 	dto := sensorToDTO(row)
 	return &dto, nil
 }
@@ -134,7 +144,17 @@ func (s *DeviceSensorService) Delete(ctx context.Context, deviceID, sensorID str
 	if n == 0 {
 		return ErrSensorNotFound
 	}
+	s.evictDefsCache(ctx, deviceID)
 	return nil
+}
+
+// evictDefsCache 失效整设备传感器定义缓存。失效失败仅告警：
+// 缓存有 TTL 兜底自愈，不应让主写操作因缓存失效失败而失败。
+func (s *DeviceSensorService) evictDefsCache(ctx context.Context, deviceID string) {
+	if err := s.cache.EvictSensorDefsCache(ctx, deviceID); err != nil {
+		zap.L().Warn("[DeviceSensor] 失效定义缓存失败",
+			zap.String("deviceID", deviceID), zap.Error(err))
+	}
 }
 
 // Apply 将设备全部传感器定义编译进 DeviceConfig.payload.sensors 并版本化下发。
@@ -194,12 +214,15 @@ func sensorToDTO(row *ent.DeviceSensor) entity.Sensor {
 }
 
 // marshalJSONField map → JSON 文本；nil / 空 map 存空串
+// 序列化失败时告警并降级为空串（输入均经模型层校验，此处为异常兜底，不应静默）
 func marshalJSONField(m map[string]any) string {
 	if len(m) == 0 {
 		return ""
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
+		zap.L().Warn("[物模型] JSON 字段序列化失败，落库为空串",
+			zap.String("field", "specs/thresholds/attrs/config"), zap.Error(err))
 		return ""
 	}
 	return string(b)

@@ -123,5 +123,8 @@ func (Device) Edges() []ent.Edge {
 		// 传感器定义 (O2M): 一个设备有多个传感器定义；删除设备时级联删除
 		edge.To("sensors", DeviceSensor.Type).
 			Annotations(entsql.OnDelete(entsql.Cascade)),
+		// 执行器定义 (O2M): 一个设备有多个执行器定义；删除设备时级联删除
+		edge.To("actuators", DeviceActuator.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }

@@ -45,6 +45,7 @@ type MqttGatewayController struct {
 	dialTimeout time.Duration
 	logRepo     *repository.MqttPublishLogRepo
 	reportSvc   *service.DeviceReportService // 设备数据上报服务（onPublish 入库用）
+	configSvc   *service.DeviceConfigService // 设备配置服务（config/report 回执用）
 	cache       *cache.RedisCache            // MQTT 消息历史缓存（可为 nil）
 
 	// 设备Token注册表：框架鉴权通过后记录 deviceID → token，
@@ -54,8 +55,9 @@ type MqttGatewayController struct {
 }
 
 // NewMqttGatewayController 创建 MQTT 桥接网关控制器
-// reportSvc 可为 nil（此时 onPublish 只记日志不入库）；cache 可为 nil（不记录消息历史）
-func NewMqttGatewayController(logRepo *repository.MqttPublishLogRepo, reportSvc *service.DeviceReportService, cache *cache.RedisCache) *MqttGatewayController {
+// reportSvc 可为 nil（此时 onPublish 只记日志不入库）；cache 可为 nil（不记录消息历史）；
+// configSvc 可为 nil（此时 iot/{id}/config/report 回执不处理）
+func NewMqttGatewayController(logRepo *repository.MqttPublishLogRepo, reportSvc *service.DeviceReportService, configSvc *service.DeviceConfigService, cache *cache.RedisCache) *MqttGatewayController {
 	addr := strings.TrimPrefix(config.Cfg.MQTT.BrokerURL, "tcp://")
 	addr = strings.TrimPrefix(addr, "ssl://")
 	return &MqttGatewayController{
@@ -63,6 +65,7 @@ func NewMqttGatewayController(logRepo *repository.MqttPublishLogRepo, reportSvc 
 		dialTimeout:  5 * time.Second,
 		logRepo:      logRepo,
 		reportSvc:    reportSvc,
+		configSvc:    configSvc,
 		cache:        cache,
 		deviceTokens: make(map[string]string),
 	}
@@ -217,7 +220,7 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 				frame := buf[:total]
 				buf = buf[total:]
 
-				g.logPublish(frame, clientID, protocolLevel)
+				g.logPublish(frame, clientID, protocolLevel, deviceID)
 
 				if _, err := tcp.Write(frame); err != nil {
 					_ = tcp.Close()
@@ -246,7 +249,7 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 }
 
 // logPublish 拦截 PUBLISH 帧：写入 mqtt_publish_log + 调用 onPublish 钩子
-func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protocolLevel byte) {
+func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protocolLevel byte, connDeviceID string) {
 	if len(frame) < 2 || frame[0]&0xF0 != 0x30 {
 		return
 	}
@@ -310,11 +313,16 @@ func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protoc
 	}
 
 	// 用户自定义解析钩子
-	g.onPublish(topic, payload)
+	g.onPublish(topic, payload, connDeviceID)
 }
+
+// configReportTopicSuffix iot/{deviceId}/config/report 的设备配置回执主题
+const configReportTopicSuffix = "/config/report"
 
 // onPublish PUBLISH 消息解析与入库
 // 此时 frame 已写入 mqtt_publish_log 并转发到外部 broker
+//
+// connDeviceID 为本连接 CONNECT 鉴权通过的设备ID（每条连接由各自 goroutine 串行调用）。
 //
 // Topic 约定：/前缀/设备ID/...，如 iot/{deviceId}/telemetry
 // Payload 约定：与 HTTP 上报接口 /api/devices/{deviceId}/sensorData 相同的 JSON 格式：
@@ -323,13 +331,21 @@ func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protoc
 //
 // 入库链路与 ReportData 完全一致：Token校验 → 更新设备状态缓存 →
 // Redis 缓冲队列 → 后台批量写 InfluxDB + PostgreSQL 活跃时间
-func (g *MqttGatewayController) onPublish(topic string, payload []byte) {
+func (g *MqttGatewayController) onPublish(topic string, payload []byte, connDeviceID string) {
 	list := strings.Split(topic, "/")
 	if len(list) < 3 {
 		zap.S().Debugf("[MQTT网关] PUBLISH topic=%s payload=%s (未处理)", topic, string(payload))
 		return
 	}
 	deviceID := strings.ToLower(list[1])
+
+	// 设备配置回执：iot/{deviceId}/config/report
+	// 与 HTTP POST /api/devices/{deviceId}/config/report 同协议（DeviceConfigReport），
+	// 仅接受本连接鉴权设备自身的话题，回写 status=acked
+	if len(list) == 4 && strings.HasSuffix(topic, configReportTopicSuffix) {
+		g.handleConfigReport(connDeviceID, deviceID, payload)
+		return
+	}
 
 	if g.reportSvc == nil {
 		zap.S().Debugf("[MQTT网关] PUBLISH topic=%s payload=%s (上报服务未注入，跳过入库)", topic, string(payload))
@@ -371,6 +387,44 @@ func (g *MqttGatewayController) onPublish(topic string, payload []byte) {
 			}
 		}
 		zap.S().Debugf("[MQTT网关] PUBLISH 数据已入库 [device=%s topic=%s sensors=%d]", deviceID, topic, len(dto.Sensors))
+	}()
+}
+
+// handleConfigReport 处理设备配置回执上行 iot/{deviceId}/config/report
+//
+// Payload 与 HTTP POST /api/devices/{deviceId}/config/report 一致：
+//
+//	{"version": N, "config": {...}}
+//
+// 仅接受本连接鉴权设备自身话题（connDeviceID 必须等于话题中的设备ID），
+// 语义等同 HTTP 的 DeviceAuth：设备只能确认自己的配置。
+func (g *MqttGatewayController) handleConfigReport(connDeviceID, deviceID string, payload []byte) {
+	if g.configSvc == nil {
+		zap.S().Debugf("[MQTT网关] 配置回执服务未注入，跳过 [device=%s topic=iot/%s/config/report]", deviceID, deviceID)
+		return
+	}
+	if connDeviceID == "" || strings.ToLower(connDeviceID) != deviceID {
+		zap.S().Warnf("[MQTT网关] 拒绝跨设备配置回执 [conn=%s topicDevice=%s]", connDeviceID, deviceID)
+		return
+	}
+
+	var rep entity.DeviceConfigReport
+	if err := json.Unmarshal(payload, &rep); err != nil {
+		zap.S().Warnf("[MQTT网关] 配置回执解析失败 [device=%s]: %v", deviceID, err)
+		return
+	}
+	if rep.Version == 0 {
+		zap.S().Warnf("[MQTT网关] 配置回执缺少版本 [device=%s]", deviceID)
+		return
+	}
+
+	// 异步入库（不阻塞帧转发），与 HTTP 回执共用 DeviceConfigService.Report（status=acked）
+	go func() {
+		if err := g.configSvc.Report(context.Background(), deviceID, rep); err != nil {
+			zap.S().Warnf("[MQTT网关] 配置回执入库失败 [device=%s version=%d]: %v", deviceID, rep.Version, err)
+			return
+		}
+		zap.S().Debugf("[MQTT网关] 配置回执已记录 [device=%s version=%d]", deviceID, rep.Version)
 	}()
 }
 

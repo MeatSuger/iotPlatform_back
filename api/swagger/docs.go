@@ -39,6 +39,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "查询用户设备列表",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -84,6 +85,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "注册设备",
                 "parameters": [
                     {
                         "description": "设备注册请求参数",
@@ -130,6 +132,7 @@ const docTemplate = `{
                         "UserAuth": []
                     }
                 ],
+                "description": "设备元信息 + 在线状态 + sensors（定义+latest）/ actuators（定义）物模型数组",
                 "consumes": [
                     "application/json"
                 ],
@@ -139,6 +142,52 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "获取设备详情（物模型视图：定义 + 最近遥测 + 执行器）",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID（6位hex）",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/devices/{deviceId}/actuators": {
+            "get": {
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "查询设备执行器定义列表",
                 "parameters": [
                     {
                         "type": "string",
@@ -146,6 +195,244 @@ const docTemplate = `{
                         "name": "deviceId",
                         "in": "path",
                         "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "创建执行器定义",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "执行器定义",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/entity.ActuatorCreateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/devices/{deviceId}/actuators/apply": {
+            "post": {
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "下发执行器配置（编译进 DeviceConfig 并版本化下发）",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/devices/{deviceId}/actuators/{actuatorId}": {
+            "get": {
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "查询单个执行器定义",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "执行器标识符",
+                        "name": "actuatorId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/devices/{deviceId}/actuators/{actuatorId}/delete": {
+            "post": {
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "删除执行器定义",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "执行器标识符",
+                        "name": "actuatorId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/devices/{deviceId}/actuators/{actuatorId}/update": {
+            "post": {
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "增量更新执行器定义",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "执行器标识符",
+                        "name": "actuatorId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新字段（增量）",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/entity.ActuatorUpdateRequest"
+                        }
                     }
                 ],
                 "responses": {
@@ -180,6 +467,7 @@ const docTemplate = `{
                 "tags": [
                     "device"
                 ],
+                "summary": "设备拉取待消费命令",
                 "parameters": [
                     {
                         "type": "string",
@@ -219,6 +507,7 @@ const docTemplate = `{
                 "tags": [
                     "device"
                 ],
+                "summary": "向设备下发命令",
                 "parameters": [
                     {
                         "type": "string",
@@ -269,6 +558,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "查询设备配置快照",
                 "parameters": [
                     {
                         "type": "string",
@@ -308,6 +598,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "设置设备配置并下发",
                 "parameters": [
                     {
                         "type": "string",
@@ -358,6 +649,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "设备配置回执",
                 "parameters": [
                     {
                         "type": "string",
@@ -408,6 +700,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "删除设备",
                 "parameters": [
                     {
                         "type": "string",
@@ -449,6 +742,7 @@ const docTemplate = `{
                 "tags": [
                     "data"
                 ],
+                "summary": "设备心跳",
                 "parameters": [
                     {
                         "type": "string",
@@ -486,6 +780,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "获取设备Token",
                 "parameters": [
                     {
                         "type": "string",
@@ -527,6 +822,7 @@ const docTemplate = `{
                 "tags": [
                     "data"
                 ],
+                "summary": "设备心跳",
                 "parameters": [
                     {
                         "type": "string",
@@ -563,6 +859,7 @@ const docTemplate = `{
                 "tags": [
                     "data"
                 ],
+                "summary": "查询设备传感器数据",
                 "parameters": [
                     {
                         "type": "string",
@@ -619,6 +916,7 @@ const docTemplate = `{
                 "tags": [
                     "data"
                 ],
+                "summary": "上报传感器数据",
                 "parameters": [
                     {
                         "description": "传感器数据",
@@ -666,6 +964,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "查询设备传感器定义列表",
                 "parameters": [
                     {
                         "type": "string",
@@ -705,6 +1004,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "创建传感器定义",
                 "parameters": [
                     {
                         "type": "string",
@@ -752,6 +1052,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "下发传感器配置（编译进 DeviceConfig 并版本化下发）",
                 "parameters": [
                     {
                         "type": "string",
@@ -790,6 +1091,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "查询单个传感器定义",
                 "parameters": [
                     {
                         "type": "string",
@@ -835,6 +1137,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "删除传感器定义",
                 "parameters": [
                     {
                         "type": "string",
@@ -883,6 +1186,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "增量更新传感器定义",
                 "parameters": [
                     {
                         "type": "string",
@@ -936,6 +1240,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "获取设备Token",
                 "parameters": [
                     {
                         "type": "string",
@@ -978,6 +1283,7 @@ const docTemplate = `{
                 "tags": [
                     "devices"
                 ],
+                "summary": "更新设备信息（增量）",
                 "parameters": [
                     {
                         "type": "string",
@@ -1040,6 +1346,7 @@ const docTemplate = `{
                 "tags": [
                     "users"
                 ],
+                "summary": "列出所有用户",
                 "parameters": [
                     {
                         "type": "integer",
@@ -1101,6 +1408,7 @@ const docTemplate = `{
                     "users",
                     "public"
                 ],
+                "summary": "用户注册",
                 "parameters": [
                     {
                         "description": "注册请求参数",
@@ -1140,6 +1448,7 @@ const docTemplate = `{
                     "users",
                     "public"
                 ],
+                "summary": "检查登录状态",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -1168,6 +1477,7 @@ const docTemplate = `{
                     "users",
                     "public"
                 ],
+                "summary": "用户登录",
                 "parameters": [
                     {
                         "description": "登录请求参数",
@@ -1223,6 +1533,7 @@ const docTemplate = `{
                 "tags": [
                     "users"
                 ],
+                "summary": "退出登录",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -1255,6 +1566,7 @@ const docTemplate = `{
                 "tags": [
                     "users"
                 ],
+                "summary": "获取用户信息",
                 "parameters": [
                     {
                         "type": "string",
@@ -1308,6 +1620,7 @@ const docTemplate = `{
                 "tags": [
                     "users"
                 ],
+                "summary": "删除用户",
                 "parameters": [
                     {
                         "type": "string",
@@ -1349,6 +1662,7 @@ const docTemplate = `{
                 "tags": [
                     "users"
                 ],
+                "summary": "更新用户信息",
                 "parameters": [
                     {
                         "type": "string",
@@ -1404,6 +1718,7 @@ const docTemplate = `{
                 "tags": [
                     "system"
                 ],
+                "summary": "健康检查",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -1533,6 +1848,34 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "entity.ActuatorCreateRequest": {
+            "type": "object",
+            "required": [
+                "driver",
+                "id"
+            ],
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "driver": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "entity.ActuatorUpdateRequest": {
+            "type": "object"
         },
         "entity.DeviceConfigReport": {
             "type": "object",
@@ -1804,7 +2147,7 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "1.0.0",
+	Version:          "1.7.0",
 	Host:             "localhost:8182",
 	BasePath:         "/",
 	Schemes:          []string{},

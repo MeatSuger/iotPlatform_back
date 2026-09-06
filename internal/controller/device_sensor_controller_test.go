@@ -53,10 +53,10 @@ func newSensorTestEnv(t *testing.T) *sensorTestEnv {
 	cmdRepo := repository.NewDownlinkCmdRepo(client)
 
 	rcache := cache.NewRedisCache(rdb)
-	deviceSvc := service.NewDeviceService(deviceRepo, rcache)
-	downlinkSvc := service.NewDownlinkService(cmdRepo, deviceRepo, rdb, nil)
-	configSvc := service.NewDeviceConfigService(configRepo, downlinkSvc)
-	sensorSvc := service.NewDeviceSensorService(sensorRepo, configSvc)
+	deviceSvc := service.NewDeviceService(deviceRepo, rcache, sensorRepo, nil, configRepo)
+	downlinkSvc := service.NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
+	configSvc := service.NewDeviceConfigService(configRepo, downlinkSvc, nil)
+	sensorSvc := service.NewDeviceSensorService(sensorRepo, configSvc, rcache)
 
 	return &sensorTestEnv{
 		ctl:    NewDeviceSensorController(sensorSvc, deviceSvc),
@@ -172,9 +172,13 @@ func TestSensorController_CreateBadRequest(t *testing.T) {
 	env := newSensorTestEnv(t)
 	owner := env.seedDevice(t, "abc123")
 
-	// 非法标识符
-	w := doSensor(t, "abc123", "", "", owner, validCreateBody("Bad_ID"), env.ctl.CreateSensor)
+	// 非法标识符（数字开头）
+	w := doSensor(t, "abc123", "", "", owner, validCreateBody("9Bad_ID"), env.ctl.CreateSensor)
 	assert.Equal(t, 400, parseResp(w).Code)
+
+	// 大写标识符合法（规则已放开大小写）
+	w = doSensor(t, "abc123", "", "", owner, validCreateBody("Bad_ID"), env.ctl.CreateSensor)
+	assert.Equal(t, 200, parseResp(w).Code)
 
 	// 重复标识符
 	w = doSensor(t, "abc123", "", "", owner, validCreateBody("temperature"), env.ctl.CreateSensor)

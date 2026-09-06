@@ -13,8 +13,8 @@ import (
 	"entgo.io/ent/schema/index"
 )
 
-// sensorIDPattern 传感器标识符：小写字母开头，仅含小写字母/数字/下划线（新大陆 ApiTag 风格）
-var sensorIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,49}$`)
+// sensorIDPattern 传感器标识符：字母开头，仅含字母/数字/下划线（新大陆 ApiTag 风格）
+var sensorIDPattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,49}$`)
 
 // DeviceSensor 设备传感器定义（物模型），对应表 iot_device_sensor
 //

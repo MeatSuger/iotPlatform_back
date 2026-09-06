@@ -22,7 +22,8 @@ func NewUserController(userSvc *service.UserService) *UserController {
 	return &UserController{userSvc: userSvc}
 }
 
-// Create @Summary      用户注册
+// Create 用户注册 (POST /api/users)
+// @Summary      用户注册
 // @Tags         users, public
 // @Accept       json
 // @Produce      json
@@ -30,7 +31,6 @@ func NewUserController(userSvc *service.UserService) *UserController {
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
 // @Router       /api/users [post]
-// Create 用户注册 (POST /api/users)
 func (ctl *UserController) Create(c *gin.Context) {
 	var req service.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -47,7 +47,9 @@ func (ctl *UserController) Create(c *gin.Context) {
 	common.SuccessWithMsg(c, "注册成功", nil)
 }
 
-// Login @Summary      用户登录
+// Login 用户登录 (POST /api/users/login) — 支持 JSON body 和 Query/Form 参数
+// 设备端标识优先取请求体 device 字段，缺省回退 User-Agent（用于 Sa-Token 多端登录区分）
+// @Summary      用户登录
 // @Tags         users, public
 // @Accept       json
 // @Produce      json
@@ -55,8 +57,6 @@ func (ctl *UserController) Create(c *gin.Context) {
 // @Success      200   {object}  common.ApiResponse{data=service.LoginResponse}
 // @Failure      400   {object}  common.ApiResponse
 // @Router       /api/users/login [post]
-// Login 用户登录 (POST /api/users/login) — 支持 JSON body 和 Query/Form 参数
-// 设备端标识优先取请求体 device 字段，缺省回退 User-Agent（用于 Sa-Token 多端登录区分）
 func (ctl *UserController) Login(c *gin.Context) {
 	var req service.LoginRequest
 	// 优先尝试 JSON body，失败则从 Query/Form 读取
@@ -90,14 +90,14 @@ func (ctl *UserController) Login(c *gin.Context) {
 	common.SuccessWithMsg(c, "登录成功", resp)
 }
 
-// IsLogin @Summary      检查登录状态
+// IsLogin 检查登录状态 (GET /api/users/isLogin) — Sa-Token 风格
+// @Summary      检查登录状态
 // @Tags         users, public
 // @Accept       json
 // @Produce      json
 // @Success      200   {object}  common.ApiResponse
 // @Failure      400   {object}  common.ApiResponse
 // @Router       /api/users/isLogin [get]
-// IsLogin 检查登录状态 (GET /api/users/isLogin) — Sa-Token 风格
 func (ctl *UserController) IsLogin(c *gin.Context) {
 	token := sagin.GetTokenFromCtx(c)
 
@@ -128,7 +128,8 @@ func (ctl *UserController) IsLogin(c *gin.Context) {
 	})
 }
 
-// Logout @Summary      退出登录
+// Logout 退出登录 (POST /api/users/logout)
+// @Summary      退出登录
 // @Tags         users
 // @Accept       json
 // @Produce      json
@@ -136,7 +137,6 @@ func (ctl *UserController) IsLogin(c *gin.Context) {
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/users/logout [post]
-// Logout 退出登录 (POST /api/users/logout)
 func (ctl *UserController) Logout(c *gin.Context) {
 	token := sagin.GetTokenFromCtx(c)
 	if token != "" {
@@ -147,7 +147,8 @@ func (ctl *UserController) Logout(c *gin.Context) {
 	common.SuccessWithMsg(c, "退出登录成功", nil)
 }
 
-// Update @Summary      更新用户信息
+// Update 更新用户信息 (POST /api/users/{userId}/update) — 合并语义
+// @Summary      更新用户信息
 // @Tags         users
 // @Accept       json
 // @Produce      json
@@ -157,7 +158,6 @@ func (ctl *UserController) Logout(c *gin.Context) {
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/users/{userId}/update [post]
-// Update 更新用户信息 (POST /api/users/{userId}/update) — 合并语义
 func (ctl *UserController) Update(c *gin.Context) {
 	var req ent.User
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -223,7 +223,8 @@ func (ctl *UserController) Update(c *gin.Context) {
 	common.Success(c, existing)
 }
 
-// Get @Summary      获取用户信息
+// Get 获取用户信息 (GET /api/users/{userId}) — me 表示当前登录用户
+// @Summary      获取用户信息
 // @Tags         users
 // @Accept       json
 // @Produce      json
@@ -232,7 +233,6 @@ func (ctl *UserController) Update(c *gin.Context) {
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/users/{userId} [get]
-// Get 获取用户信息 (GET /api/users/{userId}) — me 表示当前登录用户
 func (ctl *UserController) Get(c *gin.Context) {
 	// 目标用户ID从路径解析（me 或空=当前登录用户；数字=目标用户）
 	targetID, ok := resolveTargetUserID(c)
@@ -273,7 +273,8 @@ func resolveTargetUserID(c *gin.Context) (uint, bool) {
 	return uint(id), true
 }
 
-// List @Summary      列出所有用户
+// List 列出所有用户 (GET /api/users) — pageSize > 0 时返回分页 envelope（records/total/size/current/pages），否则返回全量数组
+// @Summary      列出所有用户
 // @Tags         users
 // @Accept       json
 // @Produce      json
@@ -284,7 +285,6 @@ func resolveTargetUserID(c *gin.Context) (uint, bool) {
 // @Failure      400      {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/users [get]
-// List 列出所有用户 (GET /api/users) — pageSize > 0 时返回分页 envelope（records/total/size/current/pages），否则返回全量数组
 func (ctl *UserController) List(c *gin.Context) {
 	pageSize, _ := strconv.Atoi(c.Query("pageSize"))
 
@@ -324,7 +324,8 @@ func (ctl *UserController) List(c *gin.Context) {
 	common.Success(c, users)
 }
 
-// Delete @Summary      删除用户
+// Delete 删除用户 (POST /api/users/{userId}/delete)
+// @Summary      删除用户
 // @Tags         users
 // @Accept       json
 // @Produce      json
@@ -333,7 +334,6 @@ func (ctl *UserController) List(c *gin.Context) {
 // @Failure      400   {object}  common.ApiResponse
 // @Security     UserAuth
 // @Router       /api/users/{userId}/delete [post]
-// Delete 删除用户 (POST /api/users/{userId}/delete)
 func (ctl *UserController) Delete(c *gin.Context) {
 	// 目标用户ID从路径解析（me=当前用户）
 	targetID, ok := resolveTargetUserID(c)

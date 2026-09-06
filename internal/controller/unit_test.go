@@ -46,7 +46,7 @@ func TestAllControllerConstructors(t *testing.T) {
 		assert.NotNil(t, ctl)
 	})
 	t.Run("DeviceController", func(t *testing.T) {
-		ctl := NewDeviceController(nil, nil)
+		ctl := NewDeviceController(nil, nil, nil, nil)
 		assert.NotNil(t, ctl)
 	})
 	t.Run("UserController", func(t *testing.T) {

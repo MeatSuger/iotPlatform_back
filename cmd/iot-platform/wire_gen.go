@@ -9,6 +9,7 @@ package main
 import (
 	"github.com/redis/go-redis/v9"
 	"iot-platform.local/internal/ent"
+	"iot-platform.local/internal/mqtt"
 	"iot-platform.local/internal/repository"
 	"iot-platform.local/internal/router"
 	"iot-platform.local/internal/service"
@@ -30,17 +31,20 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 	redisCache := cache.NewRedisCache(rdb)
 	userService := service.NewUserService(userRepo, redisCache)
 	deviceRepo := repository.NewDeviceRepo(entClient)
-	deviceService := service.NewDeviceService(deviceRepo, redisCache)
+	deviceConfigRepo := repository.NewDeviceConfigRepo(entClient)
+	deviceSensorRepo := repository.NewDeviceSensorRepo(entClient)
+	deviceActuatorRepo := repository.NewDeviceActuatorRepo(entClient)
+	deviceService := service.NewDeviceService(deviceRepo, redisCache, deviceSensorRepo, deviceActuatorRepo, deviceConfigRepo)
 	influxDBService := provideInfluxDBService()
 	deviceReportService := service.NewDeviceReportService(deviceRepo, influxDBService, redisCache, deviceService)
 	downlinkCmdRepo := repository.NewDownlinkCmdRepo(entClient)
 	hub := websocket.NewHub()
-	downlinkService := service.NewDownlinkService(downlinkCmdRepo, deviceRepo, rdb, hub)
-	deviceConfigRepo := repository.NewDeviceConfigRepo(entClient)
-	deviceConfigService := service.NewDeviceConfigService(deviceConfigRepo, downlinkService)
-	deviceSensorRepo := repository.NewDeviceSensorRepo(entClient)
-	deviceSensorService := service.NewDeviceSensorService(deviceSensorRepo, deviceConfigService)
-	services := provideRouterServices(userService, deviceService, deviceReportService, influxDBService, downlinkService, deviceConfigService, deviceSensorService)
+	mqttPublisher := provideMqttPublisher()
+	downlinkService := service.NewDownlinkService(downlinkCmdRepo, deviceRepo, rdb, hub, mqttPublisher)
+	deviceConfigService := service.NewDeviceConfigService(deviceConfigRepo, downlinkService, mqttPublisher)
+	deviceSensorService := service.NewDeviceSensorService(deviceSensorRepo, deviceConfigService, redisCache)
+	deviceActuatorService := service.NewDeviceActuatorService(deviceActuatorRepo, deviceConfigService, redisCache)
+	services := provideRouterServices(userService, deviceService, deviceReportService, influxDBService, downlinkService, deviceConfigService, deviceSensorService, deviceActuatorService)
 	wsHandler := websocket.NewWsHandler(hub)
 	appComponents := &AppComponents{
 		Services:  services,
@@ -57,6 +61,13 @@ type AppComponents struct {
 	Services  *router.Services
 	WsHandler *websocket.WsHandler
 	Cache     *cache.RedisCache
+}
+
+func provideMqttPublisher() service.MqttPublisher {
+	if !config.Cfg.MqttGateway.Enabled {
+		return nil
+	}
+	return mqtt.NewPublisher()
 }
 
 func provideInfluxDBService() *service.InfluxDBService {
@@ -85,14 +96,16 @@ func provideRouterServices(
 	downlinkSvc *service.DownlinkService,
 	configSvc *service.DeviceConfigService,
 	sensorSvc *service.DeviceSensorService,
+	actuatorSvc *service.DeviceActuatorService,
 ) *router.Services {
 	return &router.Services{
-		User:     userSvc,
-		Device:   deviceSvc,
-		Report:   reportSvc,
-		InfluxDB: influxSvc,
-		Downlink: downlinkSvc,
-		Config:   configSvc,
-		Sensors:  sensorSvc,
+		User:      userSvc,
+		Device:    deviceSvc,
+		Report:    reportSvc,
+		InfluxDB:  influxSvc,
+		Downlink:  downlinkSvc,
+		Config:    configSvc,
+		Sensors:   sensorSvc,
+		Actuators: actuatorSvc,
 	}
 }

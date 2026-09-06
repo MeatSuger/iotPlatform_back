@@ -34,7 +34,7 @@ type DeviceConfigSaveRequest struct {
 	Config map[string]any `json:"config" binding:"required"`
 }
 
-// DefaultDeviceConfig 返回一份默认协议配置样例（sensor/actuator/camera/network/ota），
+// DefaultDeviceConfig 返回一份默认协议配置样例（network/sensor/actuators/camera/ota），
 // 作为协议基线文档与测试夹具。设备端与平台据此字段结构约定 JSON 协议。
 func DefaultDeviceConfig() map[string]any {
 	return map[string]any{
@@ -55,14 +55,9 @@ func DefaultDeviceConfig() map[string]any {
 				"temperature": map[string]any{"min": 0, "max": 100},
 			},
 		},
-		"actuator": map[string]any{
-			"mode": "auto",
-			"schedule": map[string]any{
-				"on":  "08:00",
-				"off": "20:00",
-			},
-			"pwm": 512,
-		},
+		// 执行器定义数组：由 Actuator 资源（物模型）经 POST /actuators/apply 编译，
+		// id = 设备侧 periph 设备名 = 控制命令 action
+		"actuators": []any{},
 		"camera": map[string]any{
 			"protocol": "smtp",
 			"smtp": map[string]any{

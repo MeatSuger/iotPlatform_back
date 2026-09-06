@@ -2,21 +2,29 @@ package controller
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"net"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/middleware"
+	"iot-platform.local/internal/repository"
+	"iot-platform.local/internal/service"
 	"iot-platform.local/pkg/config"
 )
 
@@ -207,7 +215,7 @@ func setupGatewayTest(t *testing.T) (*httptest.Server, *MqttGatewayController) {
 	t.Cleanup(func() { config.Cfg = oldCfg })
 
 	gin.SetMode(gin.TestMode)
-	gateway := NewMqttGatewayController(nil, nil, nil)
+	gateway := NewMqttGatewayController(nil, nil, nil, nil)
 	e := gin.New()
 	e.GET("/api/ws/mqtt/broker", gateway.HandleWebSocket)
 	ts := httptest.NewServer(e)
@@ -360,7 +368,7 @@ func TestMqttGatewayControllerRejectBadQueryToken(t *testing.T) {
 	}
 
 	gin.SetMode(gin.TestMode)
-	gw := NewMqttGatewayController(nil, nil, nil)
+	gw := NewMqttGatewayController(nil, nil, nil, nil)
 	e := gin.New()
 	e.GET("/api/ws/mqtt/broker", gw.HandleWebSocket)
 	ts := httptest.NewServer(e)
@@ -396,7 +404,7 @@ func TestMqttGatewayControllerFragmentedConnect(t *testing.T) {
 	}
 
 	gin.SetMode(gin.TestMode)
-	gw := NewMqttGatewayController(nil, nil, nil)
+	gw := NewMqttGatewayController(nil, nil, nil, nil)
 	e := gin.New()
 	e.GET("/api/ws/mqtt/broker", gw.HandleWebSocket)
 	ts := httptest.NewServer(e)
@@ -448,4 +456,97 @@ func TestMqttPacketTotalLength(t *testing.T) {
 		assert.Equal(t, tt.total, total)
 		assert.Equal(t, tt.ok, ok)
 	}
+}
+
+// ============ 设备配置回执上行 (iot/{deviceId}/config/report) ============
+
+// newGatewayConfigEnv 构造「真实 sqlite + miniredis」的网关配置回执环境，
+// 预置设备 gwdev1 及一条已保存配置（status=pending, version=1）
+func newGatewayConfigEnv(t *testing.T) (*service.DeviceConfigService, *repository.DeviceConfigRepo, string) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	client, err := ent.Open("sqlite3", "file:"+dbPath+"?_fk=1")
+	require.NoError(t, err)
+	require.NoError(t, client.Schema.Create(context.Background()))
+	t.Cleanup(func() { _ = client.Close() })
+
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	deviceRepo := repository.NewDeviceRepo(client)
+	configRepo := repository.NewDeviceConfigRepo(client)
+	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	configSvc := service.NewDeviceConfigService(configRepo, service.NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil), nil)
+
+	now := time.Now()
+	owner, err := repository.NewUserRepo(client).Create(context.Background(), &ent.User{
+		Account: "gw_owner", Passwd: "h", Role: "user", Status: "ACTIVE",
+		CreateTime: now, UpdateTime: now,
+	})
+	require.NoError(t, err)
+	_, err = deviceRepo.Create(context.Background(), &ent.Device{
+		ID: "gwdev1", DeviceName: "网关测试设备", OwnerID: owner.ID, Status: "ONLINE",
+		CreatedAt: now, UpdatedAt: now,
+	})
+	require.NoError(t, err)
+
+	_, err = configSvc.Save(context.Background(), "gwdev1", map[string]any{"sensor": map[string]any{"reportInterval": 30}})
+	require.NoError(t, err)
+	return configSvc, configRepo, "gwdev1"
+}
+
+func TestMqttGatewayController_ConfigReportAck(t *testing.T) {
+	oldCfg := config.Cfg
+	t.Cleanup(func() { config.Cfg = oldCfg })
+	config.Cfg = &config.Config{MQTT: config.MQTTConfig{BrokerURL: "tcp://127.0.0.1:1883"}}
+
+	configSvc, configRepo, deviceID := newGatewayConfigEnv(t)
+	gw := NewMqttGatewayController(nil, nil, configSvc, nil)
+
+	// 设备向 iot/{id}/config/report 发布回执（连接鉴权设备与话题设备一致）
+	report := `{"version":1,"config":{"sensor":{"reportInterval":30}}}`
+	gw.onPublish("iot/"+deviceID+"/config/report", []byte(report), deviceID)
+
+	require.Eventually(t, func() bool {
+		got, err := configRepo.GetByDeviceID(context.Background(), deviceID)
+		return err == nil && got.Status == "acked" && got.ReportedVersion == 1
+	}, 5*time.Second, 50*time.Millisecond, "MQTT 配置回执未置为 acked")
+}
+
+func TestMqttGatewayController_ConfigReportRejectCrossDevice(t *testing.T) {
+	oldCfg := config.Cfg
+	t.Cleanup(func() { config.Cfg = oldCfg })
+	config.Cfg = &config.Config{MQTT: config.MQTTConfig{BrokerURL: "tcp://127.0.0.1:1883"}}
+
+	configSvc, configRepo, deviceID := newGatewayConfigEnv(t)
+	gw := NewMqttGatewayController(nil, nil, configSvc, nil)
+
+	// 其他设备伪造本设备话题 → 应拒绝，配置保持 pending
+	report := `{"version":1,"config":{"sensor":{"reportInterval":30}}}`
+	gw.onPublish("iot/"+deviceID+"/config/report", []byte(report), "evil-device")
+
+	time.Sleep(300 * time.Millisecond)
+	got, err := configRepo.GetByDeviceID(context.Background(), deviceID)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", got.Status)
+	assert.Equal(t, uint(0), got.ReportedVersion)
+}
+
+func TestMqttGatewayController_ConfigReportBadPayload(t *testing.T) {
+	oldCfg := config.Cfg
+	t.Cleanup(func() { config.Cfg = oldCfg })
+	config.Cfg = &config.Config{MQTT: config.MQTTConfig{BrokerURL: "tcp://127.0.0.1:1883"}}
+
+	configSvc, configRepo, deviceID := newGatewayConfigEnv(t)
+	gw := NewMqttGatewayController(nil, nil, configSvc, nil)
+
+	// 缺少 version / 非 JSON → 丢弃，配置保持 pending
+	gw.onPublish("iot/"+deviceID+"/config/report", []byte(`{"config":{}}`), deviceID)
+	gw.onPublish("iot/"+deviceID+"/config/report", []byte(`not-json`), deviceID)
+
+	time.Sleep(300 * time.Millisecond)
+	got, err := configRepo.GetByDeviceID(context.Background(), deviceID)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", got.Status)
 }
