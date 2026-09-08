@@ -271,7 +271,7 @@ func main() {
 	var mqttGateway *controller.MqttGatewayController
 	if cfg.MqttGateway.Enabled {
 		logRepo := repository.NewMqttPublishLogRepo(entClient)
-		mqttGateway = controller.NewMqttGatewayController(logRepo, svcs.Report, svcs.Config, components.Cache)
+		mqttGateway = controller.NewMqttGatewayController(logRepo, svcs.Report, svcs.Config, svcs.Device, components.Cache)
 		zap.L().Info("[Main] MQTT 桥接网关已启用（设备入口: /api/ws/mqtt/broker，转发到 " + cfg.MQTT.BrokerURL + "）")
 	}
 

@@ -34,6 +34,8 @@ import (
 //  1. 透明转发：设备 --wss--> 网关 --tcp--> 外部 Mosquitto(1883)
 //  2. 发布日志：所有 PUBLISH 帧写入 mqtt_publish_log 表
 //  3. 数据入库：PUBLISH payload 解析后走 DeviceReportService（onPublish 钩子）
+//  4. 上线标记：设备 SUBSCRIBE 自身配置/命令主题（如 iot/{deviceId}/config）→ 视为上线，
+//     Redis 缓存设备状态置为 ONLINE（与 WSS 设备连接上线行为一致）
 //
 // 鉴权（框架 Sa-Token 体系，两种凭证方式二选一，均不拦截 WebSocket 升级，保证透传）：
 //  1. HTTP 层：请求携带 X-Device-Token（Header/Cookie/Query），mqtt.js 等可拼 URL 参数的客户端
@@ -46,6 +48,7 @@ type MqttGatewayController struct {
 	logRepo     *repository.MqttPublishLogRepo
 	reportSvc   *service.DeviceReportService // 设备数据上报服务（onPublish 入库用）
 	configSvc   *service.DeviceConfigService // 设备配置服务（config/report 回执用）
+	deviceSvc   *service.DeviceService       // 设备服务（SUBSCRIBE 上线状态更新用）
 	cache       *cache.RedisCache            // MQTT 消息历史缓存（可为 nil）
 
 	// 设备Token注册表：框架鉴权通过后记录 deviceID → token，
@@ -56,8 +59,9 @@ type MqttGatewayController struct {
 
 // NewMqttGatewayController 创建 MQTT 桥接网关控制器
 // reportSvc 可为 nil（此时 onPublish 只记日志不入库）；cache 可为 nil（不记录消息历史）；
-// configSvc 可为 nil（此时 iot/{id}/config/report 回执不处理）
-func NewMqttGatewayController(logRepo *repository.MqttPublishLogRepo, reportSvc *service.DeviceReportService, configSvc *service.DeviceConfigService, cache *cache.RedisCache) *MqttGatewayController {
+// configSvc 可为 nil（此时 iot/{id}/config/report 回执不处理）；
+// deviceSvc 可为 nil（此时 SUBSCRIBE 不上线标记，仅依赖上报/心跳刷新状态）
+func NewMqttGatewayController(logRepo *repository.MqttPublishLogRepo, reportSvc *service.DeviceReportService, configSvc *service.DeviceConfigService, deviceSvc *service.DeviceService, cache *cache.RedisCache) *MqttGatewayController {
 	addr := strings.TrimPrefix(config.Cfg.MQTT.BrokerURL, "tcp://")
 	addr = strings.TrimPrefix(addr, "ssl://")
 	return &MqttGatewayController{
@@ -66,6 +70,7 @@ func NewMqttGatewayController(logRepo *repository.MqttPublishLogRepo, reportSvc 
 		logRepo:      logRepo,
 		reportSvc:    reportSvc,
 		configSvc:    configSvc,
+		deviceSvc:    deviceSvc,
 		cache:        cache,
 		deviceTokens: make(map[string]string),
 	}
@@ -195,8 +200,11 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 	g.registerDeviceToken(deviceID, token)
 	defer g.unregisterDeviceToken(deviceID, token)
 
-	// 6. 双向桥接（ws→tcp 方向累积完整帧，转发前拦截 PUBLISH 写日志）
+	// 6. 双向桥接（ws→tcp 方向累积完整帧，转发前拦截 PUBLISH 写日志 + SUBSCRIBE 标记上线）
 	done := make(chan struct{}, 2)
+
+	// SUBSCRIBE → 上线标记，每连接只执行一次（设备可能订阅多个主题/重订阅）
+	var markOnlineOnce sync.Once
 
 	go func() {
 		defer func() { done <- struct{}{} }()
@@ -221,6 +229,7 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 				buf = buf[total:]
 
 				g.logPublish(frame, clientID, protocolLevel, deviceID)
+				g.onSubscribe(frame, protocolLevel, deviceID, &markOnlineOnce)
 
 				if _, err := tcp.Write(frame); err != nil {
 					_ = tcp.Close()
@@ -426,6 +435,107 @@ func (g *MqttGatewayController) handleConfigReport(connDeviceID, deviceID string
 		}
 		zap.S().Debugf("[MQTT网关] 配置回执已记录 [device=%s version=%d]", deviceID, rep.Version)
 	}()
+}
+
+// onSubscribe 拦截设备 SUBSCRIBE 帧：设备订阅自身配置/命令主题（如 iot/{deviceId}/config）
+// 视为上线信号，将 Redis 缓存设备状态置为 ONLINE（与 WSS 设备连接上线行为一致：
+// DeviceService.UpdateStatus 同时刷新 Redis 状态 Hash + PG 活跃时间）。
+//
+// 仅接受设备订阅自己的主题（list[1] == 连接鉴权设备ID，与 onPublish 话题约定一致），
+// 防止跨设备订阅被误用为上线标记。markOnce 保证每连接只标记一次。
+func (g *MqttGatewayController) onSubscribe(frame []byte, protocolLevel byte, connDeviceID string, markOnce *sync.Once) {
+	if g.deviceSvc == nil || connDeviceID == "" {
+		return
+	}
+	deviceID := strings.ToLower(connDeviceID)
+
+	for _, topic := range parseSubscribeTopics(frame, protocolLevel) {
+		if !isOwnSubscribeTopic(topic, deviceID) {
+			continue
+		}
+
+		markOnce.Do(func() {
+			if err := g.deviceSvc.UpdateStatus(context.Background(), deviceID, "ONLINE"); err != nil {
+				zap.S().Warnf("[MQTT网关] 订阅上线状态更新失败 [device=%s topic=%s]: %v", deviceID, topic, err)
+				return
+			}
+			zap.S().Infof("[MQTT网关] 设备 %s 上线（订阅 %s），Redis 状态置为 ONLINE", deviceID, topic)
+		})
+		return
+	}
+}
+
+// isOwnSubscribeTopic 判断订阅主题是否为设备自身的配置/命令通道
+// 遵循 onPublish 话题约定：/前缀/设备ID/...，例如 iot/{deviceId}/config、iot/{deviceId}/cmd、iot/{deviceId}/#
+func isOwnSubscribeTopic(topic, deviceID string) bool {
+	list := strings.Split(topic, "/")
+	if len(list) < 3 {
+		return false
+	}
+	if strings.ToLower(list[1]) != deviceID {
+		return false
+	}
+	switch list[2] {
+	case "config", "cmd", "#":
+		return true
+	default:
+		return false
+	}
+}
+
+// parseSubscribeTopics 解析 SUBSCRIBE 帧中的主题过滤器列表（支持 MQTT 3.1.1 与 5.0）
+// 非 SUBSCRIBE 帧或帧不完整时返回 nil。
+func parseSubscribeTopics(frame []byte, protocolLevel byte) []string {
+	if len(frame) < 2 || frame[0]&0xF0 != 0x80 { // SUBSCRIBE 类型 = 8（高 4 位 0x80）
+		return nil
+	}
+
+	// 跳过剩余长度（可变字节整数）
+	pos := 1
+	for pos < len(frame) && frame[pos]&0x80 != 0 {
+		pos++
+	}
+	pos++
+
+	// 可变头：packet identifier（2 字节）
+	if pos+2 > len(frame) {
+		return nil
+	}
+	pos += 2
+
+	// MQTT 5.0: 跳过 properties（可变字节整数长度 + 属性字节）
+	if protocolLevel == 5 {
+		propLen, mul := 0, 1
+		for i := 0; i < 4 && pos < len(frame); i++ {
+			b := frame[pos]
+			propLen += int(b&0x7f) * mul
+			mul *= 128
+			pos++
+			if b&0x80 == 0 {
+				break
+			}
+		}
+		pos += propLen
+		if pos > len(frame) {
+			return nil
+		}
+	}
+
+	// Payload：多个 (topic filter, QoS) 对
+	var topics []string
+	for pos+2 <= len(frame) {
+		topicLen := int(binary.BigEndian.Uint16(frame[pos : pos+2]))
+		pos += 2
+		if pos+topicLen > len(frame) {
+			return nil
+		}
+		topics = append(topics, string(frame[pos:pos+topicLen]))
+		pos += topicLen + 1 // 主题 + 1 字节 QoS
+		if pos > len(frame) {
+			return nil
+		}
+	}
+	return topics
 }
 
 // ============ CONNECT 解析 & 鉴权 ============
