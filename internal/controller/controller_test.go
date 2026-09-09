@@ -245,24 +245,7 @@ func TestCheckRoleMiddleware(t *testing.T) {
 }
 
 // ========================================
-// 7. RequireLogin 中间件
-// ========================================
-
-func TestRequireLoginMiddleware(t *testing.T) {
-	t.Run("无 token 返回 401", func(t *testing.T) {
-		r := gin.New()
-		r.Use(middleware.RequireLogin())
-		r.GET("/secure", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest("GET", "/secure", nil)
-		r.ServeHTTP(w, req)
-		resp := parseResp(w)
-		assert.Equal(t, common.CodeUnauthorized, resp.Code)
-	})
-}
-
-// ========================================
-// 8. IsLogin 控制器 — 公开接口
+// 7. IsLogin 控制器 — 公开接口
 // ========================================
 
 func TestIsLogin_Controller(t *testing.T) {

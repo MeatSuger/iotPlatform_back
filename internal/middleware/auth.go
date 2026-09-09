@@ -248,7 +248,7 @@ func isValidDeviceID(id string) bool {
 // 这里直接复用 sa-token-go 的 CheckRoleOr 校验（任一角色匹配即放行）
 func CheckRole(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token := getToken(c)
+		token := GetToken(c)
 		if token == "" {
 			common.Fail(c, common.CodeForbidden)
 			c.Abort()
@@ -256,19 +256,6 @@ func CheckRole(roles ...string) gin.HandlerFunc {
 		}
 		if err := stputil.CheckRoleOr(token, roles); err != nil {
 			common.FailWithMsg(c, common.CodeForbidden, "无权限执行此操作")
-			c.Abort()
-			return
-		}
-		c.Next()
-	}
-}
-
-// RequireLogin 要求登录
-func RequireLogin() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		token := getToken(c)
-		if token == "" || !stputil.IsLogin(token) {
-			common.Fail(c, common.CodeUnauthorized)
 			c.Abort()
 			return
 		}
@@ -335,20 +322,4 @@ func GetToken(c *gin.Context) string {
 		return tok.(string)
 	}
 	return ""
-}
-
-func getToken(c *gin.Context) string {
-	return GetToken(c)
-}
-
-// parseUint 字符串转 uint（用于从 query/param 解析 ID，失败返回 0）
-func parseUint(s string) uint {
-	if s == "" {
-		return 0
-	}
-	v, err := strconv.ParseUint(s, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return uint(v)
 }

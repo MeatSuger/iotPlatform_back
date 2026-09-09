@@ -3,7 +3,6 @@ package controller
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"net/http/httptest"
 	"testing"
 
@@ -361,13 +360,3 @@ func TestDownlinkFullFlow(t *testing.T) {
 	// json.RawMessage 保留原始 JSON 字符串（含引号）
 	assert.Contains(t, resp.Data[0]["type"].(string), "control")
 }
-
-// newJSONBody 返回空的 ResponseRecorder 与 gin.Engine（参数未使用，占位辅助）
-func newJSONBody(t *testing.T, method, path string, body any) (*httptest.ResponseRecorder, *gin.Engine) {
-	t.Helper()
-	gin.SetMode(gin.TestMode)
-	return httptest.NewRecorder(), gin.New()
-}
-
-// 确保 io 包被使用
-var _ io.Reader

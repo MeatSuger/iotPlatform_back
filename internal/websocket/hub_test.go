@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -17,9 +18,7 @@ func newTestUserClient(ownerID uint) *Client {
 func TestNewHub(t *testing.T) {
 	h := NewHub()
 	assert.NotNil(t, h)
-	assert.Equal(t, 0, h.ClientCount())
-	assert.Equal(t, 0, h.DeviceClientCount())
-	assert.Equal(t, 0, h.UserClientCount())
+	assert.False(t, h.IsDeviceOnline("dev-none"))
 }
 
 func TestHub_RegisterAndUnregister(t *testing.T) {
@@ -27,12 +26,9 @@ func TestHub_RegisterAndUnregister(t *testing.T) {
 
 	c := newTestClient("dev-001", 1)
 	h.Register(c)
-	assert.Equal(t, 1, h.ClientCount())
-	assert.Equal(t, 1, h.DeviceClientCount())
 	assert.True(t, h.IsDeviceOnline("dev-001"))
 
 	h.Unregister(c)
-	assert.Equal(t, 0, h.ClientCount())
 	assert.False(t, h.IsDeviceOnline("dev-001"))
 }
 
@@ -44,9 +40,9 @@ func TestHub_DuplicateRegister(t *testing.T) {
 
 	c2 := newTestClient("dev-001", 2) // 同设备不同 owner
 	h.Register(c2)
-	assert.Equal(t, 1, h.ClientCount()) // 旧连接被踢
+	assert.True(t, h.IsDeviceOnline("dev-001"))
 
-	// 旧连接 channel 已关闭
+	// 旧连接 channel 已关闭（被踢下线）
 	_, ok := <-c1.Send
 	assert.False(t, ok)
 }
@@ -54,11 +50,21 @@ func TestHub_DuplicateRegister(t *testing.T) {
 func TestHub_RegisterUser(t *testing.T) {
 	h := NewHub()
 
-	h.RegisterUser(newTestUserClient(100))
-	assert.Equal(t, 1, h.UserClientCount())
+	// 同一 owner 允许多个管理端连接，且都能收到推送
+	u1 := newTestUserClient(100)
+	u2 := newTestUserClient(100)
+	h.RegisterUser(u1)
+	h.RegisterUser(u2)
 
-	h.RegisterUser(newTestUserClient(100)) // 同 owner 第二个连接
-	assert.Equal(t, 2, h.UserClientCount())
+	h.SendToOwner(100, []byte(`{"type":"deviceOnline"}`))
+	for _, u := range []*Client{u1, u2} {
+		select {
+		case msg := <-u.Send:
+			assert.Contains(t, string(msg), "deviceOnline")
+		case <-time.After(time.Second):
+			t.Error("owner 连接未收到推送")
+		}
+	}
 }
 
 func TestHub_UnregisterUser(t *testing.T) {
@@ -66,10 +72,11 @@ func TestHub_UnregisterUser(t *testing.T) {
 
 	c := newTestUserClient(200)
 	h.RegisterUser(c)
-	assert.Equal(t, 1, h.UserClientCount())
 
 	h.Unregister(c)
-	assert.Equal(t, 0, h.UserClientCount())
+	// 注销后 channel 关闭：不再投递任何消息
+	_, ok := <-c.Send
+	assert.False(t, ok, "注销后 Send channel 应已关闭")
 }
 
 func TestHub_SendToDevice(t *testing.T) {
@@ -119,33 +126,6 @@ func TestHub_SendToDeviceOwner(t *testing.T) {
 	default:
 		t.Error("expected message")
 	}
-}
-
-func TestHub_Broadcast(t *testing.T) {
-	h := NewHub()
-	c1 := newTestClient("d1", 1)
-	c2 := newTestClient("d2", 2)
-	h.Register(c1)
-	h.Register(c2)
-
-	h.Broadcast("hello")
-	for _, c := range []*Client{c1, c2} {
-		select {
-		case msg := <-c.Send:
-			assert.Equal(t, "hello", string(msg))
-		default:
-			t.Error("expected broadcast message")
-		}
-	}
-}
-
-func TestHub_GetOnlineDevices(t *testing.T) {
-	h := NewHub()
-	assert.Empty(t, h.GetOnlineDevices())
-
-	h.Register(newTestClient("a1b2c3", 1))
-	h.Register(newTestClient("d4e5f6", 2))
-	assert.Len(t, h.GetOnlineDevices(), 2)
 }
 
 func TestHub_IsDeviceOnline(t *testing.T) {

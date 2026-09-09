@@ -93,12 +93,7 @@ func TestUserRepo_CRUD(t *testing.T) {
 	assert.Equal(t, "改名", got3.Name)
 	assert.Equal(t, "admin", got3.Role)
 
-	// UpdatePassword
-	assert.NoError(t, repo.UpdatePassword(context.Background(), u.ID, "newhash"))
-	got4, _ := repo.GetByID(context.Background(), u.ID)
-	assert.Equal(t, "newhash", got4.Passwd)
-
-	// List / Page / IsExist
+	// List / Page
 	_, err = repo.Create(context.Background(), makeUser("bob"))
 	assert.NoError(t, err)
 
@@ -110,13 +105,6 @@ func TestUserRepo_CRUD(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, page, 1)
 	assert.Equal(t, 2, total)
-
-	exist, err := repo.IsExist(context.Background(), u.ID)
-	assert.NoError(t, err)
-	assert.True(t, exist)
-	exist2, err := repo.IsExist(context.Background(), 9999)
-	assert.NoError(t, err)
-	assert.False(t, exist2)
 
 	// Delete
 	assert.NoError(t, repo.Delete(context.Background(), u.ID))

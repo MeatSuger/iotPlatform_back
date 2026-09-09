@@ -2,7 +2,6 @@ package common
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http/httptest"
 	"testing"
 
@@ -69,81 +68,6 @@ func TestFailWithMsg(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	assert.Equal(t, CodeForbidden, resp.Code)
 	assert.Equal(t, "无权限访问", resp.Message)
-}
-
-func TestFailWithData(t *testing.T) {
-	c, w := setupGin()
-	FailWithData(c, CodeBadRequest, "验证失败", gin.H{"field": "name"})
-
-	var resp ApiResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	assert.Equal(t, CodeBadRequest, resp.Code)
-	assert.Equal(t, "验证失败", resp.Message)
-	assert.NotNil(t, resp.Data)
-}
-
-func TestError(t *testing.T) {
-	c, w := setupGin()
-	Error(c, "数据库错误")
-
-	var resp ApiResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	assert.Equal(t, CodeServerError, resp.Code)
-	assert.Equal(t, "数据库错误", resp.Message)
-}
-
-func TestRespond_Success(t *testing.T) {
-	c, w := setupGin()
-	Respond(c, gin.H{"id": 1}, nil)
-
-	var resp ApiResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	assert.Equal(t, CodeSuccess, resp.Code)
-	assert.Equal(t, "success", resp.Message)
-}
-
-func TestRespond_AppError(t *testing.T) {
-	c, w := setupGin()
-	appErr := NewAppError(401, CodeUnauthorized, "未登录")
-	Respond(c, nil, appErr)
-
-	var resp ApiResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	assert.Equal(t, CodeUnauthorized, resp.Code)
-	assert.Equal(t, "未登录", resp.Message)
-}
-
-func TestRespond_PlainError(t *testing.T) {
-	c, w := setupGin()
-	plainErr := errors.New("未知错误")
-	Respond(c, nil, plainErr)
-
-	var resp ApiResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	assert.Equal(t, CodeServerError, resp.Code)
-	assert.Equal(t, "未知错误", resp.Message)
-}
-
-func TestHandleServiceError_AppError(t *testing.T) {
-	c, w := setupGin()
-	appErr := NewAppError(404, CodeNotFound, "用户不存在")
-	HandleServiceError(c, appErr)
-
-	var resp ApiResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	assert.Equal(t, CodeNotFound, resp.Code)
-	assert.Equal(t, "用户不存在", resp.Message)
-}
-
-func TestHandleServiceError_PlainError(t *testing.T) {
-	c, w := setupGin()
-	plainErr := errors.New("数据库连接失败")
-	HandleServiceError(c, plainErr)
-
-	var resp ApiResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	assert.Equal(t, CodeBadRequest, resp.Code)
-	assert.Equal(t, "数据库连接失败", resp.Message)
 }
 
 func TestApiResponse_Serialization(t *testing.T) {

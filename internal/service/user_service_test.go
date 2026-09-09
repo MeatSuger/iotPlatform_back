@@ -279,7 +279,7 @@ func TestUserService_Delete(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestUserService_ListPageIsExist(t *testing.T) {
+func TestUserService_ListPage(t *testing.T) {
 	client, repo, svc := newUserCtx(t)
 	seedUser(t, repo, "u1")
 	seedUser(t, repo, "u2")
@@ -298,25 +298,5 @@ func TestUserService_ListPageIsExist(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), total3)
 	assert.Len(t, users3, 1)
-
-	exist, err := svc.IsExist(context.Background(), users[0].ID)
-	assert.NoError(t, err)
-	assert.True(t, exist)
-	exist2, err := svc.IsExist(context.Background(), 99999)
-	assert.NoError(t, err)
-	assert.False(t, exist2)
-	_ = client
-}
-
-func TestUserService_UpgradePasswordHash(t *testing.T) {
-	client, repo, svc := newUserCtx(t)
-	u := seedUser(t, repo, "alice")
-
-	assert.NoError(t, svc.UpgradePasswordHash(context.Background(), u.ID, "newpass123"))
-
-	got, err := repo.GetByAccount(context.Background(), "alice")
-	assert.NoError(t, err)
-	assert.True(t, isBcryptHash(got.Passwd))
-	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(got.Passwd), []byte("newpass123")))
 	_ = client
 }

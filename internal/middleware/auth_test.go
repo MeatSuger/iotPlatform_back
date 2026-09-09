@@ -41,13 +41,6 @@ func Test_isValidDeviceID(t *testing.T) {
 	}
 }
 
-func Test_parseUint(t *testing.T) {
-	assert.Equal(t, uint(123), parseUint("123"))
-	assert.Equal(t, uint(0), parseUint(""))
-	assert.Equal(t, uint(0), parseUint("abc"))
-	assert.Equal(t, uint(999999), parseUint("999999"))
-}
-
 func ExampleDeviceIDAuthMiddleware() {
 	// 设备 ID 认证中间件使用示例
 	fmt.Println("DeviceIDAuthMiddleware validates 6-char hex device IDs from URL path")

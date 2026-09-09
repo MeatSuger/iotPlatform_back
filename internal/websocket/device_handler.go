@@ -104,38 +104,3 @@ func (h *WsHandler) SetupDeviceWS(tokenProvider DeviceTokenProvider, report Repo
 		h.hub.SendToOwner(ownerID, msg)
 	}
 }
-
-// forwardToOwner 将设备上行消息转发给该设备的 Owner 管理端
-// 优先从 Hub 缓存的设备连接中取 ownerID，避免每次查库
-func (h *WsHandler) forwardToOwner(deviceID string, rawMessage []byte) {
-	// 从 Hub 中取设备连接缓存的 ownerID（设备连接时已解析）
-	h.hub.mu.RLock()
-	client, ok := h.hub.deviceClients[deviceID]
-	var ownerID uint
-	if ok {
-		ownerID = client.OwnerID
-	}
-	h.hub.mu.RUnlock()
-
-	// Hub 中未缓存则回退到 resolveOwner 查库
-	if ownerID == 0 && h.resolveOwner != nil {
-		if oid, err := h.resolveOwner(deviceID); err == nil {
-			ownerID = oid
-		}
-	}
-	if ownerID == 0 {
-		return
-	}
-
-	// 包装为统一格式，方便前端区分不同设备
-	var payload any
-	if err := json.Unmarshal(rawMessage, &payload); err != nil {
-		payload = string(rawMessage)
-	}
-	msg, _ := json.Marshal(map[string]any{
-		"deviceId":  deviceID,
-		"data":      payload,
-		"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
-	})
-	h.hub.SendToOwner(ownerID, msg)
-}

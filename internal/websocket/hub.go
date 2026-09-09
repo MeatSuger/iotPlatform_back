@@ -147,60 +147,10 @@ func (h *Hub) SendToDeviceOwner(deviceID string, message []byte) {
 	h.SendToOwner(deviceClient.OwnerID, message)
 }
 
-// Broadcast 向所有客户端广播消息
-func (h *Hub) Broadcast(message string) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	for client := range h.clients {
-		select {
-		case client.Send <- []byte(message):
-		default:
-			go h.Unregister(client)
-		}
-	}
-}
-
-// ClientCount 获取当前连接数
-func (h *Hub) ClientCount() int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return len(h.clients)
-}
-
-// DeviceClientCount 获取设备连接数
-func (h *Hub) DeviceClientCount() int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return len(h.deviceClients)
-}
-
-// UserClientCount 获取用户管理端连接数
-func (h *Hub) UserClientCount() int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	count := 0
-	for _, set := range h.ownerClients {
-		count += len(set)
-	}
-	return count
-}
-
 // IsDeviceOnline 判断设备是否在线
 func (h *Hub) IsDeviceOnline(deviceID string) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	_, ok := h.deviceClients[deviceID]
 	return ok
-}
-
-// GetOnlineDevices 获取所有在线设备ID列表
-func (h *Hub) GetOnlineDevices() []string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	ids := make([]string, 0, len(h.deviceClients))
-	for id := range h.deviceClients {
-		ids = append(ids, id)
-	}
-	return ids
 }

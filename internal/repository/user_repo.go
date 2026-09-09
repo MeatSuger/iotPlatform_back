@@ -80,14 +80,3 @@ func (r *UserRepo) Page(ctx context.Context, page, size int, name string) ([]*en
 		All(ctx)
 	return users, total, err
 }
-
-// IsExist 判断用户是否存在
-func (r *UserRepo) IsExist(ctx context.Context, id uint) (bool, error) {
-	n, err := r.client.User.Query().Where(entuser.IDEQ(id)).Count(ctx)
-	return n > 0, err
-}
-
-// UpdatePassword 更新密码
-func (r *UserRepo) UpdatePassword(ctx context.Context, id uint, hashed string) error {
-	return r.client.User.UpdateOneID(id).SetPasswd(hashed).Exec(ctx)
-}

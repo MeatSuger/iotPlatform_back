@@ -27,17 +27,6 @@ func (m *mockBatchWriter) FlushReports(ctx context.Context, reports []BufferedRe
 	m.mu.Unlock()
 	return nil
 }
-
-func (m *mockBatchWriter) flushedCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	n := 0
-	for _, batch := range m.flushed {
-		n += len(batch)
-	}
-	return n
-}
-
 func TestNewDeviceDataBuffer(t *testing.T) {
 	mock := &mockBatchWriter{}
 	buf := NewDeviceDataBuffer(nil, mock)

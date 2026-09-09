@@ -1,6 +1,7 @@
 package util
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -25,38 +26,18 @@ func TestNormalizeDeviceID_ShouldTrimAndLowercase(t *testing.T) {
 	}
 }
 
-func TestIsValidDeviceID_ShouldValidateHex6(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected bool
-	}{
-		{"abc123", true},
-		{"123456", true},
-		{"abcdef", true},
-		{"ABCDEF", true},   // 大写自动转小写后合法
-		{"abc12", false},   // 过短
-		{"abc1234", false}, // 过长
-		{"ghijk1", false},  // 非法十六进制
-		{"", false},
-		{"!@#$%^", false},
-	}
-
-	for _, tt := range tests {
-		result := IsValidDeviceID(tt.input)
-		if result != tt.expected {
-			t.Errorf("IsValidDeviceID(%q) = %v, want %v", tt.input, result, tt.expected)
-		}
-	}
-}
-
 func TestGenerateShortDeviceID_ShouldBeLowerHexWithLength6(t *testing.T) {
+	hexChars := "0123456789abcdef"
 	for range 100 {
 		id := GenerateShortDeviceID()
 		if len(id) != 6 {
 			t.Errorf("GenerateShortDeviceID() length = %d, want 6", len(id))
 		}
-		if !IsValidDeviceID(id) {
-			t.Errorf("GenerateShortDeviceID() = %q, not a valid 6-char hex", id)
+		for _, r := range id {
+			if !strings.ContainsRune(hexChars, r) {
+				t.Errorf("GenerateShortDeviceID() = %q, not lowercase hex", id)
+				break
+			}
 		}
 	}
 }

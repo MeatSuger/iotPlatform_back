@@ -237,20 +237,6 @@ func (s *UserService) Page(ctx context.Context, page, size int, name string) ([]
 	return users, int64(total), err
 }
 
-// IsExist 判断用户是否存在
-func (s *UserService) IsExist(ctx context.Context, id uint) (bool, error) {
-	return s.repo.IsExist(ctx, id)
-}
-
-// UpgradePasswordHash 将密码升级为 bcrypt 哈希（兼容旧明文密码的迁移场景）
-func (s *UserService) UpgradePasswordHash(ctx context.Context, userID uint, plainPassword string) error {
-	hashed, err := bcrypt.GenerateFromPassword([]byte(plainPassword), bcrypt.DefaultCost)
-	if err != nil {
-		return fmt.Errorf("生成bcrypt哈希失败: %w", err)
-	}
-	return s.repo.UpdatePassword(ctx, userID, string(hashed))
-}
-
 func verifyPassword(stored, input string) bool {
 	if isBcryptHash(stored) {
 		return bcrypt.CompareHashAndPassword([]byte(stored), []byte(input)) == nil

@@ -169,12 +169,3 @@ func TestInfluxDBService_HandleWriteError(t *testing.T) {
 		assert.ErrorContains(t, out, "server error [429]: rate limited")
 	})
 }
-
-func TestInfluxDBService_LogWriteError(t *testing.T) {
-	svc := &InfluxDBService{database: "iot"}
-
-	svc.logWriteError("msg", 0, nil) // no-op
-	svc.logWriteError("partial", 3, &influxdb3.PartialWriteError{LineErrors: []influxdb3.PartialWriteLineError{{LineNumber: 1}}})
-	svc.logWriteError("server", 3, &influxdb3.ServerError{StatusCode: 500, Message: "err"})
-	svc.logWriteError("plain", 3, errors.New("boom"))
-}

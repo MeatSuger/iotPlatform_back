@@ -510,32 +510,3 @@ func (s *InfluxDBService) handleWriteError(err error) error {
 
 	return err
 }
-
-// logWriteError 记录写入错误日志
-func (s *InfluxDBService) logWriteError(msg string, count int, err error) {
-	if err == nil {
-		return
-	}
-
-	var partialErr *influxdb3.PartialWriteError
-	var svErr *influxdb3.ServerError
-
-	switch {
-	case errors.As(err, &partialErr):
-		zap.L().Warn("[InfluxDB] "+msg,
-			zap.Int("totalPoints", count),
-			zap.Int("failedLines", len(partialErr.LineErrors)),
-		)
-	case errors.As(err, &svErr):
-		zap.L().Warn("[InfluxDB] "+msg,
-			zap.Int("count", count),
-			zap.Int("statusCode", svErr.StatusCode),
-			zap.String("message", svErr.Message),
-		)
-	default:
-		zap.L().Warn("[InfluxDB] "+msg,
-			zap.Int("count", count),
-			zap.Error(err),
-		)
-	}
-}

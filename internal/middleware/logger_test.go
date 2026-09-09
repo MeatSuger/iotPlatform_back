@@ -16,11 +16,11 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
-// withObserverLogger 将全局 zap.L() 替换为观测器 logger，测试结束后还原
+// withObserverLogger 将全局 zap.L() 替换为观测器 logger，测试结束后还原原 logger
 func withObserverLogger(t *testing.T, fn func(obs *observer.ObservedLogs)) {
 	core, obs := observer.New(zapcore.DebugLevel)
-	zap.ReplaceGlobals(zap.New(core))
-	defer zap.ReplaceGlobals(zap.NewNop())
+	restore := zap.ReplaceGlobals(zap.New(core)) // 返回原 logger 的恢复函数
+	t.Cleanup(restore)
 	fn(obs)
 }
 

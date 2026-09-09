@@ -144,16 +144,3 @@ func stopPGDebounce(s *DeviceReportService) {
 	s.pgUpdatePending = make(map[string]time.Time)
 	s.pgUpdateMu.Unlock()
 }
-
-func testDevice(id string) *ent.Device {
-	now := time.Now()
-	return &ent.Device{
-		ID:         id,
-		DeviceName: "测试设备",
-		DeviceType: "sensor",
-		OwnerID:    1,
-		Status:     "ONLINE",
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}
-}
