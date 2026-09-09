@@ -1856,10 +1856,6 @@ const docTemplate = `{
                 "id"
             ],
             "properties": {
-                "config": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
                 "driver": {
                     "type": "string"
                 },
@@ -1871,6 +1867,10 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "specs": {
+                    "type": "object",
+                    "additionalProperties": {}
                 }
             }
         },
@@ -1926,10 +1926,6 @@ const docTemplate = `{
                 "type"
             ],
             "properties": {
-                "attrs": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
                 "dataType": {
                     "type": "string"
                 },
@@ -1946,12 +1942,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "specs": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "thresholds": {
-                    "type": "object",
-                    "additionalProperties": {}
+                    "$ref": "#/definitions/entity.SensorSpecs"
                 },
                 "type": {
                     "type": "string"
@@ -1981,8 +1972,45 @@ const docTemplate = `{
                 "value": {}
             }
         },
+        "entity.SensorSpecs": {
+            "type": "object",
+            "properties": {
+                "max": {
+                    "type": "number"
+                },
+                "maxLen": {
+                    "type": "integer"
+                },
+                "min": {
+                    "type": "number"
+                },
+                "step": {
+                    "type": "number"
+                },
+                "thresholds": {
+                    "$ref": "#/definitions/entity.SpecsThresholds"
+                },
+                "values": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "entity.SensorUpdateRequest": {
             "type": "object"
+        },
+        "entity.SpecsThresholds": {
+            "type": "object",
+            "properties": {
+                "max": {
+                    "type": "number"
+                },
+                "min": {
+                    "type": "number"
+                }
+            }
         },
         "service.DeviceParameters": {
             "type": "object",

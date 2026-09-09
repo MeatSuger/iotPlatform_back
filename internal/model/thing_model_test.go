@@ -105,7 +105,7 @@ func TestSensorWithLatest_MarshalShape(t *testing.T) {
 	ts := time.Now()
 	sensors := AttachLatest([]Sensor{testDef("temperature", "温度")},
 		[]SensorData{{Name: "temperature", Type: "temperature", Value: 25.5, Timestamp: ts}})
-	actuators := []Actuator{{ID: "led1", Name: "指示灯", Driver: "led", Config: map[string]any{"gpio": 2}}}
+	actuators := []Actuator{{ID: "led1", Name: "指示灯", Driver: "led", Specs: map[string]any{"gpio": 2}}}
 
 	raw, err := json.Marshal(map[string]any{"sensors": sensors, "actuators": actuators})
 	assert.NoError(t, err)

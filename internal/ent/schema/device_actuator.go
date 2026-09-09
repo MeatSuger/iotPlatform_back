@@ -17,16 +17,14 @@ import (
 // ≤11 字符 —— 与固件 periph 设备名（控制命令 action / 内部缓冲）契约一致
 var actuatorIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,10}$`)
 
-// actuatorDrivers 固件侧支持的执行器驱动（与 firmware/main/peripherals/drivers 对齐）
-var actuatorDrivers = []string{"led", "servo", "speaker"}
-
 // DeviceActuator 设备执行器定义（物模型），对应表 iot_device_actuator
 //
 // 与 DeviceSensor 同构：定义本身仅持久化，经 Apply 编译进
 // DeviceConfig.payload.actuators 后版本化下发；设备据此实例化/卸载执行器，
 // 运行期动作经 type=control 命令按 id（=action）路由执行。
-// config 字段（驱动参数 JSON 文本，如 gpio/count）结构由各驱动 probe 约定，
+// specs 字段（驱动参数 JSON 文本，如 gpio/count）结构由各驱动 probe 约定，
 // 见 API 文档「Actuator」章节与固件 docs/mqtt-api.md。
+// 命名统一：原 params 列改名 specs（与 Sensor 定义体同名）。
 type DeviceActuator struct {
 	ent.Schema
 }
@@ -59,9 +57,9 @@ func (DeviceActuator) Fields() []ent.Field {
 			MaxLen(50).
 			NotEmpty().
 			StructTag(`json:"driver"`),
-		field.Text("params").
+		field.Text("specs").
 			Default("").
-			StructTag(`json:"config"`),
+			StructTag(`json:"specs"`),
 		field.Bool("enabled").
 			Default(true).
 			StructTag(`json:"enabled"`),

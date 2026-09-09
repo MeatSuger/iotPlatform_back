@@ -299,17 +299,14 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
 {
   "network":  { "wifi": {"ssid": "", "password": ""},
                 "mqtt": {"host": "", "port": 1883, "tls": false} },
-  "sensor":   { "reportInterval": 60,
-                "thresholds": {"temperature": {"min": 0, "max": 100}} },
-  "sensors":  [ {"id": "temperature", "name": "温度", "type": "temperature",
+  "sensor":   { "reportInterval": 60 },
+  "sensors":  [ {"id": "temperature", "type": "temperature",
                  "dataType": "float", "unit": "°C",
-                 "specs": {"min": -40, "max": 125, "step": 0.1},
-                 "reportInterval": 60,
-                 "thresholds": {"min": 0, "max": 100, "alarm": true},
-                 "attrs": {}, "enabled": true} ],
-  "actuators": [ {"id": "servo1", "name": "云台舵机", "driver": "servo",
-                   "enabled": true,
-                   "config": {"gpio": 18, "min_pulse_us": 500,
+                 "specs": {"min": -40, "max": 125, "step": 0.1,
+                            "thresholds": {"min": 0, "max": 100, "alarm": true}},
+                 "enabled": true} ],
+  "actuators": [ {"id": "servo1", "driver": "servo", "enabled": true,
+                   "specs": {"gpio": 18, "min_pulse_us": 500,
                               "max_pulse_us": 2500, "min_angle": 0,
                               "max_angle": 180}} ],
   "camera":   { "protocol": "smtp",
@@ -320,7 +317,7 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
 }
 ```
 
-> 分区说明：`network` 网络连接、`sensor` 传感器全局采样/阈值、`sensors` 传感器定义列表（物模型，见 [4.6](#46-sensor传感器定义物模型)，由 `POST /sensors/apply` 编译写入）、`actuators` 执行器定义列表（物模型，见 [4.7](#47-actuator执行器定义--物模型)，由 `POST /actuators/apply` 编译写入；`id` = 设备侧执行器名 = 控制命令 `action`，`config` 为驱动参数）、`camera` 摄像头协议（SMTP/RTSP/ONVIF 等）、`ota` 固件升级（**预留扩展点，暂不实现升级流程**）。`payload` 为整体快照，`version` 标识其代数。
+> 分区说明：`network` 网络连接、`sensor` 传感器全局采样周期（物模型键清理后仅剩 `reportInterval`，告警阈值已收敛到每传感器 `specs.thresholds`）、`sensors` 传感器定义列表（**下发裁剪版**：仅 `id/type/dataType/unit/specs/reportInterval/enabled`，无管理字段；继承全局周期的传感器省略 `reportInterval`，见 [4.6](#46-sensor传感器定义物模型)，由 `POST /sensors/apply` 编译写入）、`actuators` 执行器定义列表（**下发裁剪版**：仅 `id/driver/specs/enabled`；`id` = 设备侧执行器名 = 控制命令 `action`，`specs` 为驱动参数，见 [4.7](#47-actuator执行器定义--物模型)）、`camera` 摄像头协议（SMTP/RTSP/ONVIF 等）、`ota` 固件升级（**预留扩展点，暂不实现升级流程**）。`payload` 为整体快照，`version` 标识其代数。
 
 ### 4.6 Sensor（传感器定义 / 物模型）
 
@@ -333,12 +330,10 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
 | `id` | string | Create: REQUIRED · IMMUTABLE | 传感器标识符：字母开头，仅含字母/数字/下划线，≤50 字符（对应新大陆 `ApiTag`），设备内唯一 |
 | `name` | string | Create: REQUIRED · Update: OPTIONAL | 传感器名称，≤100 字符 |
 | `type` | string | Create: REQUIRED · Update: OPTIONAL | 传感器类别，≤50 字符（如 `temperature` / `humidity` / `light` / `switch` / `custom`） |
-| `dataType` | string | OPTIONAL | 值类型：`float`（默认）/ `int` / `bool` / `text` / `enum` |
+| `dataType` | string | OPTIONAL | 值类型：`float`（默认）/ `int` / `bool` / `text` / `enum`。**上报值按此校验**：类型不符的数据点被丢弃并告警（见 6.3 设备上报） |
 | `unit` | string | OPTIONAL | 单位，≤32 字符（如 `°C` / `%RH`） |
-| `specs` | object | OPTIONAL | 量程规格（阿里云 TSL 风格）：`{"min": number, "max": number, "step": number}`；传 `{}` 显式清空 |
-| `reportInterval` | int | OPTIONAL | 采样/上报周期（秒），`0`=继承设备全局配置 |
-| `thresholds` | object | OPTIONAL | 告警阈值：`{"min": number, "max": number, "alarm": bool}`；传 `{}` 显式清空 |
-| `attrs` | object | OPTIONAL | 扩展属性（新大陆 `TypeAttrs` 风格，自由键值）；传 `{}` 显式清空 |
+| `specs` | object | OPTIONAL | **统一定义体（强类型）**：原 `specs`/`thresholds`/`attrs` 合并为一个对象——`float/int` 用 `min/max/step`，`enum` 用 `values`，`text` 用 `maxLen`，告警用 `thresholds{min,max,…}`，其余自由键平铺透传（原 `attrs` 能力）；已知键类型错误直接拒绝；传 `{}` 显式清空 |
+| `reportInterval` | int / null | OPTIONAL | 采样/上报周期（秒，>0）；**`null` = 继承设备级全局周期**（`DefaultDeviceConfig.sensor.reportInterval`）。Update 传 `null` 恢复继承 |
 | `enabled` | bool | OPTIONAL | 是否启用，默认 `true`（禁用后设备应停止该传感器采样） |
 | `createdAt` / `updatedAt` | string | OUTPUT_ONLY | 创建 / 更新时间 |
 
@@ -351,15 +346,17 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
   "type": "temperature",
   "dataType": "float",
   "unit": "°C",
-  "specs": {"min": -40, "max": 125, "step": 0.1},
+  "specs": {"min": -40, "max": 125, "step": 0.1,
+             "thresholds": {"min": 0, "max": 100, "alarm": true},
+             "gpio": 4, "driver": "dht22"},
   "reportInterval": 60,
-  "thresholds": {"min": 0, "max": 100, "alarm": true},
-  "attrs": {"gpio": 4, "driver": "dht22"},
   "enabled": true
 }
 ```
 
-> **增量更新语义**：Update 方法仅修改请求体中**出现**的字段；`config` 传 `{}` 视为显式清空。`id` 为资源标识，创建后不可变（AIP-136）。
+> **增量更新语义**：Update 方法仅修改请求体中**出现**的字段；`specs` 传 `{}` 视为显式清空，`reportInterval` 传 `null` 恢复继承全局周期。`id` 为资源标识，创建后不可变（AIP-136）。
+
+> **键清理（2026 统一）**：`thresholds` / `attrs` 顶层字段已删除（并入 `specs`），全局 `sensor.thresholds` 已删除；存量 DB 列迁移见 `deployments/sql/init.sql` 注释。
 
 ### 4.7 Actuator（执行器定义 / 物模型）
 
@@ -370,7 +367,7 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
 | `id` | string | Create: REQUIRED · IMMUTABLE | 执行器标识符：小写字母开头，仅含小写字母/数字/下划线，**≤11 字符**（固件 periph 设备名 / 控制命令 `action` 契约），设备内唯一 |
 | `name` | string | OPTIONAL | 执行器名称，≤100 字符 |
 | `driver` | string | Create: REQUIRED · Update: OPTIONAL | 驱动名：`led` / `servo` / `speaker`（与固件驱动对齐，未来可扩展） |
-| `config` | object | OPTIONAL | 驱动参数（GPIO/数量/脉宽范围等，结构见固件协议文档）；传 `{}` 显式清空 |
+| `specs` | object | OPTIONAL | 驱动参数（GPIO/数量/脉宽范围等，**命名已统一**：原 `config` 改名为 `specs`，与 Sensor 定义体同名；结构见固件协议文档，平台侧不过度约束）；传 `{}` 显式清空 |
 | `enabled` | bool | OPTIONAL | 是否启用，默认 `true`（禁用 = 期望设备卸载该执行器） |
 | `createdAt` / `updatedAt` | string | OUTPUT_ONLY | 创建 / 更新时间 |
 
@@ -381,8 +378,8 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
   "id": "servo1",
   "name": "云台舵机",
   "driver": "servo",
-  "config": {"gpio": 18, "min_pulse_us": 500, "max_pulse_us": 2500,
-             "min_angle": 0, "max_angle": 180},
+  "specs": {"gpio": 18, "min_pulse_us": 500, "max_pulse_us": 2500,
+            "min_angle": 0, "max_angle": 180},
   "enabled": true
 }
 ```
@@ -403,7 +400,7 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
 ```json
 // Create
 {"id": "servo1", "name": "云台舵机", "driver": "servo",
- "config": {"gpio": 18, "min_pulse_us": 500, "max_pulse_us": 2500},
+ "specs": {"gpio": 18, "min_pulse_us": 500, "max_pulse_us": 2500},
  "enabled": true}
 
 // Apply 响应
@@ -779,18 +776,18 @@ POST /api/users/2/delete
     "lastActiveTime": "2026-08-31T20:30:00+08:00",
     "sensors": [
       {"id": "temperature", "name": "温度", "type": "temperature", "dataType": "float",
-       "unit": "°C", "specs": {"min": -40, "max": 125, "step": 0.1}, "reportInterval": 60,
-       "thresholds": {"min": 0, "max": 100, "alarm": true}, "attrs": {}, "enabled": true,
+       "unit": "°C", "specs": {"min": -40, "max": 125, "step": 0.1,
+                               "thresholds": {"min": 0, "max": 100, "alarm": true}},
+       "reportInterval": 60, "enabled": true,
        "createdAt": "2026-09-04T10:00:00.000+08:00", "updatedAt": "2026-09-04T10:00:00.000+08:00",
        "latest": {"value": 25.5, "timestamp": "2026-08-31T20:30:00.000+08:00"}},
       {"id": "switch_1", "name": "开关", "type": "switch", "dataType": "bool",
-       "unit": "", "specs": {}, "reportInterval": 0, "thresholds": {}, "attrs": {},
        "enabled": true, "createdAt": "2026-09-05T09:00:00.000+08:00", "updatedAt": "2026-09-05T09:00:00.000+08:00",
        "latest": null}
     ],
     "actuators": [
       {"id": "servo1", "name": "云台舵机", "driver": "servo",
-       "config": {"gpio": 18, "min_pulse_us": 500, "max_pulse_us": 2500},
+       "specs": {"gpio": 18, "min_pulse_us": 500, "max_pulse_us": 2500},
        "enabled": true, "createdAt": "2026-09-05T10:00:00.000+08:00", "updatedAt": "2026-09-05T10:00:00.000+08:00"}
     ]
   }
@@ -1130,8 +1127,9 @@ GET /api/devices/90431b/sensors
 ```json
 {"code": 200, "message": "success", "data": [
   {"id": "temperature", "name": "温度", "type": "temperature", "dataType": "float",
-   "unit": "°C", "specs": {"min": -40, "max": 125, "step": 0.1}, "reportInterval": 60,
-   "thresholds": {"min": 0, "max": 100, "alarm": true}, "attrs": {}, "enabled": true,
+   "unit": "°C", "specs": {"min": -40, "max": 125, "step": 0.1,
+                           "thresholds": {"min": 0, "max": 100, "alarm": true}},
+   "reportInterval": 60, "enabled": true,
    "createdAt": "2026-09-04T10:00:00.000+08:00", "updatedAt": "2026-09-04T10:00:00.000+08:00"}
 ]}
 ```
@@ -1163,15 +1161,16 @@ GET /api/devices/90431b/sensors
 | `id` | string | REQUIRED（IMMUTABLE） |
 | `name` | string | REQUIRED |
 | `type` | string | REQUIRED |
-| `dataType` / `unit` / `specs` / `reportInterval` / `thresholds` / `attrs` / `enabled` | — | OPTIONAL |
+| `dataType` / `unit` / `specs` / `reportInterval` / `enabled` | — | OPTIONAL |
 
 **示例**
 
 ```json
 // 请求
 {"id": "temperature", "name": "温度", "type": "temperature", "dataType": "float",
- "unit": "°C", "specs": {"min": -40, "max": 125, "step": 0.1}, "reportInterval": 60,
- "thresholds": {"min": 0, "max": 100, "alarm": true}}
+ "unit": "°C", "specs": {"min": -40, "max": 125, "step": 0.1,
+                         "thresholds": {"min": 0, "max": 100, "alarm": true}},
+ "reportInterval": 60}
 
 // 响应 —— data 为创建后的完整定义
 {"code": 200, "message": "传感器已创建", "data": {"id": "temperature", "name": "温度", "...": "..."}}
@@ -1187,9 +1186,9 @@ GET /api/devices/90431b/sensors
 
 **授权**：UserAuth（仅设备属主，否则 403）。
 
-**请求体**（JSON，全部 OPTIONAL，**增量语义**：仅出现的字段被更新；`specs` / `thresholds` / `attrs` 传 `{}` 显式清空；至少传一个字段）：
+**请求体**（JSON，全部 OPTIONAL，**增量语义**：仅出现的字段被更新；`specs` 传 `{}` 显式清空，`reportInterval` 传 `null` 恢复继承全局周期；至少传一个字段）：
 
-`name` / `type` / `dataType` / `unit` / `specs` / `reportInterval` / `thresholds` / `attrs` / `enabled`
+`name` / `type` / `dataType` / `unit` / `specs` / `reportInterval` / `enabled`
 
 **示例**
 
@@ -1503,6 +1502,20 @@ conn, _, err := websocket.DefaultDialer.Dial("wss://api.meatsuger.top/api/ws/dev
 > **config 下行语义（设备“订阅即拉取”）**：平台在 `POST /api/devices/{deviceId}/config` 保存后，由 MQTT 发布器以 QoS1 + retained 发布到 `iot/{deviceId}/config`。设备只需 SUBSCRIBE 该主题即可拿到最新配置——在线时实时收到；离线/重启设备在下次订阅时由 Broker 自动补投 retained 的**最新版本**（无逐条补发，仅快照语义，与 `/config` 快照一致）。配置变更同时经 WS 实时推送 / HTTP `GET /commands` 队列轮询 / MQTT retained 三通道触达，设备任选其一，以 `version` 幂等去重。
 
 > **config/report 上行语义**：网关收到 `iot/{deviceId}/config/report`（连接鉴权设备必须等于话题中的设备 ID，防跨设备伪造）后解析回执并复用 `DeviceConfigService.Report` 落库（回写 `reportedVersion`/`reportedPayload` 并置 `acked`），与 HTTP `POST /config/report` 完全等价。
+
+#### 设备在线 / 离线判定
+
+| 事件 | 触发条件 | 平台侧动作 |
+|------|----------|------------|
+| **上线** | 设备 SUBSCRIBE 自身配置/命令主题（`iot/{id}/config`、`iot/{id}/cmd`、`iot/{id}/#`，仅限本连接鉴权设备自身，防跨设备伪造） | Redis 状态置 `ONLINE`（同原生 WS 上线行为）+ 推送 `deviceOnline` 给 owner 管理端 |
+| **下线（立即）** | 连接关闭（正常 DISCONNECT / 断网 / 被新连接顶替除外） | 立即置 `OFFLINE`（Redis+PG）+ 推送 `deviceOffline`，**不等**离线同步器周期扫描 |
+| **下线（空闲超时）** | 无任何 MQTT 帧（含 PINGREQ 心跳）超过 1.5×keepalive（设备 CONNECT 携带；keepalive=0 时回退 `idle-timeout-sec`，默认 5min；夹在 15s~30min） | 强制断开双端 → 立即置 `OFFLINE` + 推送 `deviceOffline` |
+
+> **连接存活 ≠ 离线**：离线同步器（`offline-scan-interval` 周期）会跳过「MQTT 桥接连接仍存活」的设备（`IsConnected`），即使其长时间未上报数据，避免误判。
+>
+> **遗嘱（Will）**：设备 CONNECT 携带的遗嘱原样随帧透传，异常断线时由外部 Broker 按遗嘱发布到遗嘱主题（透明转发天然生效）；平台离线判定不依赖遗嘱主题订阅，由网关直接检测连接死亡驱动，更快更可靠。
+>
+> **同设备多连接**：新连接到来会踢下线旧连接（与原生 WS 一致，同一设备只保留一个活跃桥接）。
 
 #### 连接示例
 

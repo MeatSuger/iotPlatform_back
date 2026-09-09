@@ -79,10 +79,8 @@ func (s *DeviceSensorService) Create(ctx context.Context, deviceID string, req e
 		Type:           req.Type,
 		DataType:       dataType,
 		Unit:           req.Unit,
-		Specs:          marshalJSONField(req.Specs),
+		Specs:          marshalSpecs(req.Specs),
 		ReportInterval: req.ReportInterval,
-		Thresholds:     marshalJSONField(req.Thresholds),
-		Attrs:          marshalJSONField(req.Attrs),
 		Enabled:        enabled,
 	})
 	if err != nil {
@@ -103,24 +101,28 @@ func (s *DeviceSensorService) Update(ctx context.Context, deviceID, sensorID str
 	}
 
 	fields := repository.SensorUpdateFields{
-		Name:           req.Name,
-		Type:           req.Type,
-		DataType:       req.DataType,
-		Unit:           req.Unit,
-		ReportInterval: req.ReportInterval,
-		Enabled:        req.Enabled,
+		Name:     req.Name,
+		Type:     req.Type,
+		DataType: req.DataType,
+		Unit:     req.Unit,
+		Enabled:  req.Enabled,
 	}
 	if req.Specs != nil {
 		v := string(*req.Specs)
+		if v == "{}" {
+			v = "" // 显式清空 → 落库空串（无定义统一语义，响应省略 specs）
+		}
 		fields.Specs = &v
 	}
-	if req.Thresholds != nil {
-		v := string(*req.Thresholds)
-		fields.Thresholds = &v
-	}
-	if req.Attrs != nil {
-		v := string(*req.Attrs)
-		fields.Attrs = &v
+	if req.ReportInterval != nil {
+		if string(*req.ReportInterval) == "null" {
+			// reportInterval: null = 恢复继承全局采样周期（列置 NULL）
+			fields.ClearReportInterval = true
+		} else {
+			var n int
+			_ = json.Unmarshal(*req.ReportInterval, &n) // Validate 已保证为合法正整数
+			fields.ReportInterval = &n
+		}
 	}
 
 	row, err := s.sensorRepo.Update(ctx, deviceID, sensorID, fields)
@@ -176,9 +178,9 @@ func (s *DeviceSensorService) Apply(ctx context.Context, deviceID string) (*enti
 		}
 	}
 
-	sensors := make([]entity.Sensor, 0, len(rows))
+	sensors := make([]entity.SensorWire, 0, len(rows))
 	for _, row := range rows {
-		sensors = append(sensors, sensorToDTO(row))
+		sensors = append(sensors, sensorToWire(row))
 	}
 	payload["sensors"] = sensors
 
@@ -195,7 +197,7 @@ func (s *DeviceSensorService) Apply(ctx context.Context, deviceID string) (*enti
 	}, nil
 }
 
-// sensorToDTO ent 实体 → DTO（JSON 文本字段解析为对象，空串输出空对象）
+// sensorToDTO ent 实体 → 管理侧 DTO（specs 强类型解析；空串 = 无定义输出为空字段）
 func sensorToDTO(row *ent.DeviceSensor) entity.Sensor {
 	return entity.Sensor{
 		ID:             row.SensorID,
@@ -203,14 +205,55 @@ func sensorToDTO(row *ent.DeviceSensor) entity.Sensor {
 		Type:           row.Type,
 		DataType:       row.DataType,
 		Unit:           row.Unit,
-		Specs:          parseJSONField(row.Specs),
+		Specs:          parseSpecs(row.Specs),
 		ReportInterval: row.ReportInterval,
-		Thresholds:     parseJSONField(row.Thresholds),
-		Attrs:          parseJSONField(row.Attrs),
 		Enabled:        row.Enabled,
 		CreatedAt:      common.DateTimeFrom(row.CreatedAt),
 		UpdatedAt:      common.DateTimeFrom(row.UpdatedAt),
 	}
+}
+
+// sensorToWire ent 实体 → 下行裁剪版（Apply 编译进 DeviceConfig.payload.sensors）
+func sensorToWire(row *ent.DeviceSensor) entity.SensorWire {
+	return entity.SensorWire{
+		ID:             row.SensorID,
+		Type:           row.Type,
+		DataType:       row.DataType,
+		Unit:           row.Unit,
+		Specs:          parseSpecs(row.Specs),
+		ReportInterval: row.ReportInterval,
+		Enabled:        row.Enabled,
+	}
+}
+
+// marshalSpecs 强类型 specs → JSON 文本；nil / 空定义存空串（无定义统一语义）
+// 序列化失败时告警并降级为空串（输入均经模型层校验，此处为异常兜底，不应静默）
+func marshalSpecs(s *entity.SensorSpecs) string {
+	if s == nil {
+		return ""
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		zap.L().Warn("[物模型] specs 序列化失败，落库为空串", zap.Error(err))
+		return ""
+	}
+	if string(b) == "{}" {
+		return ""
+	}
+	return string(b)
+}
+
+// parseSpecs JSON 文本 → 强类型 specs；空串 / 非法时返回 nil（响应省略该字段）
+func parseSpecs(s string) *entity.SensorSpecs {
+	if s == "" {
+		return nil
+	}
+	var specs entity.SensorSpecs
+	if err := json.Unmarshal([]byte(s), &specs); err != nil {
+		zap.L().Warn("[物模型] specs 解析失败，输出空定义", zap.String("specs", s), zap.Error(err))
+		return nil
+	}
+	return &specs
 }
 
 // marshalJSONField map → JSON 文本；nil / 空 map 存空串
@@ -222,7 +265,7 @@ func marshalJSONField(m map[string]any) string {
 	b, err := json.Marshal(m)
 	if err != nil {
 		zap.L().Warn("[物模型] JSON 字段序列化失败，落库为空串",
-			zap.String("field", "specs/thresholds/attrs/config"), zap.Error(err))
+			zap.String("field", "specs"), zap.Error(err))
 		return ""
 	}
 	return string(b)

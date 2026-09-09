@@ -25,7 +25,8 @@ type DeviceReportService struct {
 	influxSvc  *InfluxDBService
 	cache      *cache.RedisCache
 	deviceSvc  *DeviceService
-	buffer     *DeviceDataBuffer // Redis 写缓冲（可选）
+	sensorSvc  *DeviceSensorService // 上报值类型校验用（可空：nil = 跳过校验）
+	buffer     *DeviceDataBuffer    // Redis 写缓冲（可选）
 
 	// L1 本地内存缓存：消除热点设备的 Redis 往返延迟
 	localCache *cache.LocalCache
@@ -58,6 +59,62 @@ func NewDeviceReportService(
 // SetBuffer 注入缓冲器（由 main 初始化后调用）
 func (s *DeviceReportService) SetBuffer(buf *DeviceDataBuffer) {
 	s.buffer = buf
+}
+
+// SetSensorSvc 注入传感器定义服务（由 main 初始化后调用，nil 时跳过上报值类型校验）
+func (s *DeviceReportService) SetSensorSvc(svc *DeviceSensorService) {
+	s.sensorSvc = svc
+}
+
+// validateSensorValues 按物模型定义校验上报值类型与 dataType 对齐（JSON 格式统一）。
+//
+// 定义列表走缓存（L1/L2），热设备命中 L1 为纯内存读取；定义缺失/加载失败时放行
+// （fail-open，保持上报链路可用）。非法数据点逐条丢弃并告警，字符串 "400ppm" 之类的
+// 类型错乱值不再进入类型敏感的 InfluxDB。
+func (s *DeviceReportService) validateSensorValues(ctx context.Context, deviceID string, dto *entity.DeviceStatusDTO) {
+	if s.sensorSvc == nil || len(dto.Sensors) == 0 {
+		return
+	}
+	defs, err := s.sensorSvc.List(ctx, deviceID)
+	if err != nil {
+		zap.L().Warn("[DeviceReport] 物模型定义加载失败，跳过值校验",
+			zap.String("deviceID", deviceID), zap.Error(err))
+		return
+	}
+	if len(defs) == 0 {
+		return
+	}
+
+	byName := make(map[string]entity.Sensor, len(defs)*2)
+	for _, def := range defs {
+		byName[def.ID] = def
+		byName[def.Name] = def // 上报 name 兼容 id / 名称两种写法
+	}
+
+	valid := dto.Sensors[:0]
+	dropped := 0
+	for _, sd := range dto.Sensors {
+		if def, ok := byName[sd.Name]; ok {
+			if err := entity.ValidateSensorValue(def.DataType, sd.Value, def.Specs); err != nil {
+				zap.L().Warn("[DeviceReport] 丢弃类型错乱的上报数据点",
+					zap.String("deviceID", deviceID),
+					zap.String("sensor", sd.Name),
+					zap.String("dataType", def.DataType),
+					zap.Any("value", sd.Value),
+					zap.Error(err))
+				dropped++
+				continue
+			}
+		}
+		valid = append(valid, sd)
+	}
+	dto.Sensors = valid
+	if dropped > 0 {
+		zap.L().Warn("[DeviceReport] 上报值校验",
+			zap.String("deviceID", deviceID),
+			zap.Int("dropped", dropped),
+			zap.Int("kept", len(valid)))
+	}
 }
 
 // schedulePGUpdate 防抖批量更新 PostgreSQL 设备活跃时间（合并 5s 窗口内多次上报为一次批量更新）
@@ -126,6 +183,9 @@ func (s *DeviceReportService) ReportStatusFast(ctx context.Context, deviceID str
 func (s *DeviceReportService) reportStatusFast(ctx context.Context, deviceID string, dto entity.DeviceStatusDTO) error {
 	now := time.Now()
 	nowMs := now.UnixMilli()
+
+	// 0. 上报值类型校验（与物模型 dataType 对齐；丢弃类型错乱的数据点）
+	s.validateSensorValues(ctx, deviceID, &dto)
 
 	// 1. L1 本地缓存：快速确认设备存在（避免 Redis GET + JSON Unmarshal）
 	localKey := "dev:" + deviceID

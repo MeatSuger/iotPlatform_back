@@ -41,7 +41,7 @@ func validActuatorReq(id string) entity.ActuatorCreateRequest {
 		ID:     id,
 		Name:   "舵机",
 		Driver: "servo",
-		Config: map[string]any{"gpio": 18, "min_pulse_us": 500, "max_pulse_us": 2500},
+		Specs:  map[string]any{"gpio": 18, "min_pulse_us": 500, "max_pulse_us": 2500},
 	}
 }
 
@@ -54,7 +54,7 @@ func TestDeviceActuatorService_CreateAndGet(t *testing.T) {
 	assert.Equal(t, "servo1", created.ID)
 	assert.Equal(t, "servo", created.Driver)
 	assert.True(t, created.Enabled)
-	assert.Equal(t, float64(18), created.Config["gpio"])
+	assert.Equal(t, float64(18), created.Specs["gpio"])
 
 	got, err := svc.Get(context.Background(), "dev1", "servo1")
 	assert.NoError(t, err)
@@ -73,7 +73,7 @@ func TestDeviceActuatorService_CreateDefaults(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.True(t, created.Enabled) // 缺省启用
-	assert.Empty(t, created.Config)
+	assert.Empty(t, created.Specs)
 }
 
 func TestDeviceActuatorService_CreateDuplicateID(t *testing.T) {
@@ -146,7 +146,7 @@ func TestDeviceActuatorService_UpdateIncremental(t *testing.T) {
 	assert.NotNil(t, got)
 	assert.Equal(t, newName, got.Name)
 	assert.Equal(t, "speaker", got.Driver)
-	assert.Equal(t, float64(18), got.Config["gpio"]) // 未传字段保持原值
+	assert.Equal(t, float64(18), got.Specs["gpio"]) // 未传字段保持原值
 }
 
 func TestDeviceActuatorService_UpdateClearConfig(t *testing.T) {
@@ -156,12 +156,12 @@ func TestDeviceActuatorService_UpdateClearConfig(t *testing.T) {
 	_, err := svc.Create(context.Background(), "dev1", validActuatorReq("servo1"))
 	assert.NoError(t, err)
 
-	// config 传 {} 显式清空
+	// specs 传 {} 显式清空
 	raw := json.RawMessage(`{}`)
-	got, err := svc.Update(context.Background(), "dev1", "servo1", entity.ActuatorUpdateRequest{Config: &raw})
+	got, err := svc.Update(context.Background(), "dev1", "servo1", entity.ActuatorUpdateRequest{Specs: &raw})
 	assert.NoError(t, err)
 	assert.NotNil(t, got)
-	assert.Empty(t, got.Config)
+	assert.Empty(t, got.Specs)
 }
 
 func TestDeviceActuatorService_UpdateEmptyRequest(t *testing.T) {

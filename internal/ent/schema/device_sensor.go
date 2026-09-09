@@ -21,7 +21,11 @@ var sensorIDPattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,49}$`)
 // 参考新大陆 NLECloud 传感器子资源（ApiTag/Name/DataType/TypeAttrs）与
 // 阿里云 TSL 物模型（identifier/dataType/specs）设计：
 //   - sensor_id 为传感器标识符（对应 NLECloud ApiTag），设备内唯一且创建后不可变；
-//   - specs / thresholds / attrs 以 JSON 文本持久化，结构约定见 API 文档 4.6 节；
+//   - specs 以 JSON 文本持久化（统一物模型定义体：量程/枚举/阈值/扩展键合一），
+//     结构约定见 API 文档 4.6 节；
+//   - report_interval 可空：NULL = 继承设备级全局采样周期
+//     （DeviceConfig.sensor.reportInterval）；
+//   - 已清除多余键：thresholds / attrs 列合并进 specs（存量库需迁移，见 init.sql 注释）；
 //   - 定义本身仅持久化，经 Apply 编译进 DeviceConfig.payload.sensors 后版本化下发。
 type DeviceSensor struct {
 	ent.Schema
@@ -67,14 +71,9 @@ func (DeviceSensor) Fields() []ent.Field {
 			Default("").
 			StructTag(`json:"specs"`),
 		field.Int("report_interval").
-			Default(0).
+			Optional().
+			Nillable().
 			StructTag(`json:"reportInterval"`),
-		field.Text("thresholds").
-			Default("").
-			StructTag(`json:"thresholds"`),
-		field.Text("attrs").
-			Default("").
-			StructTag(`json:"attrs"`),
 		field.Bool("enabled").
 			Default(true).
 			StructTag(`json:"enabled"`),

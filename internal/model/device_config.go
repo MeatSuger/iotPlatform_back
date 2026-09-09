@@ -36,6 +36,11 @@ type DeviceConfigSaveRequest struct {
 
 // DefaultDeviceConfig 返回一份默认协议配置样例（network/sensor/actuators/camera/ota），
 // 作为协议基线文档与测试夹具。设备端与平台据此字段结构约定 JSON 协议。
+//
+// 键清理：全局 sensor.thresholds 已删除——告警阈值统一收敛到每传感器
+// specs.thresholds（物模型），避免同一概念两处定义产生漂移；
+// sensor.reportInterval 保留为设备级全局采样周期，传感器级 reportInterval
+// 为 null 时继承该值。
 func DefaultDeviceConfig() map[string]any {
 	return map[string]any{
 		"network": map[string]any{
@@ -51,9 +56,6 @@ func DefaultDeviceConfig() map[string]any {
 		},
 		"sensor": map[string]any{
 			"reportInterval": 60,
-			"thresholds": map[string]any{
-				"temperature": map[string]any{"min": 0, "max": 100},
-			},
 		},
 		// 执行器定义数组：由 Actuator 资源（物模型）经 POST /actuators/apply 编译，
 		// id = 设备侧 periph 设备名 = 控制命令 action

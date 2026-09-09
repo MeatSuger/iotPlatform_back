@@ -2,6 +2,8 @@ package entity
 
 import (
 	"encoding/json"
+	"fmt"
+	"slices"
 	"time"
 
 	"iot-platform.local/pkg/common"
@@ -61,4 +63,35 @@ type DeviceStatus struct {
 // DeviceStatusDTO 设备状态上报请求（DTO）
 type DeviceStatusDTO struct {
 	Sensors []SensorData `json:"sensors" binding:"required"`
+}
+
+// ValidateSensorValue 校验上报值类型与物模型定义 dataType 对齐（JSON 格式统一）。
+//
+// float/int：必须为数值；bool：布尔；text：字符串；enum：字符串且在 definitions
+// specs.values 内（values 为空表示不限制取值）。类型不符返回错误，由上报服务
+// 丢弃该条数据并告警，避免类型错乱的数据进入类型敏感的 InfluxDB。
+func ValidateSensorValue(dataType string, value any, specs *SensorSpecs) error {
+	switch dataType {
+	case "float", "int":
+		if _, ok := toFloat64(value); !ok {
+			return fmt.Errorf("dataType=%s 要求数值, 收到 %T", dataType, value)
+		}
+	case "bool":
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("dataType=bool 要求布尔值, 收到 %T", value)
+		}
+	case "text":
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("dataType=text 要求字符串, 收到 %T", value)
+		}
+	case "enum":
+		str, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("dataType=enum 要求字符串值, 收到 %T", value)
+		}
+		if specs != nil && len(specs.Values) > 0 && !slices.Contains(specs.Values, str) {
+			return fmt.Errorf("dataType=enum 取值 %q 不在定义 values %v 内", str, specs.Values)
+		}
+	}
+	return nil
 }

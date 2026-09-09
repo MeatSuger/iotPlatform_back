@@ -42,16 +42,16 @@ func (r *DeviceActuatorRepo) Create(ctx context.Context, a *ent.DeviceActuator) 
 		SetActuatorID(a.ActuatorID).
 		SetName(a.Name).
 		SetDriver(a.Driver).
-		SetParams(a.Params).
+		SetSpecs(a.Specs).
 		SetEnabled(a.Enabled).
 		Save(ctx)
 }
 
-// UpdateFields 执行器定义可更新字段集合（增量语义：零值指针表示不更新）
+// ActuatorUpdateFields 执行器定义可更新字段集合（增量语义：零值指针表示不更新）
 type ActuatorUpdateFields struct {
 	Name    *string
 	Driver  *string
-	Params  *string
+	Specs   *string
 	Enabled *bool
 }
 
@@ -69,8 +69,8 @@ func (r *DeviceActuatorRepo) Update(ctx context.Context, deviceID, actuatorID st
 	if fields.Driver != nil {
 		u.SetDriver(*fields.Driver)
 	}
-	if fields.Params != nil {
-		u.SetParams(*fields.Params)
+	if fields.Specs != nil {
+		u.SetSpecs(*fields.Specs)
 	}
 	if fields.Enabled != nil {
 		u.SetEnabled(*fields.Enabled)

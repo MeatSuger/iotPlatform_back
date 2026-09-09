@@ -79,9 +79,6 @@ definitions:
     type: object
   entity.ActuatorCreateRequest:
     properties:
-      config:
-        additionalProperties: {}
-        type: object
       driver:
         type: string
       enabled:
@@ -90,6 +87,9 @@ definitions:
         type: string
       name:
         type: string
+      specs:
+        additionalProperties: {}
+        type: object
     required:
     - driver
     - id
@@ -125,9 +125,6 @@ definitions:
     type: object
   entity.SensorCreateRequest:
     properties:
-      attrs:
-        additionalProperties: {}
-        type: object
       dataType:
         type: string
       enabled:
@@ -139,11 +136,7 @@ definitions:
       reportInterval:
         type: integer
       specs:
-        additionalProperties: {}
-        type: object
-      thresholds:
-        additionalProperties: {}
-        type: object
+        $ref: '#/definitions/entity.SensorSpecs'
       type:
         type: string
       unit:
@@ -167,7 +160,31 @@ definitions:
     - type
     - value
     type: object
+  entity.SensorSpecs:
+    properties:
+      max:
+        type: number
+      maxLen:
+        type: integer
+      min:
+        type: number
+      step:
+        type: number
+      thresholds:
+        $ref: '#/definitions/entity.SpecsThresholds'
+      values:
+        items:
+          type: string
+        type: array
+    type: object
   entity.SensorUpdateRequest:
+    type: object
+  entity.SpecsThresholds:
+    properties:
+      max:
+        type: number
+      min:
+        type: number
     type: object
   service.DeviceParameters:
     properties:

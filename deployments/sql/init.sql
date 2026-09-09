@@ -117,15 +117,18 @@ CREATE TABLE IF NOT EXISTS iot_device_sensor (
     data_type       VARCHAR(20)  NOT NULL DEFAULT 'float',
     unit            VARCHAR(32)  NOT NULL DEFAULT '',
     specs           TEXT         NOT NULL DEFAULT '',
-    report_interval BIGINT       NOT NULL DEFAULT 0,
-    thresholds      TEXT         NOT NULL DEFAULT '',
-    attrs           TEXT         NOT NULL DEFAULT '',
+    report_interval BIGINT       NULL DEFAULT NULL,
     enabled         BOOLEAN      NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
 
     CONSTRAINT iot_device_sensor_iot_device_sensors FOREIGN KEY (device_id) REFERENCES iot_device(device_id) ON DELETE CASCADE
 );
+
+-- 物模型 JSON 键清理（2026 统一为一个 specs）存量库迁移：
+--   ALTER TABLE iot_device_sensor DROP COLUMN thresholds, DROP COLUMN attrs;
+--   ALTER TABLE iot_device_sensor ALTER COLUMN report_interval DROP NOT NULL;
+--   （原 thresholds 数据并入 specs.thresholds，原 attrs 数据平铺进 specs）
 CREATE UNIQUE INDEX IF NOT EXISTS devicesensor_device_id_sensor_id
     ON iot_device_sensor (device_id, sensor_id);
 
@@ -141,12 +144,15 @@ CREATE TABLE IF NOT EXISTS iot_device_actuator (
     actuator_id VARCHAR(11)  NOT NULL,
     name        VARCHAR(100) NOT NULL DEFAULT '',
     driver      VARCHAR(50)  NOT NULL,
-    params      TEXT         NOT NULL DEFAULT '',
+    specs       TEXT         NOT NULL DEFAULT '',
     enabled     BOOLEAN      NOT NULL DEFAULT TRUE,
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
 
     CONSTRAINT iot_device_actuator_iot_device_actuators FOREIGN KEY (device_id) REFERENCES iot_device(device_id) ON DELETE CASCADE
 );
+
+-- 命名统一（2026）：params 列改名 specs（与 Sensor 定义体同名），存量库迁移：
+--   ALTER TABLE iot_device_actuator RENAME COLUMN params TO specs;
 CREATE UNIQUE INDEX IF NOT EXISTS deviceactuator_device_id_actuator_id
     ON iot_device_actuator (device_id, actuator_id);

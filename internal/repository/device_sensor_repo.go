@@ -45,24 +45,21 @@ func (r *DeviceSensorRepo) Create(ctx context.Context, s *ent.DeviceSensor) (*en
 		SetDataType(s.DataType).
 		SetUnit(s.Unit).
 		SetSpecs(s.Specs).
-		SetReportInterval(s.ReportInterval).
-		SetThresholds(s.Thresholds).
-		SetAttrs(s.Attrs).
+		SetNillableReportInterval(s.ReportInterval).
 		SetEnabled(s.Enabled).
 		Save(ctx)
 }
 
-// UpdateFields 传感器定义可更新字段集合（增量语义：零值指针表示不更新）
+// SensorUpdateFields 传感器定义可更新字段集合（增量语义：零值指针表示不更新）
 type SensorUpdateFields struct {
-	Name           *string
-	Type           *string
-	DataType       *string
-	Unit           *string
-	Specs          *string
-	ReportInterval *int
-	Thresholds     *string
-	Attrs          *string
-	Enabled        *bool
+	Name                *string
+	Type                *string
+	DataType            *string
+	Unit                *string
+	Specs               *string
+	ReportInterval      *int
+	ClearReportInterval bool // true 时置 NULL（恢复继承全局采样周期）
+	Enabled             *bool
 }
 
 // Update 增量更新传感器定义，返回更新后的实体；不存在返回 ent.NotFoundError
@@ -88,14 +85,10 @@ func (r *DeviceSensorRepo) Update(ctx context.Context, deviceID, sensorID string
 	if fields.Specs != nil {
 		u.SetSpecs(*fields.Specs)
 	}
-	if fields.ReportInterval != nil {
-		u.SetReportInterval(*fields.ReportInterval)
-	}
-	if fields.Thresholds != nil {
-		u.SetThresholds(*fields.Thresholds)
-	}
-	if fields.Attrs != nil {
-		u.SetAttrs(*fields.Attrs)
+	if fields.ClearReportInterval {
+		u.ClearReportInterval()
+	} else if fields.ReportInterval != nil {
+		u.SetNillableReportInterval(fields.ReportInterval)
 	}
 	if fields.Enabled != nil {
 		u.SetEnabled(*fields.Enabled)

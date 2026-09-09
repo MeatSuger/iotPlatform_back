@@ -121,7 +121,7 @@ func validActuatorBody(id string) entity.ActuatorCreateRequest {
 		ID:     id,
 		Name:   "舵机",
 		Driver: "servo",
-		Config: map[string]any{"gpio": 18, "min_pulse_us": 500, "max_pulse_us": 2500},
+		Specs:  map[string]any{"gpio": 18, "min_pulse_us": 500, "max_pulse_us": 2500},
 	}
 }
 
@@ -137,7 +137,7 @@ func TestActuatorController_CreateGetList(t *testing.T) {
 	assert.NoError(t, json.Unmarshal(dataJSON(t, resp), &created))
 	assert.Equal(t, "servo1", created.ID)
 	assert.True(t, created.Enabled)
-	assert.Equal(t, float64(18), created.Config["gpio"])
+	assert.Equal(t, float64(18), created.Specs["gpio"])
 
 	w = doActuator(t, "abc123", "servo1", "", owner, nil, env.ctl.GetActuator)
 	assert.Equal(t, 200, parseResp(w).Code)
@@ -184,18 +184,18 @@ func TestActuatorController_UpdateAndDelete(t *testing.T) {
 	w := doActuator(t, "abc123", "", "", owner, validActuatorBody("servo1"), env.ctl.CreateActuator)
 	assert.Equal(t, 200, parseResp(w).Code)
 
-	// 增量更新：仅改名称与 config
+	// 增量更新：仅改名称与 specs
 	newName := "云台舵机"
 	w = doActuator(t, "abc123", "servo1", "update", owner, map[string]any{
-		"name":   newName,
-		"config": map[string]any{"gpio": 20},
+		"name":  newName,
+		"specs": map[string]any{"gpio": 20},
 	}, env.ctl.UpdateActuator)
 	resp := parseResp(w)
 	assert.Equal(t, 200, resp.Code)
 	var updated entity.Actuator
 	assert.NoError(t, json.Unmarshal(dataJSON(t, resp), &updated))
 	assert.Equal(t, newName, updated.Name)
-	assert.Equal(t, float64(20), updated.Config["gpio"])
+	assert.Equal(t, float64(20), updated.Specs["gpio"])
 	assert.Equal(t, "servo", updated.Driver) // 未传字段保持原值
 
 	// 更新不存在的执行器

@@ -39,16 +39,28 @@ func seedSensorDevice(t *testing.T, client *ent.Client, deviceRepo *repository.D
 
 func validSensorReq(id string) entity.SensorCreateRequest {
 	return entity.SensorCreateRequest{
-		ID:             id,
-		Name:           "温度",
-		Type:           "temperature",
-		DataType:       "float",
-		Unit:           "°C",
-		Specs:          map[string]any{"min": -40, "max": 125, "step": 0.1},
-		ReportInterval: 60,
-		Thresholds:     map[string]any{"min": 0, "max": 100, "alarm": true},
+		ID:       id,
+		Name:     "温度",
+		Type:     "temperature",
+		DataType: "float",
+		Unit:     "°C",
+		Specs: &entity.SensorSpecs{
+			Min:  fp(-40),
+			Max:  fp(125),
+			Step: fp(0.1),
+			Thresholds: &entity.SpecsThresholds{
+				Min:   fp(0),
+				Max:   fp(100),
+				Extra: map[string]any{"alarm": true},
+			},
+		},
+		ReportInterval: ip(60),
 	}
 }
+
+// fp / ip 指针构造助手（模拟 JSON 请求绑定后的指针字段）
+func fp(v float64) *float64 { return &v }
+func ip(v int) *int         { return &v }
 
 func TestDeviceSensorService_CreateAndGet(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
@@ -58,9 +70,10 @@ func TestDeviceSensorService_CreateAndGet(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "temperature", created.ID)
 	assert.Equal(t, "float", created.DataType)
-	assert.Equal(t, 60, created.ReportInterval)
+	assert.Equal(t, 60, *created.ReportInterval)
 	assert.True(t, created.Enabled)
-	assert.Equal(t, float64(125), created.Specs["max"])
+	assert.Equal(t, 125.0, *created.Specs.Max)
+	assert.Equal(t, true, created.Specs.Thresholds.Extra["alarm"]) // 扩展键保留
 
 	got, err := svc.Get(context.Background(), "dev1", "temperature")
 	assert.NoError(t, err)
@@ -80,7 +93,8 @@ func TestDeviceSensorService_CreateDefaults(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "float", created.DataType) // 缺省回退 float
 	assert.True(t, created.Enabled)            // 缺省启用
-	assert.Empty(t, created.Specs)
+	assert.Nil(t, created.Specs)               // specs 省略（无定义）
+	assert.Nil(t, created.ReportInterval)      // reportInterval 省略（继承全局）
 }
 
 func TestDeviceSensorService_CreateDuplicateID(t *testing.T) {
@@ -99,10 +113,10 @@ func TestDeviceSensorService_CreateValidation(t *testing.T) {
 	seedSensorDevice(t, client, deviceRepo)
 
 	cases := []entity.SensorCreateRequest{
-		{ID: "9lead", Name: "x", Type: "t"},                      // 非法标识符：数字开头
-		{ID: "bad-id", Name: "x", Type: "t"},                     // 非法标识符：连字符
-		{ID: "ok_id", Name: "n", Type: "t", DataType: "unknown"}, // 非法数据类型
-		{ID: "ok_id", Name: "n", Type: "t", ReportInterval: -1},  // 非法上报周期
+		{ID: "9lead", Name: "x", Type: "t"},                         // 非法标识符：数字开头
+		{ID: "bad-id", Name: "x", Type: "t"},                        // 非法标识符：连字符
+		{ID: "ok_id", Name: "n", Type: "t", DataType: "unknown"},    // 非法数据类型
+		{ID: "ok_id", Name: "n", Type: "t", ReportInterval: ip(-1)}, // 非法上报周期
 	}
 	for _, req := range cases {
 		_, err := svc.Create(context.Background(), "dev1", req)
@@ -148,7 +162,7 @@ func TestDeviceSensorService_UpdateIncremental(t *testing.T) {
 
 	// 仅更新名称与上报周期，其余字段保持原值
 	newName := "环境温度"
-	newInterval := 120
+	newInterval := json.RawMessage(`120`)
 	got, err := svc.Update(context.Background(), "dev1", "temperature", entity.SensorUpdateRequest{
 		Name:           &newName,
 		ReportInterval: &newInterval,
@@ -156,9 +170,26 @@ func TestDeviceSensorService_UpdateIncremental(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, got)
 	assert.Equal(t, newName, got.Name)
-	assert.Equal(t, 120, got.ReportInterval)
-	assert.Equal(t, "°C", got.Unit)                 // 未传字段保持原值
-	assert.Equal(t, float64(125), got.Specs["max"]) // specs 未受影响
+	assert.Equal(t, 120, *got.ReportInterval)
+	assert.Equal(t, "°C", got.Unit)        // 未传字段保持原值
+	assert.Equal(t, 125.0, *got.Specs.Max) // specs 未受影响
+}
+
+func TestDeviceSensorService_UpdateClearReportInterval(t *testing.T) {
+	svc, _, deviceRepo, client := buildSensorSvc(t)
+	seedSensorDevice(t, client, deviceRepo)
+
+	_, err := svc.Create(context.Background(), "dev1", validSensorReq("temperature"))
+	assert.NoError(t, err)
+
+	// reportInterval 传 null → 恢复继承全局采样周期（列置 NULL）
+	nullRaw := json.RawMessage(`null`)
+	got, err := svc.Update(context.Background(), "dev1", "temperature", entity.SensorUpdateRequest{
+		ReportInterval: &nullRaw,
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, got)
+	assert.Nil(t, got.ReportInterval)
 }
 
 func TestDeviceSensorService_UpdateClearSpecs(t *testing.T) {
@@ -173,7 +204,7 @@ func TestDeviceSensorService_UpdateClearSpecs(t *testing.T) {
 	got, err := svc.Update(context.Background(), "dev1", "temperature", entity.SensorUpdateRequest{Specs: &raw})
 	assert.NoError(t, err)
 	assert.NotNil(t, got)
-	assert.Empty(t, got.Specs)
+	assert.Nil(t, got.Specs)
 }
 
 func TestDeviceSensorService_UpdateEmptyRequest(t *testing.T) {

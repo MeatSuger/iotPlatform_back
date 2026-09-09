@@ -76,7 +76,7 @@ func (s *DeviceActuatorService) Create(ctx context.Context, deviceID string, req
 		ActuatorID: req.ID,
 		Name:       req.Name,
 		Driver:     req.Driver,
-		Params:     marshalJSONField(req.Config),
+		Specs:      marshalJSONField(req.Specs),
 		Enabled:    enabled,
 	})
 	if err != nil {
@@ -101,9 +101,9 @@ func (s *DeviceActuatorService) Update(ctx context.Context, deviceID, actuatorID
 		Driver:  req.Driver,
 		Enabled: req.Enabled,
 	}
-	if req.Config != nil {
-		v := string(*req.Config)
-		fields.Params = &v
+	if req.Specs != nil {
+		v := string(*req.Specs)
+		fields.Specs = &v
 	}
 
 	row, err := s.actuatorRepo.Update(ctx, deviceID, actuatorID, fields)
@@ -159,9 +159,9 @@ func (s *DeviceActuatorService) Apply(ctx context.Context, deviceID string) (*en
 		}
 	}
 
-	actuators := make([]entity.Actuator, 0, len(rows))
+	actuators := make([]entity.ActuatorWire, 0, len(rows))
 	for _, row := range rows {
-		actuators = append(actuators, actuatorToDTO(row))
+		actuators = append(actuators, actuatorToWire(row))
 	}
 	payload["actuators"] = actuators
 
@@ -178,15 +178,25 @@ func (s *DeviceActuatorService) Apply(ctx context.Context, deviceID string) (*en
 	}, nil
 }
 
-// actuatorToDTO ent 实体 → DTO（params JSON 文本解析为 config 对象，空串输出空对象）
+// actuatorToDTO ent 实体 → 管理侧 DTO（specs JSON 文本解析为对象，空串输出空字段）
 func actuatorToDTO(row *ent.DeviceActuator) entity.Actuator {
 	return entity.Actuator{
 		ID:        row.ActuatorID,
 		Name:      row.Name,
 		Driver:    row.Driver,
-		Config:    parseJSONField(row.Params),
+		Specs:     parseJSONField(row.Specs),
 		Enabled:   row.Enabled,
 		CreatedAt: common.DateTimeFrom(row.CreatedAt),
 		UpdatedAt: common.DateTimeFrom(row.UpdatedAt),
+	}
+}
+
+// actuatorToWire ent 实体 → 下行裁剪版（Apply 编译进 DeviceConfig.payload.actuators）
+func actuatorToWire(row *ent.DeviceActuator) entity.ActuatorWire {
+	return entity.ActuatorWire{
+		ID:      row.ActuatorID,
+		Driver:  row.Driver,
+		Specs:   parseJSONField(row.Specs),
+		Enabled: row.Enabled,
 	}
 }

@@ -191,16 +191,47 @@ func main() {
 		return cmd.ID, nil
 	})
 
+	// pushDeviceEvent 向 owner 管理端 WebSocket 推送设备事件（deviceOnline/deviceOffline）
+	// 三个来源共用统一格式：原生 WS 断开回调、MQTT 网关上线/下线、离线同步器扫描
+	pushDeviceEvent := func(ownerID uint, eventType, deviceID string) {
+		if ownerID == 0 {
+			return
+		}
+		msg, _ := json.Marshal(map[string]any{
+			"type":      eventType,
+			"deviceId":  deviceID,
+			"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
+		})
+		wsHandler.NotifyOwner(ownerID, msg)
+	}
+
 	// 7.5 初始化 Redis 设备数据缓冲器（支撑 1000+ 并发上报）
 	dataBuffer := service.NewDeviceDataBuffer(rdb, svcs.Report)
 	dataBuffer.Start()
 	defer dataBuffer.Stop()
 	svcs.Report.SetBuffer(dataBuffer)
+	// 上报值类型校验：按物模型定义（dataType/specs.values）丢弃类型错乱的数据点
+	svcs.Report.SetSensorSvc(svcs.Sensors)
 	zap.L().Info("[Main] Redis 设备数据缓冲器已启用")
 
 	// 7.6 启动跨实例缓存失效 Pub-Sub 监听（多实例部署时自动同步 L1 缓存）
 	go components.Cache.SubscribeInvalidate(context.Background())
 	zap.L().Info("[Main] 跨实例缓存失效 Pub-Sub 已启动")
+
+	// 7.6.1 MQTT 桥接网关（提前构造：在线/离线判定需要与离线同步器联动）
+	// 设备入口: /api/ws/mqtt/broker，鉴权在 MQTT 协议层完成（CONNECT username/password 或 ?X-Device-Token=）
+	// 在线=SUBSCRIBE 自身主题；离线=连接关闭/空闲超时立即置 OFFLINE + 通知 owner
+	var mqttGateway *controller.MqttGatewayController
+	if cfg.MqttGateway.Enabled {
+		logRepo := repository.NewMqttPublishLogRepo(entClient)
+		mqttGateway = controller.NewMqttGatewayController(logRepo, svcs.Report, svcs.Config, svcs.Device, components.Cache)
+		// 上线/下线实时通知 owner 管理端（与原生 WS 断开回调行为一致）
+		mqttGateway.SetPresenceCallbacks(
+			func(deviceID string, ownerID uint) { pushDeviceEvent(ownerID, "deviceOnline", deviceID) },
+			func(deviceID string, ownerID uint) { pushDeviceEvent(ownerID, "deviceOffline", deviceID) },
+		)
+		zap.L().Info("[Main] MQTT 桥接网关已启用（设备入口: /api/ws/mqtt/broker，转发到 " + cfg.MQTT.BrokerURL + "）")
+	}
 
 	// 7.6.5 设备离线检测同步器：Redis 状态为准，离线后同步到 PostgreSQL
 	offlineScanInterval := time.Duration(cfg.Device.OfflineScanInterval) * time.Second
@@ -209,20 +240,20 @@ func main() {
 		repository.NewDeviceRepo(entClient), components.Cache,
 		offlineScanInterval, offlineThreshold,
 	)
-	// WS 长连接在线判定：防止长连接但不发心跳的设备被误判离线
-	offlineSyncer.SetOnlineChecker(wsHandler.IsDeviceOnline)
+	// 在线判定双保险：原生 WS 长连接 或 MQTT 桥接连接存活 → 跳过（防止连接存活但未上报的设备误判离线）
+	offlineSyncer.SetOnlineChecker(func(deviceID string) bool {
+		if wsHandler.IsDeviceOnline(deviceID) {
+			return true
+		}
+		return mqttGateway != nil && mqttGateway.IsConnected(deviceID)
+	})
 	// 检测到离线后推送消息给 owner 管理端（与 WS 断开回调行为一致）
 	offlineSyncer.SetOfflineCallback(func(deviceID string) {
 		device, err := svcs.Device.GetByDeviceID(context.Background(), deviceID)
 		if err != nil {
 			return
 		}
-		msg, _ := json.Marshal(map[string]any{
-			"type":      "deviceOffline",
-			"deviceId":  deviceID,
-			"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
-		})
-		wsHandler.NotifyOwner(device.OwnerID, msg)
+		pushDeviceEvent(device.OwnerID, "deviceOffline", deviceID)
 	})
 	offlineSyncer.Start()
 	defer offlineSyncer.Stop()
@@ -266,14 +297,8 @@ func main() {
 		}
 	}()
 
-	// 10. MQTT 桥接网关（设备真 MQTT/WSS 接入：框架 Sa-Token 鉴权 → 透明转发到外部Broker）
-	// 设备入口: /api/ws/mqtt/broker，鉴权在 MQTT 协议层完成（CONNECT username/password 或 ?X-Device-Token=）
-	var mqttGateway *controller.MqttGatewayController
-	if cfg.MqttGateway.Enabled {
-		logRepo := repository.NewMqttPublishLogRepo(entClient)
-		mqttGateway = controller.NewMqttGatewayController(logRepo, svcs.Report, svcs.Config, svcs.Device, components.Cache)
-		zap.L().Info("[Main] MQTT 桥接网关已启用（设备入口: /api/ws/mqtt/broker，转发到 " + cfg.MQTT.BrokerURL + "）")
-	}
+	// 10. MQTT 桥接网关已在 7.6.1 提前构造（在线/离线判定与离线同步器联动），
+	// 此处由 router 挂载设备入口 /api/ws/mqtt/broker（网关为 nil 时路由不注册）
 
 	// 11. 设置路由
 	// 健康检查探针：HTTP 状态码仅表达后端是否正常（任一依赖失联 → /health 返回 503）

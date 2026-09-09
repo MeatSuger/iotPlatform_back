@@ -129,16 +129,26 @@ func dataJSON(t *testing.T, resp testResp) []byte {
 
 func validCreateBody(id string) entity.SensorCreateRequest {
 	return entity.SensorCreateRequest{
-		ID:             id,
-		Name:           "温度",
-		Type:           "temperature",
-		DataType:       "float",
-		Unit:           "°C",
-		Specs:          map[string]any{"min": -40, "max": 125, "step": 0.1},
-		ReportInterval: 60,
-		Thresholds:     map[string]any{"min": 0, "max": 100, "alarm": true},
+		ID:       id,
+		Name:     "温度",
+		Type:     "temperature",
+		DataType: "float",
+		Unit:     "°C",
+		Specs: &entity.SensorSpecs{
+			Min:  fptr(-40),
+			Max:  fptr(125),
+			Step: fptr(0.1),
+			Thresholds: &entity.SpecsThresholds{
+				Min: fptr(0), Max: fptr(100), Extra: map[string]any{"alarm": true},
+			},
+		},
+		ReportInterval: iptr(60),
 	}
 }
+
+// fptr / iptr 指针构造助手（模拟 JSON 请求绑定后的指针字段）
+func fptr(v float64) *float64 { return &v }
+func iptr(v int) *int         { return &v }
 
 func TestSensorController_CreateGetList(t *testing.T) {
 	env := newSensorTestEnv(t)

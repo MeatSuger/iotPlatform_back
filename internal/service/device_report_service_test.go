@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/middleware"
@@ -223,6 +224,57 @@ func TestFlushReports(t *testing.T) {
 	}})
 	assert.NoError(t, err)
 	time.Sleep(20 * time.Millisecond) // 等待异步 WriteSensors 结束（nil client 报错后退出）
+}
+
+// TestReportStatusFast_ValueValidation 上报值按物模型 dataType 校验：
+// 类型错乱的数据点（如 float 传感器上报 "400ppm"）被丢弃，其余数据正常入库。
+func TestReportStatusFast_ValueValidation(t *testing.T) {
+	client := newTestEnt(t)
+	repo := repository.NewDeviceRepo(client)
+	_, rcache := newTestRedisCache(t)
+	influx := NewInfluxDBService(InfluxDBConfig{Database: "iot"})
+	influx.client = nil
+	deviceSvc := NewDeviceService(repo, rcache, nil, nil, nil)
+
+	// 传感器定义服务：温度(float) + 模式(enum)
+	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	_, rdb := newTestRedis(t)
+	downlinkSvc := NewDownlinkService(cmdRepo, repo, rdb, nil, nil)
+	configSvc := NewDeviceConfigService(repository.NewDeviceConfigRepo(client), downlinkSvc, nil)
+	sensorSvc := NewDeviceSensorService(repository.NewDeviceSensorRepo(client), configSvc, rcache)
+
+	seedOnline2(t, client, repo)
+	_, err := sensorSvc.Create(context.Background(), "dev1", entity.SensorCreateRequest{
+		ID: "temperature", Name: "温度", Type: "temperature", DataType: "float",
+	})
+	require.NoError(t, err)
+	_, err = sensorSvc.Create(context.Background(), "dev1", entity.SensorCreateRequest{
+		ID: "mode", Name: "模式", Type: "mode", DataType: "enum",
+		Specs: &entity.SensorSpecs{Values: []string{"auto", "manual"}},
+	})
+	require.NoError(t, err)
+
+	svc := NewDeviceReportService(repo, influx, rcache, deviceSvc)
+	svc.SetSensorSvc(sensorSvc)
+	stopPGDebounce(svc)
+
+	// float 传感器上报字符串 → 该点被丢弃；enum 上报合法值 → 保留
+	dto := entity.DeviceStatusDTO{Sensors: []entity.SensorData{
+		{Name: "temperature", Type: "number", Value: "400ppm", Timestamp: time.Now()},
+		{Name: "temperature", Type: "number", Value: 25.5, Timestamp: time.Now()},
+		{Name: "mode", Type: "string", Value: "auto", Timestamp: time.Now()},
+		{Name: "mode", Type: "string", Value: "turbo", Timestamp: time.Now()}, // 不在 values 内
+	}}
+	err = svc.ReportStatusFast(context.Background(), "dev1", dto)
+	assert.NoError(t, err)
+
+	// 最近值缓存只保留 2 条合法数据
+	raw, err := getSensorCache(t, svc, "dev1")
+	assert.NoError(t, err)
+	assert.Contains(t, string(raw), `"value":25.5`)
+	assert.Contains(t, string(raw), `"value":"auto"`)
+	assert.NotContains(t, string(raw), `400ppm`)
+	assert.NotContains(t, string(raw), `turbo`)
 }
 
 // ---------- helpers ----------
