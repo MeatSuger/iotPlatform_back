@@ -53,6 +53,8 @@ mqtt:
 # MQTT 桥接网关（胶水层）：设备 WSS 接入 → 框架鉴权（Sa-Token）→ 透明转发到外部 MQTT Docker
 mqtt-gateway:
   enabled: true
+  # 设备连接空闲看护（秒）：0=跟随设备 CONNECT keepalive（1.5×，夹 15s~30min）；keepalive 禁用时回退 5min
+  idle-timeout-sec: 0
 
 cors:
   allowed-origins:

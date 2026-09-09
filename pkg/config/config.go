@@ -127,6 +127,12 @@ type MQTTConfig struct {
 // 鉴权由 DeviceAuthMiddleware（Sa-Token）接管
 type MqttGatewayConfig struct {
 	Enabled bool `mapstructure:"enabled"`
+
+	// IdleTimeoutSec 设备连接空闲看护阈值（秒）：连接在无任何 MQTT 帧（含 PINGREQ 心跳）
+	// 持续该时长后判定设备失联，强制断开并置为离线。
+	// 0（默认）= 尽量跟随设备 CONNECT 携带的 keepalive（1.5×keepalive，夹在 15s~30min）；
+	// 设备 keepalive 禁用（0）或无 keepalive 时才回退到本配置，再未配置则兜底 5min。
+	IdleTimeoutSec int `mapstructure:"idle-timeout-sec"`
 }
 
 // DeviceConfig 设备离线检测配置（Redis 状态为准，离线后同步 PostgreSQL）

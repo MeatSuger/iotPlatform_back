@@ -31,14 +31,17 @@ type Publisher struct {
 
 // NewPublisher 创建并启动下行发布器（异步连接，自动重连）。
 func NewPublisher() *Publisher {
+	// 快照 broker 地址：paho 的 OnConnect 回调在独立 goroutine 异步执行，
+	// 直接读全局 config.Cfg 会在并发修改配置时产生数据竞争（如测试/配置热加载）
+	brokerURL := config.Cfg.MQTT.BrokerURL
 	opts := mqttpaho.NewClientOptions().
-		AddBroker(config.Cfg.MQTT.BrokerURL).
+		AddBroker(brokerURL).
 		SetClientID("iot-platform-pub").
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
 		SetConnectRetryInterval(5 * time.Second).
 		SetOnConnectHandler(func(c mqttpaho.Client) {
-			zap.S().Infof("[MQTT] 下行发布器已连接 %s", config.Cfg.MQTT.BrokerURL)
+			zap.S().Infof("[MQTT] 下行发布器已连接 %s", brokerURL)
 		})
 
 	client := mqttpaho.NewClient(opts)

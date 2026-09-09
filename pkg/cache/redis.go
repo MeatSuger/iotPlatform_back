@@ -301,10 +301,13 @@ func (c *RedisCache) EvictDeviceCache(ctx context.Context, deviceID string) erro
 // 设备运行时状态缓存（Redis Hash，轻量级）
 // ============================================================
 
-// CacheDeviceStatus 更新设备运行时状态（Write-Through）
-// 使用 Hash 存储 status + lastActiveTime，避免完整 Device JSON 序列化
+// CacheDeviceStatus 更新设备运行时状态（Write-Through）到 L2 Redis Hash
+// （status + lastActiveTime，避免完整 Device JSON 序列化）
 func (c *RedisCache) CacheDeviceStatus(ctx context.Context, deviceID string, status string, lastActiveTime int64) error {
 	key := PrefixDeviceStatus + deviceID
+	// 写穿透：先失效 L1 读回填缓存（GetCachedDeviceStatus 会填充 5s TTL 的 L1）
+	// 否则写后 5s 内读取仍会命中旧状态，导致上线/离线切换被吞掉
+	c.local.Delete(key)
 	pipe := c.client.Pipeline()
 	pipe.HSet(ctx, key, "status", status, "lastActiveTime", lastActiveTime)
 	pipe.Expire(ctx, key, jitterTTL(TTLDeviceStatus))
@@ -509,6 +512,10 @@ const BufferQueueMaxLen = 20000
 // FastReportWrite 一次 Pipeline 完成：更新设备状态 Hash + 缓存传感器数据 + 推入缓冲队列
 // 将多次 Redis 往返合并为 1 次
 func (c *RedisCache) FastReportWrite(ctx context.Context, deviceID string, status string, lastActiveTime int64, sensors any, bufferData []byte) error {
+	// 写穿透：先失效 L1 读回填缓存（与 CacheDeviceStatus 一致），
+	// 否则上报置 ONLINE 后 5s 内 GetCachedDeviceStatus 仍读到旧状态
+	c.local.Delete(PrefixDeviceStatus + deviceID)
+
 	pipe := c.client.Pipeline()
 
 	// 1. 更新设备状态 Hash
