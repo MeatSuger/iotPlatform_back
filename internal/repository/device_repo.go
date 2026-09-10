@@ -35,12 +35,7 @@ func (r *DeviceRepo) Create(ctx context.Context, device *ent.Device) (*ent.Devic
 		Save(ctx)
 }
 
-// GetByID 按 ID 查询设备
-func (r *DeviceRepo) GetByID(ctx context.Context, id string) (*ent.Device, error) {
-	return r.client.Device.Get(ctx, id)
-}
-
-// GetByDeviceID 按设备编号查询设备（设备编号即主键 ID，与 GetByID 等价）
+// GetByDeviceID 按设备编号查询设备（设备编号即主键 ID）
 func (r *DeviceRepo) GetByDeviceID(ctx context.Context, deviceID string) (*ent.Device, error) {
 	return r.client.Device.Query().Where(entdevice.IDEQ(deviceID)).First(ctx)
 }
@@ -86,14 +81,6 @@ func (r *DeviceRepo) Delete(ctx context.Context, id string) error {
 func (r *DeviceRepo) ListByOwnerID(ctx context.Context, ownerID uint) ([]*ent.Device, error) {
 	return r.client.Device.Query().
 		Where(entdevice.OwnerIDEQ(ownerID)).
-		Order(ent.Desc(entdevice.FieldID)).
-		All(ctx)
-}
-
-// ListByDeviceID 按设备编号查询设备（按 ID 倒序）
-func (r *DeviceRepo) ListByDeviceID(ctx context.Context, deviceID string) ([]*ent.Device, error) {
-	return r.client.Device.Query().
-		Where(entdevice.IDEQ(deviceID)).
 		Order(ent.Desc(entdevice.FieldID)).
 		All(ctx)
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,22 +47,9 @@ func TestDeviceDataBuffer_StopWithoutStart(t *testing.T) {
 	})
 }
 
-func TestDeviceDataBuffer_QueueLen_NilClient(t *testing.T) {
-	mock := &mockBatchWriter{}
-	buf := NewDeviceDataBuffer(nil, mock)
-
-	assert.Panics(t, func() {
-		_, err := buf.QueueLen(context.Background())
-		if err != nil {
-			return
-		}
-	})
-}
-
 func TestBufferedReport_JSONRoundtrip(t *testing.T) {
 	original := BufferedReport{
 		DeviceID: "369c04",
-		Token:    "test-token",
 		Sensors: []SensorDataDTO{
 			{Name: "temp", Type: "float", Value: 25.5, Timestamp: 1712345678000},
 			{Name: "hum", Type: "int", Value: 60, Timestamp: 1712345678001},
@@ -77,7 +65,6 @@ func TestBufferedReport_JSONRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, original.DeviceID, restored.DeviceID)
-	assert.Equal(t, original.Token, restored.Token)
 	assert.Equal(t, original.Timestamp, restored.Timestamp)
 	assert.Len(t, restored.Sensors, 2)
 	assert.Equal(t, "temp", restored.Sensors[0].Name)
@@ -161,6 +148,22 @@ func testReport(deviceID string, ts int64) BufferedReport {
 	}
 }
 
+// enqueueReport 直接将上报 LPush 到缓冲队列（模拟生产 FastReportWrite 写入路径）
+func enqueueReport(t *testing.T, rdb redis.UniversalClient, buf *DeviceDataBuffer, r BufferedReport) {
+	t.Helper()
+	data, err := json.Marshal(r)
+	require.NoError(t, err)
+	require.NoError(t, rdb.LPush(context.Background(), buf.bufferKey, data).Err())
+}
+
+// queuedReports 返回当前缓冲队列长度
+func queuedReports(t *testing.T, rdb redis.UniversalClient, buf *DeviceDataBuffer) int64 {
+	t.Helper()
+	n, err := rdb.LLen(context.Background(), buf.bufferKey).Result()
+	require.NoError(t, err)
+	return n
+}
+
 func TestDeviceDataBuffer_RealDrain(t *testing.T) {
 	mr, rdb := newTestRedis(t)
 	writer := &fakeWriter{}
@@ -168,8 +171,8 @@ func TestDeviceDataBuffer_RealDrain(t *testing.T) {
 	buf.flushInterval = 20 * time.Millisecond
 
 	now := time.Now().UnixMilli()
-	assert.NoError(t, buf.Enqueue(context.Background(), testReport("dev1", now)))
-	assert.NoError(t, buf.Enqueue(context.Background(), testReport("dev2", now)))
+	enqueueReport(t, rdb, buf, testReport("dev1", now))
+	enqueueReport(t, rdb, buf, testReport("dev2", now))
 
 	buf.Start()
 	defer buf.Stop()
@@ -177,13 +180,12 @@ func TestDeviceDataBuffer_RealDrain(t *testing.T) {
 	// 等待 worker 至少排空一轮
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		len, _ := buf.QueueLen(context.Background())
-		if len == 0 {
+		if queuedReports(t, rdb, buf) == 0 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	assert.Equal(t, int64(0), mustQueueLen(t, buf))
+	assert.Equal(t, int64(0), queuedReports(t, rdb, buf))
 
 	// 两条上报均已刷给 writer
 	total := 0
@@ -201,16 +203,14 @@ func TestDeviceDataBuffer_FlushErrorRequeues(t *testing.T) {
 	buf.flushInterval = 20 * time.Millisecond
 
 	now := time.Now().UnixMilli()
-	assert.NoError(t, buf.Enqueue(context.Background(), testReport("dev1", now)))
+	enqueueReport(t, rdb, buf, testReport("dev1", now))
 
 	buf.Start()
 	time.Sleep(150 * time.Millisecond)
 	buf.Stop()
 
 	// 数据被重新推回队列（requeue 保护，不丢数据）
-	len, err := buf.QueueLen(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, int64(1), len)
+	assert.Equal(t, int64(1), queuedReports(t, rdb, buf))
 }
 
 func TestDeviceDataBuffer_DrainOnStop(t *testing.T) {
@@ -220,7 +220,7 @@ func TestDeviceDataBuffer_DrainOnStop(t *testing.T) {
 	buf.flushInterval = time.Hour // 不触发定时排空，仅 Stop 排空
 
 	now := time.Now().UnixMilli()
-	assert.NoError(t, buf.Enqueue(context.Background(), testReport("dev1", now)))
+	enqueueReport(t, rdb, buf, testReport("dev1", now))
 
 	buf.Start()
 	buf.Stop()
@@ -230,7 +230,7 @@ func TestDeviceDataBuffer_DrainOnStop(t *testing.T) {
 		total += len(batch)
 	}
 	assert.Equal(t, 1, total)
-	assert.Equal(t, int64(0), mustQueueLen(t, buf))
+	assert.Equal(t, int64(0), queuedReports(t, rdb, buf))
 }
 
 func TestDeviceDataBuffer_RPopError(t *testing.T) {
@@ -242,11 +242,4 @@ func TestDeviceDataBuffer_RPopError(t *testing.T) {
 	buf.Start()
 	time.Sleep(80 * time.Millisecond)
 	buf.Stop() // 空队列 + Redis 正常：无副作用
-}
-
-func mustQueueLen(t *testing.T, buf *DeviceDataBuffer) int64 {
-	t.Helper()
-	n, err := buf.QueueLen(context.Background())
-	assert.NoError(t, err)
-	return n
 }

@@ -104,15 +104,8 @@ func (ctl *DeviceController) GetDeviceData(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
 
-	device, err := ctl.deviceSvc.GetByDeviceID(c.Request.Context(), deviceID)
+	device, err := checkOwnership(c, ctl.deviceSvc, deviceID, ownerID, "无权查看该设备")
 	if err != nil {
-		common.FailWithMsg(c, common.CodeNotFound, "设备不存在")
-		return
-	}
-
-	// 检查设备归属
-	if device.OwnerID != ownerID {
-		common.FailWithMsg(c, common.CodeForbidden, "无权查看该设备")
 		return
 	}
 
@@ -261,13 +254,7 @@ func (ctl *DeviceController) Delete(c *gin.Context) {
 	ownerID := middleware.GetUserID(c)
 
 	// 检查设备归属
-	device, err := ctl.deviceSvc.GetByDeviceID(c.Request.Context(), deviceID)
-	if err != nil {
-		common.FailWithMsg(c, common.CodeNotFound, "设备不存在")
-		return
-	}
-	if device.OwnerID != ownerID {
-		common.FailWithMsg(c, common.CodeForbidden, "无权删除该设备")
+	if _, err := checkOwnership(c, ctl.deviceSvc, deviceID, ownerID, "无权删除该设备"); err != nil {
 		return
 	}
 

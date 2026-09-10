@@ -2,7 +2,7 @@
 
 > **Base URL**: `https://api.meatsuger.top`（生产）· `http://localhost:8182`（开发）
 >
-> **版本**: 1.7.0 ｜ **更新时间**: 2026-09-06
+> **版本**: 1.8.0 ｜ **更新时间**: 2026-09-10
 >
 > 本文档参照 Google API 改进提案（AIP）风格组织：资源导向设计（AIP-121）、标准方法（AIP-131 ~ AIP-135）、字段行为标注（AIP-203）、错误模型（AIP-193）、文档规范（AIP-192）。
 >
@@ -279,6 +279,8 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
 | `status` | string | OUTPUT_ONLY | 状态：`pending` / `sent` / `delivered`，见[附录流转图](#命令状态流转) |
 | `createdAt` | string | OUTPUT_ONLY | 创建时间 |
 
+> 存储：命令统一持久化在 `iot_message_log`（`direction=down`，`category=config`/`cmd`），下发状态由 `status` 列承载。MQTT 网关上行的设备发布消息写入同一张表的 `direction=up` 行（`category=telemetry`/`config_report`/`other`）。
+
 ### 4.5 DeviceConfig（设备配置快照）
 
 每个设备维护一份「当前期望配置」快照，云端每次编辑 `version` 递增并下发；设备回执回写 `reported*` 字段并置 `status=acked`。
@@ -323,7 +325,7 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
 
 传感器定义描述「设备里有哪些传感器、如何采样、何时告警」，是设备物模型的组成部分。设计参考新大陆 NLECloud 传感器模型（`ApiTag`/`Name`/`DataType`/`TypeAttrs`）与阿里云 IoT TSL 物模型（`identifier`/`dataType`/`specs`）。
 
-定义本身仅持久化（`iot_device_sensor` 表），经 `Apply` 方法编译进 `DeviceConfig.payload.sensors` 后，复用现有 `type=config` 下行通道版本化下发；设备回执经 `POST /config/report` 回写，实现「期望 vs 实际」比对。
+定义本身仅持久化（`iot_device_thing` 表（kind=sensor）），经 `Apply` 方法编译进 `DeviceConfig.payload.sensors` 后，复用现有 `type=config` 下行通道版本化下发；设备回执经 `POST /config/report` 回写，实现「期望 vs 实际」比对。
 
 | 字段 | 类型 | 行为 | 说明 |
 |------|------|------|------|
@@ -360,7 +362,7 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
 
 ### 4.7 Actuator（执行器定义 / 物模型）
 
-执行器定义描述「设备上有哪些可执行动作的部件、用什么驱动、接在哪个引脚」，与 Sensor 同构：定义仅持久化（`iot_device_actuator` 表），经 `Apply` 编译进 `DeviceConfig.payload.actuators` 后版本化下发；设备据此 diff 实例化/卸载执行器，运行期动作由 `type=control` 命令按 `action=id` 路由到驱动执行。
+执行器定义描述「设备上有哪些可执行动作的部件、用什么驱动、接在哪个引脚」，与 Sensor 同构：定义仅持久化（`iot_device_thing` 表（kind=actuator）），经 `Apply` 编译进 `DeviceConfig.payload.actuators` 后版本化下发；设备据此 diff 实例化/卸载执行器，运行期动作由 `type=control` 命令按 `action=id` 路由到驱动执行。
 
 | 字段 | 类型 | 行为 | 说明 |
 |------|------|------|------|
@@ -1487,7 +1489,7 @@ conn, _, err := websocket.DefaultDialer.Dial("wss://api.meatsuger.top/api/ws/dev
 {"sensors": [{"name": "temp", "type": "temperature", "value": 25.5}]}
 ```
 
-> 匹配约定的 PUBLISH 消息会自动走数据入库链路（更新状态缓存 → Redis 缓冲 → InfluxDB），并写入 `mqtt_publish_log` 表。
+> 匹配约定的 PUBLISH 消息会自动走数据入库链路（更新状态缓存 → Redis 缓冲 → InfluxDB），并写入 `iot_message_log` 表（direction=up）。
 
 #### Topic 与 Payload 约定
 
@@ -1524,19 +1526,6 @@ wss://api.meatsuger.top/api/ws/mqtt/broker?X-Device-Token=<token>
 ```
 
 或标准 MQTT 客户端配置: `host=api.meatsuger.top, port=443, path=/api/ws/mqtt/broker, username=<deviceId>, password=<deviceToken>`。
-
-### 6.4 MQTT 转发通道（兼容保留） — `GET /api/ws/mqtt`
-
-| 项目 | 说明 |
-|------|------|
-| **端点** | `GET /api/ws/mqtt` |
-| **认证** | 无 |
-| **数据方向** | 双向（读写） |
-| **用途** | 早期 WebSocket → MQTT Broker 消息转发，已被 6.3 网关取代，保留兼容 |
-
-> 注意：该端点无认证，生产环境请评估安全风险，新接入请使用 `/api/ws/mqtt/broker`。
-
----
 
 ## 7. 附录
 
@@ -1584,7 +1573,6 @@ wss://api.meatsuger.top/api/ws/mqtt/broker?X-Device-Token=<token>
 | GET | `/api/ws/device` | DeviceAuth | 设备 WebSocket 实时通道 |
 | GET | `/api/ws/user` | UserAuth | 用户管理端 WebSocket 通道 |
 | GET | `/api/ws/mqtt/broker` | DeviceAuth（MQTT 层） | MQTT over WebSocket 网关 |
-| GET | `/api/ws/mqtt` | 无 | MQTT 转发（兼容保留） |
 | GET | `/api/swagger/*` | 无 | Swagger UI（生产环境默认关闭） |
 
 ### UDP 上报通道
@@ -1651,10 +1639,29 @@ pending ──→ sent ──→ delivered
     |<--- "命令已下发" --------|                          |
 ```
 
+### 数据存储（PostgreSQL 5 表）
+
+| 表 | 用途 |
+|----|------|
+| `app_user` | 用户账号 |
+| `iot_device` | 设备（主键 `device_id`） |
+| `iot_device_config` | 设备配置快照（与设备 1:1，版本化） |
+| `iot_device_thing` | 设备物模型（传感器 / 执行器统一存储） |
+| `iot_message_log` | 设备消息日志（下行命令 + 上行 MQTT 发布） |
+
+- **`iot_device_thing`**（2026-09 由 `iot_device_sensor` + `iot_device_actuator` 合并）：
+  `kind` ∈ `sensor`/`actuator`，`thing_id` 即原 `sensor_id`/`actuator_id`，唯一键 `(device_id, kind, thing_id)`；
+  sensor 专有字段（`type`/`dataType`/`unit`/`reportInterval`）、actuator 的 `driver` 与物模型定义体统一序列化进 `specs` JSON。
+  REST 层仍以 `/sensors`、`/actuators` 两个资源对外，按 `kind` 过滤。
+- **`iot_message_log`**（2026-09 由 `iot_downlink_cmd` + `mqtt_publish_log` 合并）：
+  `direction=down` 存下行命令（`category=config`/`cmd`，`status=pending`/`sent`/`delivered`）；
+  `direction=up` 存 MQTT 网关拦截的设备发布（`category=telemetry`/`config_report`/`other`，含 `topic`/`qos`/`retained`）。
+
 ### 变更记录
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.8.0 | 2026-09-10 | 数据库表结构精简（7 → 5 表，纯内部变更，**REST/WS 契约不变**）：`iot_device_sensor` + `iot_device_actuator` 合并为 `iot_device_thing`（`kind` 判别，sensor 专有字段与物模型定义体入 `specs` JSON）；`iot_downlink_cmd` + `mqtt_publish_log` 合并为 `iot_message_log`（`direction=down/up` 判别）。**移除无鉴权的兼容端点 `GET /api/ws/mqtt`**（连同其 WebSocket 处理器），MQTT 接入统一走 `/api/ws/mqtt/broker`。新增 [数据存储（5 表）](#数据存储postgresql-5-表) 附录 |
 | 1.7.0 | 2026-09-06 | 设备详情接口改造为**物模型视图**：`GET /api/devices/{deviceId}` 响应 `data.sensors` 由「最近遥测快照」升级为「传感器定义 + `latest`(最近一次上报值,`null`=从未上报)」物模型数组,`data.actuators` 为执行器定义数组(无定义时均为 `[]`);服务端完成定义↔遥测 join(上报 `name` 优先匹配定义 `id`,其次匹配定义 `name`)。物模型定义列表(整设备)新增 Redis 缓存(`cache:def_sensor:/def_actuator:`,Cache-Aside + 写路径显式失效)。**破坏性变更:详情响应不再返回裸遥测 `sensors` 与 `thingModel` 嵌套字段,前端一次请求即可渲染完整设备页** |
 | 1.6.0 | 2026-09-05 | 执行器物模型落地 + MQTT 命令通道：新增 `Actuator` 资源（`devices/{deviceId}/actuators/{actuatorId}`，镜像 Sensor 模式，CRUD + `POST /actuators/apply` 编译进 `DeviceConfig.payload.actuators`，`id` ≤11 字符 = 固件 periph 设备名 = 控制命令 `action`）；下行发布器泛化（`EnqueueCmd` 对非 config 类型实时发布 `iot/{deviceId}/cmd`，与 `GET /commands` 返回项同构）；固件重构：执行器定义唯一真源 = 配置快照（diff 实例化/卸载、重启 NVS 重放），控制命令经 MQTT/HTTP 双通道按 `action` 路由执行，遥测统一 `iot/{deviceId}/telemetry`，移除旧 register/`device/{id}` 主题/应答流。**破坏性变更：`payload.actuator`（单数运行对象）移除，由 `actuators` 定义数组取代；旧 `type=register` 协议不再支持** |
 | 1.5.0 | 2026-09-05 | MQTT 配置通道落地：新增平台侧 MQTT 发布器（`POST /config` 保存后以 QoS1+retained 发布 `iot/{deviceId}/config`，设备订阅即拉取，离线重连由 Broker 补投最新快照）；MQTT 网关新增 `iot/{deviceId}/config/report` 上行处理（连接鉴权设备=话题设备，复用 `DeviceConfigService.Report` 置 `acked`）；固件侧新增 appcfg 模块（NVS 持久化已应用版本/载荷/待回执标志，版本幂等去重，`sensor.reportInterval` 运行时生效，其余字段原样持久化与回执） |

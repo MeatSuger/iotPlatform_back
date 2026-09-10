@@ -512,7 +512,7 @@ func newGatewayConfigEnv(t *testing.T) (*service.DeviceConfigService, *repositor
 
 	deviceRepo := repository.NewDeviceRepo(client)
 	configRepo := repository.NewDeviceConfigRepo(client)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 	configSvc := service.NewDeviceConfigService(configRepo, service.NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil), nil)
 
 	now := time.Now()
@@ -681,7 +681,7 @@ func newSubscribeEnv(t *testing.T) (*MqttGatewayController, *cache.RedisCache, s
 	// 预置 Redis 状态缓存为 OFFLINE（模拟真实设备：注册后状态缓存已存在）
 	require.NoError(t, rcache.CacheDeviceStatus(context.Background(), "gwsub1", "OFFLINE", now.UnixMilli()))
 
-	deviceSvc := service.NewDeviceService(deviceRepo, rcache, nil, nil, nil)
+	deviceSvc := service.NewDeviceService(deviceRepo, rcache, nil, nil)
 	gw := NewMqttGatewayController(nil, nil, nil, deviceSvc, rcache)
 	return gw, rcache, "gwsub1"
 }
@@ -979,7 +979,7 @@ func newPublishEnv(t *testing.T) (*MqttGatewayController, *cache.RedisCache, str
 	// 预置 Redis 状态缓存为 OFFLINE（模拟真实设备：注册后状态缓存已存在）
 	require.NoError(t, rcache.CacheDeviceStatus(context.Background(), "pubdev1", "OFFLINE", now.UnixMilli()))
 
-	deviceSvc := service.NewDeviceService(deviceRepo, rcache, nil, nil, nil)
+	deviceSvc := service.NewDeviceService(deviceRepo, rcache, nil, nil)
 
 	writer := &recordingBatchWriter{}
 	buf := service.NewDeviceDataBuffer(rdb, writer)

@@ -17,7 +17,6 @@ import (
 // BufferedReport 缓冲队列中的单条上报
 type BufferedReport struct {
 	DeviceID  string          `json:"device_id"`
-	Token     string          `json:"token"`
 	Sensors   []SensorDataDTO `json:"sensors"`
 	Timestamp int64           `json:"ts"` // 上报时的毫秒时间戳
 }
@@ -87,20 +86,6 @@ func (b *DeviceDataBuffer) Stop() {
 	close(b.stopCh)
 	b.wg.Wait()
 	zap.L().Info("[DataBuffer] 后台缓冲 worker 已停止")
-}
-
-// Enqueue 将设备上报推入 Redis 缓冲队列（快速路径，仅一次 LPush）
-func (b *DeviceDataBuffer) Enqueue(ctx context.Context, report BufferedReport) error {
-	data, err := json.Marshal(report)
-	if err != nil {
-		return err
-	}
-	return b.rdb.LPush(ctx, b.bufferKey, data).Err()
-}
-
-// QueueLen 当前队列长度
-func (b *DeviceDataBuffer) QueueLen(ctx context.Context) (int64, error) {
-	return b.rdb.LLen(ctx, b.bufferKey).Result()
 }
 
 // worker 后台消费者

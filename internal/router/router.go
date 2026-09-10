@@ -166,9 +166,6 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 		}
 
 		// ===== WebSocket（不受认证中间件影响） =====
-		api.GET("/ws/mqtt", func(c *gin.Context) {
-			wsHandler.Handle(c.Writer, c.Request)
-		})
 		api.GET("/ws/device", func(c *gin.Context) {
 			wsHandler.HandleDevice(c.Writer, c.Request)
 		})
@@ -215,7 +212,7 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 		api.POST("/devices/:deviceId/heartbeat", deviceAuth, dataCtl.Heartbeat)
 		api.POST("/devices/:deviceId/ping", deviceAuth, dataCtl.Heartbeat) // 兼容别名
 
-		// ===== DownlinkCmd 子资源 =====
+		// ===== 下行命令子资源 =====
 		api.POST("/devices/:deviceId/commands", userAuth, downlinkCtl.PostCmd)
 		api.GET("/devices/:deviceId/commands", deviceAuth, downlinkCtl.GetCmd)
 

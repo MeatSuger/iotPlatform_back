@@ -10,30 +10,13 @@ import (
 	"iot-platform.local/internal/ent"
 	entity "iot-platform.local/internal/model"
 	"iot-platform.local/internal/repository"
-	"iot-platform.local/pkg/cache"
 )
 
 // buildActuatorSvc 构造「真实 sqlite 仓库 + miniredis 命令队列」的执行器定义服务
 func buildActuatorSvc(t *testing.T) (*DeviceActuatorService, *DeviceConfigService, *repository.DeviceRepo, *ent.Client) {
 	t.Helper()
-	client := newTestEnt(t)
-	deviceRepo := repository.NewDeviceRepo(client)
-	configRepo := repository.NewDeviceConfigRepo(client)
-	actuatorRepo := repository.NewDeviceActuatorRepo(client)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
-	_, rdb := newTestRedis(t)
-	rcache := cache.NewRedisCache(rdb)
-
-	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
-	configSvc := NewDeviceConfigService(configRepo, downlinkSvc, nil)
-	return NewDeviceActuatorService(actuatorRepo, configSvc, rcache), configSvc, deviceRepo, client
-}
-
-// seedActuatorDevice 创建属主用户 + 测试设备（满足 owner 外键约束）
-func seedActuatorDevice(t *testing.T, client *ent.Client, deviceRepo *repository.DeviceRepo) {
-	t.Helper()
-	owner := newOwner(t, client)
-	seedDevice(t, deviceRepo, "dev1", owner, "ONLINE")
+	deviceRepo, configSvc, rcache, client := newThingModelEnv(t)
+	return NewDeviceActuatorService(repository.NewDeviceThingRepo(client), configSvc, rcache), configSvc, deviceRepo, client
 }
 
 func validActuatorReq(id string) entity.ActuatorCreateRequest {
@@ -47,7 +30,7 @@ func validActuatorReq(id string) entity.ActuatorCreateRequest {
 
 func TestDeviceActuatorService_CreateAndGet(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	created, err := svc.Create(context.Background(), "dev1", validActuatorReq("servo1"))
 	assert.NoError(t, err)
@@ -64,7 +47,7 @@ func TestDeviceActuatorService_CreateAndGet(t *testing.T) {
 
 func TestDeviceActuatorService_CreateDefaults(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	created, err := svc.Create(context.Background(), "dev1", entity.ActuatorCreateRequest{
 		ID:     "led0",
@@ -78,7 +61,7 @@ func TestDeviceActuatorService_CreateDefaults(t *testing.T) {
 
 func TestDeviceActuatorService_CreateDuplicateID(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validActuatorReq("servo1"))
 	assert.NoError(t, err)
@@ -89,7 +72,7 @@ func TestDeviceActuatorService_CreateDuplicateID(t *testing.T) {
 
 func TestDeviceActuatorService_CreateValidation(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	cases := []entity.ActuatorCreateRequest{
 		{ID: "Upper_Case", Driver: "led"},             // 非法标识符：大写
@@ -105,7 +88,7 @@ func TestDeviceActuatorService_CreateValidation(t *testing.T) {
 
 func TestDeviceActuatorService_List(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validActuatorReq("servo1"))
 	assert.NoError(t, err)
@@ -121,7 +104,7 @@ func TestDeviceActuatorService_List(t *testing.T) {
 
 func TestDeviceActuatorService_GetNotExist(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	got, err := svc.Get(context.Background(), "dev1", "nope")
 	assert.NoError(t, err)
@@ -130,7 +113,7 @@ func TestDeviceActuatorService_GetNotExist(t *testing.T) {
 
 func TestDeviceActuatorService_UpdateIncremental(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validActuatorReq("servo1"))
 	assert.NoError(t, err)
@@ -151,7 +134,7 @@ func TestDeviceActuatorService_UpdateIncremental(t *testing.T) {
 
 func TestDeviceActuatorService_UpdateClearConfig(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validActuatorReq("servo1"))
 	assert.NoError(t, err)
@@ -166,7 +149,7 @@ func TestDeviceActuatorService_UpdateClearConfig(t *testing.T) {
 
 func TestDeviceActuatorService_UpdateEmptyRequest(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validActuatorReq("servo1"))
 	assert.NoError(t, err)
@@ -179,7 +162,7 @@ func TestDeviceActuatorService_UpdateEmptyRequest(t *testing.T) {
 
 func TestDeviceActuatorService_UpdateNotExist(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	name := "x"
 	got, err := svc.Update(context.Background(), "dev1", "nope", entity.ActuatorUpdateRequest{Name: &name})
@@ -189,7 +172,7 @@ func TestDeviceActuatorService_UpdateNotExist(t *testing.T) {
 
 func TestDeviceActuatorService_Delete(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validActuatorReq("servo1"))
 	assert.NoError(t, err)
@@ -202,7 +185,7 @@ func TestDeviceActuatorService_Delete(t *testing.T) {
 
 func TestDeviceActuatorService_Apply(t *testing.T) {
 	svc, configSvc, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	// 预置一份含其他分区的配置
 	_, err := configSvc.Save(context.Background(), "dev1", map[string]any{
@@ -233,7 +216,7 @@ func TestDeviceActuatorService_Apply(t *testing.T) {
 
 func TestDeviceActuatorService_ApplyEmpty(t *testing.T) {
 	svc, configSvc, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	// 无执行器定义时 Apply：下发空 actuators 数组
 	resp, err := svc.Apply(context.Background(), "dev1")
@@ -250,7 +233,7 @@ func TestDeviceActuatorService_ApplyEmpty(t *testing.T) {
 // Create/Update/Delete 后 List 必须立即可见新状态（缓存陈旧会导致断言失败）。
 func TestDeviceActuatorService_ListCacheConsistency(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 	ctx := context.Background()
 
 	// 预置定义并预热缓存
@@ -298,7 +281,7 @@ func TestDeviceActuatorService_ListCacheConsistency(t *testing.T) {
 // TestDeviceActuatorService_ListEmptyDevice 设备无定义时 List 返回空切片且可重复调用
 func TestDeviceActuatorService_ListEmptyDevice(t *testing.T) {
 	svc, _, deviceRepo, client := buildActuatorSvc(t)
-	seedActuatorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	list, err := svc.List(context.Background(), "dev1")
 	assert.NoError(t, err)

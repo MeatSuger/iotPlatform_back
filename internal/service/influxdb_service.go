@@ -7,10 +7,7 @@ import (
 	"time"
 
 	"github.com/InfluxCommunity/influxdb3-go/v2/influxdb3"
-	"github.com/InfluxCommunity/influxdb3-go/v2/influxdb3/batching"
 	"go.uber.org/zap"
-
-	"iot-platform.local/pkg/cache"
 )
 
 // InfluxDBService InfluxDB v3 时序数据服务
@@ -21,12 +18,6 @@ import (
 type InfluxDBService struct {
 	client   *influxdb3.Client
 	database string
-
-	// Redis 缓存（查询结果缓存，减少 InfluxDB 压力）
-	cache *cache.RedisCache
-
-	// batcher 攒批写入（达到 BatchSize 自动落库）
-	batcher *batching.Batcher
 }
 
 // InfluxDBConfig 暴露 ClientConfig 的常用调优参数
@@ -41,9 +32,6 @@ type InfluxDBConfig struct {
 	QueryTimeout          time.Duration // 查询 gRPC 超时，默认无限
 	IdleConnectionTimeout time.Duration // 空闲连接超时，默认 90s
 	MaxIdleConnections    int           // 最大空闲连接数，默认 100
-
-	// 批量写入参数（参考 Batching example）
-	BatchSize int // 攒批大小，默认 1000；0 表示不启用攒批
 }
 
 // NewInfluxDBService 创建 InfluxDB v3 服务
@@ -93,31 +81,7 @@ func NewInfluxDBService(cfg InfluxDBConfig) *InfluxDBService {
 		database: cfg.Database,
 	}
 
-	// 初始化攒批器（BatchSize > 0 时启用）
-	if cfg.BatchSize > 0 {
-		svc.batcher = batching.NewBatcher(
-			batching.WithSize(cfg.BatchSize),
-			batching.WithEmitCallback(func(points []*influxdb3.Point) {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				if err := client.WritePoints(ctx, points); err != nil {
-					zap.L().Warn("[InfluxDB] 批量写入失败", zap.Int("count", len(points)), zap.Error(err))
-				}
-			}),
-		)
-	}
-
 	return svc
-}
-
-// SetCache 注入 Redis 缓存（由 Wire 初始化后调用）
-func (s *InfluxDBService) SetCache(c *cache.RedisCache) {
-	s.cache = c
-}
-
-// IsConnected 检查客户端是否已成功连接
-func (s *InfluxDBService) IsConnected() bool {
-	return s.client != nil
 }
 
 // Close 关闭 InfluxDB 连接
@@ -177,56 +141,13 @@ func (s *InfluxDBService) WriteSensorsAsync(data []SensorData) {
 	}()
 }
 
-// WriteSensorsBatched 使用攒批器写入（高吞吐场景推荐）
-// 攒批器达到 BatchSize 后自动触发写入；末尾批次需调用 FlushBatched 冲刷
-func (s *InfluxDBService) WriteSensorsBatched(data []SensorData) {
-	if s.batcher == nil {
-		zap.L().Warn("[InfluxDB] 攒批器未初始化，回退到异步写入")
-		s.WriteSensorsAsync(data)
-		return
-	}
-
-	for _, d := range data {
-		ts := d.Timestamp
-		if ts.IsZero() {
-			ts = time.Now()
-		}
-		p := influxdb3.NewPointWithMeasurement("device_sensors").
-			SetTag("deviceID", d.DeviceID).
-			SetTag("sensorName", d.SensorName).
-			SetTag("type", d.Type).
-			SetField("value", d.Value).
-			SetTimestamp(ts)
-		s.batcher.Add(p)
-	}
-}
-
-// FlushBatched 将攒批器中剩余的 points 写入 InfluxDB
-func (s *InfluxDBService) FlushBatched() {
-	if s.batcher == nil || s.client == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := s.client.WritePoints(ctx, s.batcher.Emit()); err != nil {
-		zap.L().Warn("[InfluxDB] Flush 攒批器失败", zap.Error(err))
-	}
-}
-
-// QueryRecentDeviceSensors 查询设备最近的传感器数据（Redis缓存 → InfluxDB回源）
+// QueryRecentDeviceSensors 查询设备最近的传感器数据
 //
 // start / end 指定时间范围，零值时默认 end=now, start=3天前。
-// 两层缓存策略（仅默认 3 天范围生效）：
-//  1. limit ≤ 10：直接从 Redis 传感器最新缓存返回（0次 InfluxDB 查询）
-//  2. limit > 10：先查 Redis 查询缓存（15s TTL），miss 则查 InfluxDB 并回填
 func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID string, limit int, start, end time.Time) ([]map[string]any, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-
-	// 先判断是否默认范围（start/end 均为零值 = 调用方未指定），再赋默认值。
-	// 必须在赋默认值之前判断，否则 isDefaultRange 恒为 false，缓存路径永不生效。
-	isDefaultRange := start.IsZero() && end.IsZero()
 
 	// 默认时间范围：最近 3 天
 	now := time.Now()
@@ -237,39 +158,8 @@ func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID
 		start = now.Add(-72 * time.Hour)
 	}
 
-	if isDefaultRange {
-		// 小 limit：直接从传感器最新缓存返回（上报时已写入，0 次 InfluxDB）
-		if limit <= 10 && s.cache != nil {
-			var sensors []map[string]any
-			if err := s.cache.GetCachedSensorRecent(ctx, deviceID, &sensors); err == nil && len(sensors) > 0 {
-				if len(sensors) > limit {
-					sensors = sensors[:limit]
-				}
-				return sensors, nil
-			}
-		}
-
-		// 大 limit：先查 Redis 查询缓存（Cache-Aside）
-		if s.cache != nil {
-			var cached []map[string]any
-			if err := s.cache.GetCachedSensorQuery(ctx, deviceID, limit, &cached); err == nil && len(cached) > 0 {
-				return cached, nil
-			}
-		}
-	}
-
-	// 缓存 miss → 查 InfluxDB
-	records, err := s.queryRecentDeviceSensors(ctx, deviceID, limit, start, end)
-	if err != nil {
-		return nil, err
-	}
-
-	// 回填 Redis 查询缓存（仅默认范围）
-	if isDefaultRange && s.cache != nil && len(records) > 0 {
-		_ = s.cache.CacheSensorQuery(ctx, deviceID, limit, records)
-	}
-
-	return records, nil
+	// 查 InfluxDB
+	return s.queryRecentDeviceSensors(ctx, deviceID, limit, start, end)
 }
 
 // queryRecentDeviceSensors 直接查询 InfluxDB v3
@@ -352,110 +242,6 @@ func (s *InfluxDBService) QueryDeviceSensorsByTime(ctx context.Context, deviceID
 	}
 
 	return records, nil
-}
-
-// AggregateDeviceSensor 聚合查询设备传感器数据
-// aggregateFn: MEAN, MAX, MIN, SUM, COUNT 等 SQL 聚合函数
-func (s *InfluxDBService) AggregateDeviceSensor(ctx context.Context, deviceID, sensorName string, start, end time.Time, aggregateFn string) (float64, error) {
-	if s.client == nil {
-		return 0, fmt.Errorf("[InfluxDB] 客户端未连接")
-	}
-
-	query := fmt.Sprintf(`
-		SELECT %s("value") AS agg_value
-		FROM "device_sensors"
-		WHERE "deviceID" = $deviceID
-		  AND "sensorName" = $sensorName
-		  AND time >= TIMESTAMP '%s'
-		  AND time <= TIMESTAMP '%s'
-	`, aggregateFn, start.Format(time.RFC3339), end.Format(time.RFC3339))
-
-	iterator, err := s.client.QueryWithParameters(ctx, query,
-		influxdb3.QueryParameters{
-			"deviceID":   deviceID,
-			"sensorName": sensorName,
-		})
-	if err != nil {
-		return 0, fmt.Errorf("聚合查询失败: %w", err)
-	}
-
-	for iterator.Next() {
-		value := iterator.Value()
-		if val, ok := value["agg_value"].(float64); ok {
-			return val, nil
-		}
-		// int64 → float64 转换
-		if val, ok := value["agg_value"].(int64); ok {
-			return float64(val), nil
-		}
-	}
-
-	if iterator.Err() != nil {
-		return 0, fmt.Errorf("聚合查询结果解析错误: %w", iterator.Err())
-	}
-
-	return 0, nil
-}
-
-// DownsampleAndWrite 降采样查询并写回降采样表
-// 使用 DATE_BIN 窗口函数聚合原始高频数据（如按分钟生成均值/最大/最小），
-// 通过 AsPointWithMeasurement 写回 device_sensors_downsampled 表
-func (s *InfluxDBService) DownsampleAndWrite(ctx context.Context, deviceID string, windowInterval string) error {
-	if s.client == nil {
-		return fmt.Errorf("[InfluxDB] 客户端未连接")
-	}
-
-	query := fmt.Sprintf(`
-		SELECT
-			DATE_BIN(INTERVAL '%s', time) AS window_start,
-			"deviceID",
-			"sensorName",
-			AVG("value") AS avg,
-			MAX("value") AS max,
-			MIN("value") AS min
-		FROM "device_sensors"
-		WHERE
-			"deviceID" = $deviceID
-			AND time >= NOW() - INTERVAL '1 hour'
-		GROUP BY window_start, "deviceID", "sensorName"
-		ORDER BY window_start
-	`, windowInterval)
-
-	iterator, err := s.client.QueryPointValueWithParameters(ctx, query,
-		influxdb3.QueryParameters{"deviceID": deviceID})
-	if err != nil {
-		return fmt.Errorf("降采样查询失败: %w", err)
-	}
-
-	var downsampledPoints []*influxdb3.Point
-	for {
-		row, err := iterator.Next()
-		if err != nil {
-			if err == influxdb3.Done {
-				break
-			}
-			return fmt.Errorf("降采样迭代失败: %w", err)
-		}
-
-		// 查询结果转为 Point 写回降采样表
-		p, err := row.AsPointWithMeasurement("device_sensors_downsampled")
-		if err != nil {
-			zap.L().Warn("[InfluxDB] 降采样 Point 转换失败", zap.Error(err))
-			continue
-		}
-		// 移除 window_start（它不是 field/tag，只是查询分组列）
-		p = p.RemoveField("window_start").RemoveTag("window_start")
-		downsampledPoints = append(downsampledPoints, p)
-	}
-
-	if len(downsampledPoints) > 0 {
-		if err := s.client.WritePoints(ctx, downsampledPoints); err != nil {
-			return fmt.Errorf("降采样写入失败: %w", err)
-		}
-		zap.S().Debugf("[InfluxDB] 降采样写入 %d 条 [device=%s]", len(downsampledPoints), deviceID)
-	}
-
-	return nil
 }
 
 // Ping 测试 InfluxDB 连接（HTTP /ping 端点，不依赖 gRPC Flight SQL）

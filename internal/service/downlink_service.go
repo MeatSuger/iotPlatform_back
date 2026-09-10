@@ -31,15 +31,15 @@ var pollCmdLua = redis.NewScript(`
 
 // DownlinkService 下放服务
 type DownlinkService struct {
-	cmdRepo    *repository.DownlinkCmdRepo
+	msgRepo    *repository.MessageLogRepo
 	deviceRepo *repository.DeviceRepo
 	rdb        *redis.Client
 	wsHub      *websocket.Hub
 	mqttPub    MqttPublisher
 }
 
-func NewDownlinkService(cmdRepo *repository.DownlinkCmdRepo, deviceRepo *repository.DeviceRepo, rdb *redis.Client, wsHub *websocket.Hub, mqttPub MqttPublisher) *DownlinkService {
-	return &DownlinkService{cmdRepo: cmdRepo, deviceRepo: deviceRepo, rdb: rdb, wsHub: wsHub, mqttPub: mqttPub}
+func NewDownlinkService(msgRepo *repository.MessageLogRepo, deviceRepo *repository.DeviceRepo, rdb *redis.Client, wsHub *websocket.Hub, mqttPub MqttPublisher) *DownlinkService {
+	return &DownlinkService{msgRepo: msgRepo, deviceRepo: deviceRepo, rdb: rdb, wsHub: wsHub, mqttPub: mqttPub}
 }
 
 // DownlinkCmdRequest 下发命令请求
@@ -57,11 +57,18 @@ type DownlinkCmdResponse struct {
 }
 
 // EnqueueCmd 下发命令：持久化到 PostgreSQL + 写入 Redis 队列 + WebSocket 实时推送
-func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req DownlinkCmdRequest) (*ent.DownlinkCmd, error) {
+func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req DownlinkCmdRequest) (*ent.MessageLog, error) {
 	now := time.Now()
 	payloadStr := string(req.Payload)
 
-	cmd, err := s.cmdRepo.Create(ctx, &ent.DownlinkCmd{
+	category := "cmd"
+	if req.Type == "config" {
+		category = "config"
+	}
+
+	cmd, err := s.msgRepo.Create(ctx, &ent.MessageLog{
+		Direction: "down",
+		Category:  category,
 		DeviceID:  deviceID,
 		Type:      req.Type,
 		Payload:   payloadStr,
@@ -150,7 +157,7 @@ func (s *DownlinkService) PollCmd(ctx context.Context, deviceID string) ([]Downl
 		}
 	}
 	if len(ids) > 0 {
-		if err := s.cmdRepo.MarkSent(ctx, ids); err != nil {
+		if err := s.msgRepo.MarkSent(ctx, ids); err != nil {
 			return nil, err
 		}
 	}
@@ -159,32 +166,10 @@ func (s *DownlinkService) PollCmd(ctx context.Context, deviceID string) ([]Downl
 
 // AckCmd 设备确认命令（标记为已送达）
 func (s *DownlinkService) AckCmd(ctx context.Context, cmdID uint) error {
-	if err := s.cmdRepo.MarkDelivered(ctx, cmdID); err != nil {
+	if err := s.msgRepo.MarkDelivered(ctx, cmdID); err != nil {
 		zap.S().Warnf("[Downlink] ACK 更新失败 [cmd=%d]: %v", cmdID, err)
 		return err
 	}
 	zap.S().Infof("[Downlink] 设备已确认 [cmd=%d]", cmdID)
 	return nil
-}
-
-// NotifyOwnerCmd 通过 WebSocket 通知设备 owner 命令已发送
-func (s *DownlinkService) NotifyOwnerCmd(deviceID string, cmd *ent.DownlinkCmd) {
-	if s.wsHub == nil {
-		return
-	}
-	var payloadObj any
-	err := json.Unmarshal([]byte(cmd.Payload), &payloadObj)
-	if err != nil {
-		return
-	}
-	msg, _ := json.Marshal(map[string]any{
-		"type":      "cmdSent",
-		"deviceId":  deviceID,
-		"cmdId":     cmd.ID,
-		"cmdType":   cmd.Type,
-		"payload":   payloadObj,
-		"status":    cmd.Status,
-		"createdAt": cmd.CreatedAt.Format("2006-01-02T15:04:05.000-07:00"),
-	})
-	s.wsHub.SendToDeviceOwner(deviceID, msg)
 }

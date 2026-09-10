@@ -23,8 +23,7 @@ type Config struct {
 // ServerConfig 服务器配置
 type ServerConfig struct {
 	Port           int    `mapstructure:"port"`
-	UDPPort        int    `mapstructure:"udp-port"` // UDP 设备上报端口，0=禁用
-	ContextPath    string `mapstructure:"context-path"`
+	UDPPort        int    `mapstructure:"udp-port"`        // UDP 设备上报端口，0=禁用
 	Mode           string `mapstructure:"mode"`            // debug, release, test
 	LogLevel       string `mapstructure:"log-level"`       // 日志级别: debug, info, warn, error（默认: debug模式下debug，其他info）
 	SwaggerEnabled bool   `mapstructure:"swagger-enabled"` // 是否启用 Swagger 文档（生产环境关闭，默认 true）
@@ -112,8 +111,6 @@ type InfluxDBConfig struct {
 	Token              string `mapstructure:"token"`
 	Database           string `mapstructure:"database"`
 	AuthScheme         string `mapstructure:"auth-scheme"`          // Token(Cloud) | Bearer(Core/Edge自部署)，默认 Token
-	QueryURL           string `mapstructure:"query-url"`            // Flight SQL gRPC 端点（留空则复用 url，如 :8182）
-	HealthCheck        bool   `mapstructure:"health-check"`         // 启动时是否健康检查（默认 true）
 	MaxIdleConnections int    `mapstructure:"max-idle-connections"` // 最大空闲连接数，默认 50
 }
 

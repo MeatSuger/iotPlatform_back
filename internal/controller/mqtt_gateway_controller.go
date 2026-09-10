@@ -33,7 +33,7 @@ import (
 //
 // 功能：
 //  1. 透明转发：设备 --wss--> 网关 --tcp--> 外部 Mosquitto(1883)
-//  2. 发布日志：所有 PUBLISH 帧写入 mqtt_publish_log 表
+//  2. 发布日志：所有 PUBLISH 帧写入 iot_message_log 表（direction=up）
 //  3. 数据入库：PUBLISH payload 解析后走 DeviceReportService（onPublish 钩子）
 //  4. 在线判定：设备 SUBSCRIBE 自身配置/命令主题（如 iot/{deviceId}/config）→ 置 ONLINE
 //  5. 离线判定：连接关闭 / 空闲超时（无任何 MQTT 帧）→ 立即置 OFFLINE，不等周期扫描；
@@ -47,7 +47,7 @@ import (
 type MqttGatewayController struct {
 	brokerAddr  string
 	dialTimeout time.Duration
-	logRepo     *repository.MqttPublishLogRepo
+	msgRepo     *repository.MessageLogRepo
 	reportSvc   *service.DeviceReportService // 设备数据上报服务（onPublish 入库用）
 	configSvc   *service.DeviceConfigService // 设备配置服务（config/report 回执用）
 	deviceSvc   *service.DeviceService       // 设备服务（订阅上线 / 断连离线状态更新用）
@@ -95,13 +95,13 @@ const connectReadTimeout = 30 * time.Second
 // reportSvc 可为 nil（此时 onPublish 只记日志不入库）；cache 可为 nil（不记录消息历史）；
 // configSvc 可为 nil（此时 iot/{id}/config/report 回执不处理）；
 // deviceSvc 可为 nil（此时 SUBSCRIBE 不上线标记，仅依赖上报/心跳刷新状态）
-func NewMqttGatewayController(logRepo *repository.MqttPublishLogRepo, reportSvc *service.DeviceReportService, configSvc *service.DeviceConfigService, deviceSvc *service.DeviceService, cache *cache.RedisCache) *MqttGatewayController {
+func NewMqttGatewayController(msgRepo *repository.MessageLogRepo, reportSvc *service.DeviceReportService, configSvc *service.DeviceConfigService, deviceSvc *service.DeviceService, cache *cache.RedisCache) *MqttGatewayController {
 	addr := strings.TrimPrefix(config.Cfg.MQTT.BrokerURL, "tcp://")
 	addr = strings.TrimPrefix(addr, "ssl://")
 	return &MqttGatewayController{
 		brokerAddr:   addr,
 		dialTimeout:  5 * time.Second,
-		logRepo:      logRepo,
+		msgRepo:      msgRepo,
 		reportSvc:    reportSvc,
 		configSvc:    configSvc,
 		deviceSvc:    deviceSvc,
@@ -436,7 +436,7 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 	zap.S().Debugf("[MQTT网关] 设备 %s 连接结束", conn.deviceID)
 }
 
-// logPublish 拦截 PUBLISH 帧：写入 mqtt_publish_log + 调用 onPublish 钩子
+// logPublish 拦截 PUBLISH 帧：写入 iot_message_log + 调用 onPublish 钩子
 func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protocolLevel byte, connDeviceID string) {
 	if len(frame) < 2 || frame[0]&0xF0 != 0x30 {
 		return
@@ -445,11 +445,10 @@ func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protoc
 	qos := (frame[0] & 0x06) >> 1
 	retained := frame[0]&0x01 != 0
 
-	pos := 1
-	for pos < len(frame) && frame[pos]&0x80 != 0 {
-		pos++
+	_, pos, valid := mqttVarint(frame, 1)
+	if !valid {
+		return
 	}
-	pos++
 	if pos+2 > len(frame) {
 		return
 	}
@@ -467,35 +466,37 @@ func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protoc
 
 	// MQTT 5.0: 跳过 properties
 	if protocolLevel == 5 && pos < len(frame) {
-		propLen, mul := 0, 1
-		for i := 0; i < 4 && pos < len(frame); i++ {
-			b := frame[pos]
-			propLen += int(b&0x7f) * mul
-			mul *= 128
-			pos++
-			if b&0x80 == 0 {
-				break
-			}
+		if next, valid := mqttSkipProperties(frame, pos); valid {
+			pos = next
 		}
-		pos += propLen
 	}
 
 	payload := bytes.Trim(frame[pos:], "\x00")
 
-	// 写入 mqtt_publish_log
+	// 写入 iot_message_log（direction=up）
+	category := "other"
+	switch {
+	case strings.HasSuffix(topic, configReportTopicSuffix):
+		category = "config_report"
+	case strings.HasSuffix(topic, "/telemetry"):
+		category = "telemetry"
+	}
 	zap.S().Debugf("[MQTT网关] PUBLISH topic=%s qos=%d", topic, qos)
-	if g.logRepo != nil {
+	if g.msgRepo != nil {
 		go func() {
-			if _, err := g.logRepo.Create(context.Background(), &ent.MqttPublishLog{
-				Topic:      topic,
-				ClientID:   clientID,
-				Payload:    string(payload),
-				Qos:        int(qos),
-				Retained:   retained,
-				BrokerURL:  config.Cfg.MQTT.BrokerURL,
-				CreateTime: time.Now(),
+			if _, err := g.msgRepo.Create(context.Background(), &ent.MessageLog{
+				Direction: "up",
+				Category:  category,
+				DeviceID:  connDeviceID,
+				Topic:     topic,
+				Payload:   string(payload),
+				Qos:       int(qos),
+				Retained:  retained,
+				ClientID:  clientID,
+				BrokerURL: config.Cfg.MQTT.BrokerURL,
+				CreatedAt: time.Now(),
 			}); err != nil {
-				zap.S().Warnf("[MQTT网关] 写入发布日志失败: %v", err)
+				zap.S().Warnf("[MQTT网关] 写入消息日志失败: %v", err)
 			}
 		}()
 	}
@@ -508,7 +509,7 @@ func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protoc
 const configReportTopicSuffix = "/config/report"
 
 // onPublish PUBLISH 消息解析与入库
-// 此时 frame 已写入 mqtt_publish_log 并转发到外部 broker
+// 此时 frame 已写入 iot_message_log 并转发到外部 broker
 //
 // connDeviceID 为本连接 CONNECT 鉴权通过的设备ID（每条连接由各自 goroutine 串行调用）。
 //
@@ -674,11 +675,10 @@ func parseSubscribeTopics(frame []byte, protocolLevel byte) []string {
 	}
 
 	// 跳过剩余长度（可变字节整数）
-	pos := 1
-	for pos < len(frame) && frame[pos]&0x80 != 0 {
-		pos++
+	_, pos, valid := mqttVarint(frame, 1)
+	if !valid {
+		return nil
 	}
-	pos++
 
 	// 可变头：packet identifier（2 字节）
 	if pos+2 > len(frame) {
@@ -688,20 +688,11 @@ func parseSubscribeTopics(frame []byte, protocolLevel byte) []string {
 
 	// MQTT 5.0: 跳过 properties（可变字节整数长度 + 属性字节）
 	if protocolLevel == 5 {
-		propLen, mul := 0, 1
-		for i := 0; i < 4 && pos < len(frame); i++ {
-			b := frame[pos]
-			propLen += int(b&0x7f) * mul
-			mul *= 128
-			pos++
-			if b&0x80 == 0 {
-				break
-			}
-		}
-		pos += propLen
-		if pos > len(frame) {
+		next, valid := mqttSkipProperties(frame, pos)
+		if !valid {
 			return nil
 		}
+		pos = next
 	}
 
 	// Payload：多个 (topic filter, QoS) 对
@@ -747,16 +738,47 @@ func buildConnackReject(protocolLevel byte) []byte {
 
 // ============ MQTT 帧工具 ============
 
+// mqttVarint 读取 MQTT 可变字节整数（remaining length 与 property length 同编码）。
+// 从 buf[start] 开始，返回 (value, nextPos, ok)；最多 4 字节，越界/超长返回 ok=false。
+func mqttVarint(buf []byte, start int) (int, int, bool) {
+	value, mul, pos := 0, 1, start
+	for i := 0; i < 4; i++ {
+		if pos >= len(buf) {
+			return 0, pos, false
+		}
+		b := buf[pos]
+		value += int(b&0x7f) * mul
+		mul *= 128
+		pos++
+		if b&0x80 == 0 {
+			return value, pos, true
+		}
+	}
+	return 0, pos, false
+}
+
+// mqttSkipProperties 跳过 MQTT 5.0 属性块，返回跳过后的位置与是否有效。
+func mqttSkipProperties(buf []byte, pos int) (int, bool) {
+	propLen, next, ok := mqttVarint(buf, pos)
+	if !ok {
+		return pos, false
+	}
+	next += propLen
+	if next > len(buf) {
+		return pos, false
+	}
+	return next, true
+}
+
 func parseConnectCredentials(packet []byte) (clientID, username, password string, protocolLevel byte, keepAlive uint16, ok bool) {
 	if len(packet) < 2 || packet[0] != 0x10 {
 		return "", "", "", 0, 0, false
 	}
 
-	pos := 1
-	for pos < len(packet) && packet[pos]&0x80 != 0 {
-		pos++
+	pos, valid := 0, false
+	if _, pos, valid = mqttVarint(packet, 1); !valid {
+		return "", "", "", 0, 0, false
 	}
-	pos++
 
 	if pos+2 > len(packet) {
 		return "", "", "", 0, 0, false
@@ -773,26 +795,11 @@ func parseConnectCredentials(packet []byte) (clientID, username, password string
 	pos += 4
 
 	if protocolLevel == 5 {
-		if pos >= len(packet) {
+		next, valid := mqttSkipProperties(packet, pos)
+		if !valid {
 			return "", "", "", 0, 0, false
 		}
-		propLen, multiplier := 0, 1
-		for i := 0; i < 4; i++ {
-			if pos >= len(packet) {
-				return "", "", "", 0, 0, false
-			}
-			b := packet[pos]
-			propLen += int(b&0x7f) * multiplier
-			multiplier *= 128
-			pos++
-			if b&0x80 == 0 {
-				break
-			}
-		}
-		pos += propLen
-		if pos > len(packet) {
-			return "", "", "", 0, 0, false
-		}
+		pos = next
 	}
 
 	// Payload 顺序：clientID → [will properties/topic/payload] → username → password
@@ -858,22 +865,11 @@ func mqttPacketTotalLength(packet []byte) (int, bool) {
 	if len(packet) < 2 || packet[0]&0xF0 == 0 {
 		return 0, false
 	}
-	multiplier := 1
-	rl := 0
-	pos := 1
-	for i := 0; i < 4; i++ {
-		if pos >= len(packet) {
-			return 0, false
-		}
-		b := packet[pos]
-		rl += int(b&0x7f) * multiplier
-		multiplier *= 128
-		pos++
-		if b&0x80 == 0 {
-			return pos + rl, true
-		}
+	rl, pos, ok := mqttVarint(packet, 1)
+	if !ok {
+		return 0, false
 	}
-	return 0, false
+	return pos + rl, true
 }
 
 type mqttFrameReader struct {

@@ -8,7 +8,7 @@ import (
 	"iot-platform.local/pkg/common"
 )
 
-// Sensor 传感器定义 / 物模型（DTO，对应 ent.DeviceSensor 对外暴露）
+// Sensor 传感器定义 / 物模型（DTO，对应 ent.DeviceThing(kind=sensor) 对外暴露）
 //
 // 参考新大陆 NLECloud 传感器模型（ApiTag/Name/DataType/TypeAttrs）与
 // 阿里云 IoT TSL 物模型（identifier/dataType/specs）设计。

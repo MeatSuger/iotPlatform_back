@@ -112,19 +112,15 @@ func (Device) Edges() []ent.Edge {
 			Unique().
 			Field("owner_id").
 			Required(),
-		// 下行指令 (M2O / O2M): 一个设备有多个下行指令
-		// ON DELETE CASCADE: 删除设备时级联删除其下行指令
-		edge.To("cmds", DownlinkCmd.Type).
-			Annotations(entsql.OnDelete(entsql.Cascade)),
 		// 配置快照 (O2O): 一个设备对应一份配置；删除设备时级联删除其配置
 		edge.To("config", DeviceConfig.Type).
 			Unique().
 			Annotations(entsql.OnDelete(entsql.Cascade)),
-		// 传感器定义 (O2M): 一个设备有多个传感器定义；删除设备时级联删除
-		edge.To("sensors", DeviceSensor.Type).
+		// 物模型组件 (O2M): 传感器/执行器统一存储；删除设备时级联删除
+		edge.To("things", DeviceThing.Type).
 			Annotations(entsql.OnDelete(entsql.Cascade)),
-		// 执行器定义 (O2M): 一个设备有多个执行器定义；删除设备时级联删除
-		edge.To("actuators", DeviceActuator.Type).
+		// 消息日志 (O2M): 下行命令 + 上行 MQTT 发布；删除设备时级联删除
+		edge.To("messages", MessageLog.Type).
 			Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }

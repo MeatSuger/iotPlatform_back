@@ -9,7 +9,6 @@ import (
 
 	entity "iot-platform.local/internal/model"
 	"iot-platform.local/internal/repository"
-	"iot-platform.local/pkg/cache"
 
 	"iot-platform.local/internal/ent"
 )
@@ -17,24 +16,8 @@ import (
 // buildSensorSvc 构造「真实 sqlite 仓库 + miniredis 命令队列」的传感器定义服务
 func buildSensorSvc(t *testing.T) (*DeviceSensorService, *DeviceConfigService, *repository.DeviceRepo, *ent.Client) {
 	t.Helper()
-	client := newTestEnt(t)
-	deviceRepo := repository.NewDeviceRepo(client)
-	configRepo := repository.NewDeviceConfigRepo(client)
-	sensorRepo := repository.NewDeviceSensorRepo(client)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
-	_, rdb := newTestRedis(t)
-	rcache := cache.NewRedisCache(rdb)
-
-	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
-	configSvc := NewDeviceConfigService(configRepo, downlinkSvc, nil)
-	return NewDeviceSensorService(sensorRepo, configSvc, rcache), configSvc, deviceRepo, client
-}
-
-// seedSensorDevice 创建属主用户 + 测试设备（满足 owner 外键约束）
-func seedSensorDevice(t *testing.T, client *ent.Client, deviceRepo *repository.DeviceRepo) {
-	t.Helper()
-	owner := newOwner(t, client)
-	seedDevice(t, deviceRepo, "dev1", owner, "ONLINE")
+	deviceRepo, configSvc, rcache, client := newThingModelEnv(t)
+	return NewDeviceSensorService(repository.NewDeviceThingRepo(client), configSvc, rcache), configSvc, deviceRepo, client
 }
 
 func validSensorReq(id string) entity.SensorCreateRequest {
@@ -64,7 +47,7 @@ func ip(v int) *int         { return &v }
 
 func TestDeviceSensorService_CreateAndGet(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	created, err := svc.Create(context.Background(), "dev1", validSensorReq("temperature"))
 	assert.NoError(t, err)
@@ -83,7 +66,7 @@ func TestDeviceSensorService_CreateAndGet(t *testing.T) {
 
 func TestDeviceSensorService_CreateDefaults(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	created, err := svc.Create(context.Background(), "dev1", entity.SensorCreateRequest{
 		ID:   "switch_1",
@@ -99,7 +82,7 @@ func TestDeviceSensorService_CreateDefaults(t *testing.T) {
 
 func TestDeviceSensorService_CreateDuplicateID(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validSensorReq("temperature"))
 	assert.NoError(t, err)
@@ -110,7 +93,7 @@ func TestDeviceSensorService_CreateDuplicateID(t *testing.T) {
 
 func TestDeviceSensorService_CreateValidation(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	cases := []entity.SensorCreateRequest{
 		{ID: "9lead", Name: "x", Type: "t"},                         // 非法标识符：数字开头
@@ -130,7 +113,7 @@ func TestDeviceSensorService_CreateValidation(t *testing.T) {
 
 func TestDeviceSensorService_List(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validSensorReq("temperature"))
 	assert.NoError(t, err)
@@ -146,7 +129,7 @@ func TestDeviceSensorService_List(t *testing.T) {
 
 func TestDeviceSensorService_GetNotExist(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	got, err := svc.Get(context.Background(), "dev1", "nope")
 	assert.NoError(t, err)
@@ -155,7 +138,7 @@ func TestDeviceSensorService_GetNotExist(t *testing.T) {
 
 func TestDeviceSensorService_UpdateIncremental(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validSensorReq("temperature"))
 	assert.NoError(t, err)
@@ -177,7 +160,7 @@ func TestDeviceSensorService_UpdateIncremental(t *testing.T) {
 
 func TestDeviceSensorService_UpdateClearReportInterval(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validSensorReq("temperature"))
 	assert.NoError(t, err)
@@ -194,7 +177,7 @@ func TestDeviceSensorService_UpdateClearReportInterval(t *testing.T) {
 
 func TestDeviceSensorService_UpdateClearSpecs(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validSensorReq("temperature"))
 	assert.NoError(t, err)
@@ -209,7 +192,7 @@ func TestDeviceSensorService_UpdateClearSpecs(t *testing.T) {
 
 func TestDeviceSensorService_UpdateEmptyRequest(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validSensorReq("temperature"))
 	assert.NoError(t, err)
@@ -222,7 +205,7 @@ func TestDeviceSensorService_UpdateEmptyRequest(t *testing.T) {
 
 func TestDeviceSensorService_UpdateNotExist(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	name := "x"
 	got, err := svc.Update(context.Background(), "dev1", "nope", entity.SensorUpdateRequest{Name: &name})
@@ -232,7 +215,7 @@ func TestDeviceSensorService_UpdateNotExist(t *testing.T) {
 
 func TestDeviceSensorService_Delete(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	_, err := svc.Create(context.Background(), "dev1", validSensorReq("temperature"))
 	assert.NoError(t, err)
@@ -245,7 +228,7 @@ func TestDeviceSensorService_Delete(t *testing.T) {
 
 func TestDeviceSensorService_Apply(t *testing.T) {
 	svc, configSvc, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	// 预置一份含其他分区的配置
 	_, err := configSvc.Save(context.Background(), "dev1", map[string]any{
@@ -276,7 +259,7 @@ func TestDeviceSensorService_Apply(t *testing.T) {
 
 func TestDeviceSensorService_ApplyEmpty(t *testing.T) {
 	svc, configSvc, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	// 无传感器定义时 Apply：下发空 sensors 数组
 	resp, err := svc.Apply(context.Background(), "dev1")
@@ -293,7 +276,7 @@ func TestDeviceSensorService_ApplyEmpty(t *testing.T) {
 // Create/Update/Delete 后 List 必须立即可见新状态（缓存陈旧会导致断言失败）。
 func TestDeviceSensorService_ListCacheConsistency(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 	ctx := context.Background()
 
 	// 预置两条定义并预热缓存（List 首次回源后缓存整列表）
@@ -350,7 +333,7 @@ func TestDeviceSensorService_ListCacheConsistency(t *testing.T) {
 // TestDeviceSensorService_ListEmptyDevice 设备无定义时 List 返回空切片且可重复调用
 func TestDeviceSensorService_ListEmptyDevice(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
-	seedSensorDevice(t, client, deviceRepo)
+	seedThingModelDevice(t, client, deviceRepo)
 
 	list, err := svc.List(context.Background(), "dev1")
 	assert.NoError(t, err)

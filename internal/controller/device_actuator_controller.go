@@ -36,7 +36,7 @@ func (ctl *DeviceActuatorController) ListActuators(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
 
-	if err := ctl.checkOwnership(c, deviceID, ownerID); err != nil {
+	if _, err := checkOwnership(c, ctl.deviceSvc, deviceID, ownerID, ""); err != nil {
 		return
 	}
 
@@ -63,7 +63,7 @@ func (ctl *DeviceActuatorController) GetActuator(c *gin.Context) {
 	actuatorID := c.Param("actuatorId")
 	ownerID := middleware.GetUserID(c)
 
-	if err := ctl.checkOwnership(c, deviceID, ownerID); err != nil {
+	if _, err := checkOwnership(c, ctl.deviceSvc, deviceID, ownerID, ""); err != nil {
 		return
 	}
 
@@ -94,7 +94,7 @@ func (ctl *DeviceActuatorController) CreateActuator(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
 
-	if err := ctl.checkOwnership(c, deviceID, ownerID); err != nil {
+	if _, err := checkOwnership(c, ctl.deviceSvc, deviceID, ownerID, ""); err != nil {
 		return
 	}
 
@@ -129,7 +129,7 @@ func (ctl *DeviceActuatorController) UpdateActuator(c *gin.Context) {
 	actuatorID := c.Param("actuatorId")
 	ownerID := middleware.GetUserID(c)
 
-	if err := ctl.checkOwnership(c, deviceID, ownerID); err != nil {
+	if _, err := checkOwnership(c, ctl.deviceSvc, deviceID, ownerID, ""); err != nil {
 		return
 	}
 
@@ -166,7 +166,7 @@ func (ctl *DeviceActuatorController) DeleteActuator(c *gin.Context) {
 	actuatorID := c.Param("actuatorId")
 	ownerID := middleware.GetUserID(c)
 
-	if err := ctl.checkOwnership(c, deviceID, ownerID); err != nil {
+	if _, err := checkOwnership(c, ctl.deviceSvc, deviceID, ownerID, ""); err != nil {
 		return
 	}
 
@@ -194,7 +194,7 @@ func (ctl *DeviceActuatorController) ApplyActuators(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
 
-	if err := ctl.checkOwnership(c, deviceID, ownerID); err != nil {
+	if _, err := checkOwnership(c, ctl.deviceSvc, deviceID, ownerID, ""); err != nil {
 		return
 	}
 
@@ -204,18 +204,4 @@ func (ctl *DeviceActuatorController) ApplyActuators(c *gin.Context) {
 		return
 	}
 	common.SuccessWithMsg(c, "执行器配置已下发", resp)
-}
-
-// checkOwnership 校验设备归属，失败时写响应并返回非 nil 错误
-func (ctl *DeviceActuatorController) checkOwnership(c *gin.Context, deviceID string, ownerID uint) error {
-	device, err := ctl.deviceSvc.GetByDeviceID(c.Request.Context(), deviceID)
-	if err != nil {
-		common.FailWithMsg(c, common.CodeNotFound, "设备不存在")
-		return err
-	}
-	if device.OwnerID != ownerID {
-		common.FailWithMsg(c, common.CodeForbidden, "无权操作该设备")
-		return errors.New("无权操作该设备")
-	}
-	return nil
 }

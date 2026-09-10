@@ -79,6 +79,28 @@ func newTestEnt(t *testing.T) *ent.Client {
 	return client
 }
 
+// newThingModelEnv 构造「真实 sqlite 仓库 + miniredis 命令队列」的公共依赖
+func newThingModelEnv(t *testing.T) (*repository.DeviceRepo, *DeviceConfigService, *cache.RedisCache, *ent.Client) {
+	t.Helper()
+	client := newTestEnt(t)
+	deviceRepo := repository.NewDeviceRepo(client)
+	configRepo := repository.NewDeviceConfigRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
+	_, rdb := newTestRedis(t)
+	rcache := cache.NewRedisCache(rdb)
+
+	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
+	configSvc := NewDeviceConfigService(configRepo, downlinkSvc, nil)
+	return deviceRepo, configSvc, rcache, client
+}
+
+// seedThingModelDevice 创建属主用户 + 测试设备（满足 owner 外键约束）
+func seedThingModelDevice(t *testing.T, client *ent.Client, deviceRepo *repository.DeviceRepo) {
+	t.Helper()
+	owner := newOwner(t, client)
+	seedDevice(t, deviceRepo, "dev1", owner, "ONLINE")
+}
+
 // seedUser 创建测试用户并返回（密码固定为 secret123 的 bcrypt 哈希）
 func seedUser(t *testing.T, repo *repository.UserRepo, account string) *ent.User {
 	t.Helper()

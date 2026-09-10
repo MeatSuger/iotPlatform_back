@@ -1,8 +1,6 @@
 package controller
 
 import (
-	"errors"
-
 	"github.com/gin-gonic/gin"
 
 	"iot-platform.local/internal/middleware"
@@ -49,7 +47,7 @@ func (ctl *DeviceConfigController) GetConfig(c *gin.Context) {
 			return
 		}
 	default:
-		if err := ctl.checkOwnership(c, deviceID, middleware.GetUserID(c)); err != nil {
+		if _, err := checkOwnership(c, ctl.deviceSvc, deviceID, middleware.GetUserID(c), ""); err != nil {
 			return
 		}
 	}
@@ -97,7 +95,7 @@ func (ctl *DeviceConfigController) SaveConfig(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	ownerID := middleware.GetUserID(c)
 
-	if err := ctl.checkOwnership(c, deviceID, ownerID); err != nil {
+	if _, err := checkOwnership(c, ctl.deviceSvc, deviceID, ownerID, ""); err != nil {
 		return
 	}
 
@@ -146,18 +144,4 @@ func (ctl *DeviceConfigController) ReportConfig(c *gin.Context) {
 	}
 
 	common.SuccessWithMsg(c, "配置回执已记录", nil)
-}
-
-// checkOwnership 校验设备归属，失败时写响应并返回非 nil 错误
-func (ctl *DeviceConfigController) checkOwnership(c *gin.Context, deviceID string, ownerID uint) error {
-	device, err := ctl.deviceSvc.GetByDeviceID(c.Request.Context(), deviceID)
-	if err != nil {
-		common.FailWithMsg(c, common.CodeNotFound, "设备不存在")
-		return err
-	}
-	if device.OwnerID != ownerID {
-		common.FailWithMsg(c, common.CodeForbidden, "无权操作该设备")
-		return errors.New("无权操作该设备")
-	}
-	return nil
 }

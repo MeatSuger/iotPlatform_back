@@ -101,12 +101,12 @@ func TestLocalCache_PublicAPI_Compat(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "ONLINE", val)
 
-	// SetWithTTL 写入结构体
+	// Set 写入结构体
 	type testStruct struct {
 		Name string `json:"name"`
 		Age  int    `json:"age"`
 	}
-	lc.SetWithTTL("key2", testStruct{Name: "test", Age: 30}, time.Minute)
+	lc.Set("key2", testStruct{Name: "test", Age: 30})
 	val2, ok2 := lc.Get("key2")
 	assert.True(t, ok2)
 	// 公共 API 行为：struct → JSON → map
@@ -350,16 +350,6 @@ func TestRedisCache_SensorCaches(t *testing.T) {
 	assert.NoError(t, c.EvictSensorRecentCache(ctx, "dev1"))
 	err := c.GetCachedSensorRecent(ctx, "dev1", &sensors)
 	assert.ErrorIs(t, err, redis.Nil)
-
-	// 查询缓存（版本号 + 键）
-	assert.NoError(t, c.CacheSensorQuery(ctx, "dev1", 50, map[string]int{"n": 1}))
-	var out map[string]int
-	assert.NoError(t, c.GetCachedSensorQuery(ctx, "dev1", 50, &out))
-	assert.Equal(t, 1, out["n"])
-	// 版本号失效
-	assert.NoError(t, c.EvictSensorQueryCache(ctx, "dev1"))
-	err = c.GetCachedSensorQuery(ctx, "dev1", 50, &out)
-	assert.ErrorIs(t, err, redis.Nil)
 }
 
 func TestRedisCache_UserAndDeviceListCache(t *testing.T) {
@@ -410,7 +400,6 @@ func TestRedisCache_EvictDeviceAllCaches(t *testing.T) {
 
 	c.client.Set(ctx, "cmd:queue:dev1", "x", 0)
 	c.client.Set(ctx, PrefixMQTTMessage+"dev1", "y", 0)
-	c.client.Set(ctx, PrefixSensorQuery+"dev1:ver", "1", 0)
 
 	assert.NoError(t, c.EvictDeviceAllCaches(ctx, "dev1"))
 	assert.Empty(t, c.client.Keys(ctx, "*").Val())

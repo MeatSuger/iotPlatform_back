@@ -70,21 +70,6 @@ func TestInfluxDBService_PingNoConnection(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestInfluxDBService_IsConnected(t *testing.T) {
-	// 无效 URL 仍能创建客户端（v3 延迟校验），New() 失败时 client 可能为 nil
-	svc := NewInfluxDBService(testConfig("http://localhost:8086"))
-	_ = svc.IsConnected()
-	svc.Close()
-}
-
-func TestInfluxDBService_SetCache(t *testing.T) {
-	svc := NewInfluxDBService(testConfig("http://localhost:8086"))
-	assert.NotPanics(t, func() {
-		svc.SetCache(nil)
-	})
-	svc.Close()
-}
-
 // ========================================
 // 错误处理/未连接/异步路径（无需真实 InfluxDB）
 // ========================================
@@ -103,7 +88,6 @@ func TestInfluxDBService_WriteSensors_ConnectionRefused(t *testing.T) {
 		Database:     "iot",
 		WriteTimeout: 500 * time.Millisecond,
 	})
-	assert.True(t, svc.IsConnected())
 
 	// 零值 Timestamp/Measurement 在写失败路径前已被规范化（不 panic）
 	data := []SensorData{{DeviceID: "d1", SensorName: "t", Value: 1.0}}
@@ -115,23 +99,6 @@ func TestInfluxDBService_WriteSensorsAsync_NotConnected(t *testing.T) {
 	svc := &InfluxDBService{database: "iot"}
 	svc.WriteSensorsAsync([]SensorData{{DeviceID: "d1"}}) // goroutine 内报错并退出，不 panic
 	time.Sleep(30 * time.Millisecond)
-}
-
-func TestInfluxDBService_WriteSensorsBatched_NoBatcher(t *testing.T) {
-	svc := &InfluxDBService{database: "iot"}
-	// batcher 为 nil → 回退到异步写入（nil client 报错退出）
-	svc.WriteSensorsBatched([]SensorData{{DeviceID: "d1", SensorName: "t", Value: 1}})
-	time.Sleep(30 * time.Millisecond)
-}
-
-func TestInfluxDBService_FlushBatched_Safe(t *testing.T) {
-	svc := &InfluxDBService{database: "iot"}
-	svc.FlushBatched() // batcher nil → no-op
-
-	svc2 := NewInfluxDBService(InfluxDBConfig{
-		URL: "http://127.0.0.1:1", Token: "t", Database: "iot", BatchSize: 10,
-	})
-	svc2.FlushBatched() // client 已连（惰性），batcher 非空但 flush 失败仅告警
 }
 
 func TestInfluxDBService_Ping_NotConnected(t *testing.T) {

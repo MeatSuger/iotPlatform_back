@@ -41,13 +41,7 @@ func (ctl *DownlinkController) PostCmd(c *gin.Context) {
 	ownerID := middleware.GetUserID(c)
 
 	// 验证设备归属
-	device, err := ctl.deviceSvc.GetByDeviceID(c.Request.Context(), deviceID)
-	if err != nil {
-		common.FailWithMsg(c, common.CodeNotFound, "设备不存在")
-		return
-	}
-	if device.OwnerID != ownerID {
-		common.FailWithMsg(c, common.CodeForbidden, "无权操作该设备")
+	if _, err := checkOwnership(c, ctl.deviceSvc, deviceID, ownerID, ""); err != nil {
 		return
 	}
 

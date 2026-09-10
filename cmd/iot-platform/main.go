@@ -223,8 +223,8 @@ func main() {
 	// 在线=SUBSCRIBE 自身主题；离线=连接关闭/空闲超时立即置 OFFLINE + 通知 owner
 	var mqttGateway *controller.MqttGatewayController
 	if cfg.MqttGateway.Enabled {
-		logRepo := repository.NewMqttPublishLogRepo(entClient)
-		mqttGateway = controller.NewMqttGatewayController(logRepo, svcs.Report, svcs.Config, svcs.Device, components.Cache)
+		msgRepo := repository.NewMessageLogRepo(entClient)
+		mqttGateway = controller.NewMqttGatewayController(msgRepo, svcs.Report, svcs.Config, svcs.Device, components.Cache)
 		// 上线/下线实时通知 owner 管理端（与原生 WS 断开回调行为一致）
 		mqttGateway.SetPresenceCallbacks(
 			func(deviceID string, ownerID uint) { pushDeviceEvent(ownerID, "deviceOnline", deviceID) },

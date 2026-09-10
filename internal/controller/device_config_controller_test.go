@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
@@ -48,10 +47,10 @@ func newConfigTestEnv(t *testing.T) *configTestEnv {
 
 	deviceRepo := repository.NewDeviceRepo(client)
 	configRepo := repository.NewDeviceConfigRepo(client)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 
 	rcache := cache.NewRedisCache(rdb)
-	deviceSvc := service.NewDeviceService(deviceRepo, rcache, nil, nil, configRepo)
+	deviceSvc := service.NewDeviceService(deviceRepo, rcache, nil, configRepo)
 	downlinkSvc := service.NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
 	configSvc := service.NewDeviceConfigService(configRepo, downlinkSvc, nil)
 
@@ -64,22 +63,7 @@ func newConfigTestEnv(t *testing.T) *configTestEnv {
 
 func (e *configTestEnv) seedDevice(t *testing.T, deviceID string) uint {
 	t.Helper()
-	now := time.Now()
-	owner, err := repository.NewUserRepo(e.client).Create(context.Background(), &ent.User{
-		Account: "owner_" + deviceID, Passwd: "h", Role: "user", Status: "ACTIVE",
-		CreateTime: now, UpdateTime: now,
-	})
-	if err != nil {
-		t.Fatalf("种子用户失败: %v", err)
-	}
-	_, err = repository.NewDeviceRepo(e.client).Create(context.Background(), &ent.Device{
-		ID: deviceID, DeviceName: "设备", OwnerID: owner.ID, Status: "ONLINE",
-		CreatedAt: now, UpdatedAt: now,
-	})
-	if err != nil {
-		t.Fatalf("种子设备失败: %v", err)
-	}
-	return owner.ID
+	return seedOwnedDevice(t, e.client, deviceID, "设备")
 }
 
 // doConfig 构造带 userId 与路径参数的 gin.Context 并执行 handler

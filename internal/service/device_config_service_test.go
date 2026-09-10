@@ -18,7 +18,7 @@ func buildConfigSvc(t *testing.T) (*DeviceConfigService, *ent.Client, *repositor
 	client := newTestEnt(t)
 	deviceRepo := repository.NewDeviceRepo(client)
 	configRepo := repository.NewDeviceConfigRepo(client)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 	_, rdb := newTestRedis(t)
 
 	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
@@ -62,7 +62,7 @@ func TestDeviceConfigService_SaveEnqueuesCommand(t *testing.T) {
 	client := newTestEnt(t)
 	deviceRepo := repository.NewDeviceRepo(client)
 	configRepo := repository.NewDeviceConfigRepo(client)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 	mr, rdb := newTestRedis(t)
 
 	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
@@ -151,7 +151,7 @@ func buildConfigSvcWithPublisher(t *testing.T, pub MqttPublisher) (*DeviceConfig
 	client := newTestEnt(t)
 	deviceRepo := repository.NewDeviceRepo(client)
 	configRepo := repository.NewDeviceConfigRepo(client)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 	_, rdb := newTestRedis(t)
 
 	downlinkSvc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, pub)

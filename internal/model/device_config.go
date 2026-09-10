@@ -1,20 +1,5 @@
 package entity
 
-import "time"
-
-// DeviceConfig 设备配置快照（DTO，对应 ent.DeviceConfig 对外暴露）
-type DeviceConfig struct {
-	ID              uint      `json:"id"`
-	DeviceID        string    `json:"deviceId"`
-	Version         uint      `json:"version"`
-	Payload         string    `json:"payload"`
-	Status          string    `json:"status"`
-	ReportedVersion uint      `json:"reportedVersion"`
-	ReportedPayload string    `json:"reportedPayload"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
-}
-
 // ConfigEnvelope 下发到设备端的配置命令载荷
 //
 // 复用现有下行命令通道：EnqueueCmd(type="config", payload=ConfigEnvelope)

@@ -36,7 +36,7 @@ func TestRecovery_AppErrorPanic(t *testing.T) {
 	r := gin.New()
 	r.Use(Recovery())
 	r.GET("/panic", func(c *gin.Context) {
-		panic(&common.AppError{HTTPCode: 400, BizCode: 40001, Message: "业务异常"})
+		panic(&common.AppError{BizCode: 40001, Message: "业务异常"})
 	})
 
 	w := httptest.NewRecorder()

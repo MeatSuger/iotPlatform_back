@@ -34,10 +34,9 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 		// Repository 层
 		repository.NewUserRepo,
 		repository.NewDeviceRepo,
-		repository.NewDownlinkCmdRepo,
+		repository.NewMessageLogRepo,
 		repository.NewDeviceConfigRepo,
-		repository.NewDeviceSensorRepo,
-		repository.NewDeviceActuatorRepo,
+		repository.NewDeviceThingRepo,
 
 		// Service 层
 		service.NewUserService,

@@ -8,7 +8,7 @@ import (
 	"iot-platform.local/pkg/common"
 )
 
-// Actuator 执行器定义 / 物模型（DTO，对应 ent.DeviceActuator 对外暴露）
+// Actuator 执行器定义 / 物模型（DTO，对应 ent.DeviceThing(kind=actuator) 对外暴露）
 //
 // 与 DeviceSensor 同构：定义仅持久化，经 Apply 编译进
 // DeviceConfig.payload.actuators 后版本化下发；id 即固件 periph 设备名

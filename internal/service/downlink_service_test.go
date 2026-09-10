@@ -43,7 +43,7 @@ func TestCmdQueueConstants(t *testing.T) {
 func TestNewDownlinkService(t *testing.T) {
 	svc := NewDownlinkService(nil, nil, nil, nil, nil)
 	assert.NotNil(t, svc)
-	assert.Nil(t, svc.cmdRepo)
+	assert.Nil(t, svc.msgRepo)
 	assert.Nil(t, svc.deviceRepo)
 	assert.Nil(t, svc.rdb)
 	assert.Nil(t, svc.wsHub)
@@ -56,7 +56,7 @@ func TestNewDownlinkService(t *testing.T) {
 
 func buildDownlinkSvc(t *testing.T) (*DownlinkService, *miniredisSrv, *ent.Client) {
 	client := newTestEnt(t)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 	deviceRepo := repository.NewDeviceRepo(client)
 	mr, rdb := newTestRedis(t)
 	svc := NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
@@ -122,7 +122,7 @@ func TestEnqueueCmd_WebSocketPush(t *testing.T) {
 	deviceCh := make(chan []byte, 4)
 	hub.Register(&websocket.Client{DeviceID: "dev1", Send: deviceCh})
 
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 	svc := NewDownlinkService(cmdRepo, repository.NewDeviceRepo(client), rdb, hub, nil)
 
 	cmd, err := svc.EnqueueCmd(context.Background(), "dev1", DownlinkCmdRequest{
@@ -148,7 +148,7 @@ func TestEnqueueCmd_InvalidPayloadWithHub(t *testing.T) {
 	seedCmdDevice(t, client, "dev1")
 	_, rdb := newTestRedis(t)
 	hub := websocket.NewHub()
-	svc := NewDownlinkService(repository.NewDownlinkCmdRepo(client), repository.NewDeviceRepo(client), rdb, hub, nil)
+	svc := NewDownlinkService(repository.NewMessageLogRepo(client), repository.NewDeviceRepo(client), rdb, hub, nil)
 
 	// 有 hub 时 payload 必须为合法 JSON，否则返回错误
 	_, err := svc.EnqueueCmd(context.Background(), "dev1", DownlinkCmdRequest{
@@ -187,9 +187,9 @@ func TestPollCmd_FullFlow(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, rest)
 
-	pending, err := repository.NewDownlinkCmdRepo(client).ListPending(context.Background(), "dev1")
+	sentCmd, err := client.MessageLog.Get(context.Background(), cmd.ID)
 	assert.NoError(t, err)
-	assert.Empty(t, pending)
+	assert.Equal(t, "sent", sentCmd.Status)
 }
 
 func TestPollCmd_SkipMalformedEntries(t *testing.T) {
@@ -229,53 +229,10 @@ func TestAckCmd_FullFlow(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, svc.AckCmd(context.Background(), cmd.ID))
 
-	// 已送达：不再处于 pending
-	pending, err := repository.NewDownlinkCmdRepo(client).ListPending(context.Background(), "dev1")
+	// 已送达
+	delivered, err := client.MessageLog.Get(context.Background(), cmd.ID)
 	assert.NoError(t, err)
-	assert.Empty(t, pending)
-}
-
-func TestNotifyOwnerCmd(t *testing.T) {
-	t.Run("hub 为空直接返回", func(t *testing.T) {
-		svc, _, client := buildDownlinkSvc(t)
-		seedCmdDevice(t, client, "dev1")
-		cmd, _ := svc.EnqueueCmd(context.Background(), "dev1", DownlinkCmdRequest{Type: "t", Payload: []byte(`{"a":1}`)})
-		svc.NotifyOwnerCmd("dev1", cmd) // 不 panic
-	})
-
-	t.Run("payload 非法 JSON 静默返回", func(t *testing.T) {
-		client := newTestEnt(t)
-		_, rdb := newTestRedis(t)
-		svc := NewDownlinkService(repository.NewDownlinkCmdRepo(client), repository.NewDeviceRepo(client), rdb, websocket.NewHub(), nil)
-		svc.NotifyOwnerCmd("dev1", &ent.DownlinkCmd{Payload: `oops`}) // 不 panic
-	})
-
-	t.Run("owner 在线收到 cmdSent", func(t *testing.T) {
-		client := newTestEnt(t)
-		seedCmdDevice(t, client, "dev1")
-		_, rdb := newTestRedis(t)
-		hub := websocket.NewHub()
-
-		ownerCh := make(chan []byte, 4)
-		hub.Register(&websocket.Client{DeviceID: "dev1", OwnerID: 42, Send: make(chan []byte, 4)})
-		hub.RegisterUser(&websocket.Client{OwnerID: 42, Send: ownerCh})
-
-		cmdRepo := repository.NewDownlinkCmdRepo(client)
-		svc := NewDownlinkService(cmdRepo, repository.NewDeviceRepo(client), rdb, hub, nil)
-		cmd, _ := svc.EnqueueCmd(context.Background(), "dev1", DownlinkCmdRequest{Type: "t", Payload: []byte(`{"a":1}`)})
-
-		svc.NotifyOwnerCmd("dev1", cmd)
-		select {
-		case msg := <-ownerCh:
-			var pushed map[string]any
-			assert.NoError(t, json.Unmarshal(msg, &pushed))
-			assert.Equal(t, "cmdSent", pushed["type"])
-			assert.Equal(t, float64(cmd.ID), pushed["cmdId"])
-			assert.Equal(t, "dev1", pushed["deviceId"])
-		case <-time.After(time.Second):
-			t.Fatal("未收到 owner 通知")
-		}
-	})
+	assert.Equal(t, "delivered", delivered.Status)
 }
 
 // capturePublisher 记录 MQTT 命令发布调用（实现 MqttPublisher，配置发布忽略）
@@ -292,7 +249,7 @@ func (c *capturePublisher) PublishCommand(_ string, payload []byte) error {
 
 func TestEnqueueCmd_PublishesMQTTForNonConfig(t *testing.T) {
 	client := newTestEnt(t)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 	_, rdb := newTestRedis(t)
 	pub := &capturePublisher{}
 	svc := NewDownlinkService(cmdRepo, repository.NewDeviceRepo(client), rdb, nil, pub)
@@ -313,7 +270,7 @@ func TestEnqueueCmd_PublishesMQTTForNonConfig(t *testing.T) {
 
 func TestEnqueueCmd_SkipsMQTTForConfig(t *testing.T) {
 	client := newTestEnt(t)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 	_, rdb := newTestRedis(t)
 	pub := &capturePublisher{}
 	svc := NewDownlinkService(cmdRepo, repository.NewDeviceRepo(client), rdb, nil, pub)
@@ -330,7 +287,7 @@ func TestEnqueueCmd_SkipsMQTTForConfig(t *testing.T) {
 
 func TestEnqueueCmd_PublisherFailureTolerated(t *testing.T) {
 	client := newTestEnt(t)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 	_, rdb := newTestRedis(t)
 	svc := NewDownlinkService(cmdRepo, repository.NewDeviceRepo(client), rdb, nil, errConfigPublisher{})
 	seedCmdDevice(t, client, "dev1")

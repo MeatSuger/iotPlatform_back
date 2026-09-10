@@ -110,24 +110,6 @@ func TestHub_SendToOwner(t *testing.T) {
 	}
 }
 
-func TestHub_SendToDeviceOwner(t *testing.T) {
-	h := NewHub()
-
-	dev := newTestClient("dev-001", 400)
-	h.Register(dev)
-
-	user := newTestUserClient(400)
-	h.RegisterUser(user)
-
-	h.SendToDeviceOwner("dev-001", []byte(`{"type":"cmdSent"}`))
-	select {
-	case msg := <-user.Send:
-		assert.Contains(t, string(msg), "cmdSent")
-	default:
-		t.Error("expected message")
-	}
-}
-
 func TestHub_IsDeviceOnline(t *testing.T) {
 	h := NewHub()
 	assert.False(t, h.IsDeviceOnline("dev-x"))

@@ -49,7 +49,7 @@ func newReportCtx(t *testing.T) (*DeviceReportService, *repository.DeviceRepo, *
 	_, rcache := newTestRedisCache(t)
 	influx := NewInfluxDBService(InfluxDBConfig{Database: "iot"})
 	influx.client = nil // 本组测试不连真实 InfluxDB，WriteSensors 走"未连接"错误分支（异步无害）
-	deviceSvc := NewDeviceService(repo, rcache, nil, nil, nil)
+	deviceSvc := NewDeviceService(repo, rcache, nil, nil)
 	svc := NewDeviceReportService(repo, influx, rcache, deviceSvc)
 	return svc, repo, client
 }
@@ -99,7 +99,7 @@ func TestReportStatusFast_WithBuffer(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 缓冲队列中存在一条上报（FastReportWrite 单次 Pipeline）
-	len, err := buf.QueueLen(context.Background())
+	len, err := svc.cache.GetClient().LLen(context.Background(), buf.bufferKey).Result()
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), len)
 }
@@ -121,7 +121,7 @@ func TestReportStatusFast_FastPathFallback(t *testing.T) {
 	repo2 := repository.NewDeviceRepo(client2)
 	_, rcache2 := newTestRedisCache(t)
 	influx2 := &InfluxDBService{database: "iot"} // client nil
-	svc2 := NewDeviceReportService(repo2, influx2, rcache2, NewDeviceService(repo2, rcache2, nil, nil, nil))
+	svc2 := NewDeviceReportService(repo2, influx2, rcache2, NewDeviceService(repo2, rcache2, nil, nil))
 	seedOnline2(t, client2, repo2)
 	stopPGDebounce(svc2)
 
@@ -199,17 +199,6 @@ func TestGetDeviceStatus_UnknownDevice(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestEvictSensorRecentCache(t *testing.T) {
-	svc, repo, client := newReportCtx(t)
-	seedOnline2(t, client, repo)
-	stopPGDebounce(svc)
-
-	assert.NoError(t, svc.ReportStatusFast(context.Background(), "dev1", sensorDTO()))
-	assert.NoError(t, svc.EvictSensorRecentCache(context.Background(), "dev1"))
-	_, err := getSensorCache(t, svc, "dev1")
-	assert.Error(t, err)
-}
-
 func TestFlushReports(t *testing.T) {
 	svc, _, _ := newReportCtx(t)
 
@@ -234,14 +223,14 @@ func TestReportStatusFast_ValueValidation(t *testing.T) {
 	_, rcache := newTestRedisCache(t)
 	influx := NewInfluxDBService(InfluxDBConfig{Database: "iot"})
 	influx.client = nil
-	deviceSvc := NewDeviceService(repo, rcache, nil, nil, nil)
+	deviceSvc := NewDeviceService(repo, rcache, nil, nil)
 
 	// 传感器定义服务：温度(float) + 模式(enum)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 	_, rdb := newTestRedis(t)
 	downlinkSvc := NewDownlinkService(cmdRepo, repo, rdb, nil, nil)
 	configSvc := NewDeviceConfigService(repository.NewDeviceConfigRepo(client), downlinkSvc, nil)
-	sensorSvc := NewDeviceSensorService(repository.NewDeviceSensorRepo(client), configSvc, rcache)
+	sensorSvc := NewDeviceSensorService(repository.NewDeviceThingRepo(client), configSvc, rcache)
 
 	seedOnline2(t, client, repo)
 	_, err := sensorSvc.Create(context.Background(), "dev1", entity.SensorCreateRequest{

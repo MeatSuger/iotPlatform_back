@@ -31,19 +31,18 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 	redisCache := cache.NewRedisCache(rdb)
 	userService := service.NewUserService(userRepo, redisCache)
 	deviceRepo := repository.NewDeviceRepo(entClient)
+	deviceThingRepo := repository.NewDeviceThingRepo(entClient)
 	deviceConfigRepo := repository.NewDeviceConfigRepo(entClient)
-	deviceSensorRepo := repository.NewDeviceSensorRepo(entClient)
-	deviceActuatorRepo := repository.NewDeviceActuatorRepo(entClient)
-	deviceService := service.NewDeviceService(deviceRepo, redisCache, deviceSensorRepo, deviceActuatorRepo, deviceConfigRepo)
+	deviceService := service.NewDeviceService(deviceRepo, redisCache, deviceThingRepo, deviceConfigRepo)
 	influxDBService := provideInfluxDBService()
 	deviceReportService := service.NewDeviceReportService(deviceRepo, influxDBService, redisCache, deviceService)
-	downlinkCmdRepo := repository.NewDownlinkCmdRepo(entClient)
+	messageLogRepo := repository.NewMessageLogRepo(entClient)
 	hub := websocket.NewHub()
 	mqttPublisher := provideMqttPublisher()
-	downlinkService := service.NewDownlinkService(downlinkCmdRepo, deviceRepo, rdb, hub, mqttPublisher)
+	downlinkService := service.NewDownlinkService(messageLogRepo, deviceRepo, rdb, hub, mqttPublisher)
 	deviceConfigService := service.NewDeviceConfigService(deviceConfigRepo, downlinkService, mqttPublisher)
-	deviceSensorService := service.NewDeviceSensorService(deviceSensorRepo, deviceConfigService, redisCache)
-	deviceActuatorService := service.NewDeviceActuatorService(deviceActuatorRepo, deviceConfigService, redisCache)
+	deviceSensorService := service.NewDeviceSensorService(deviceThingRepo, deviceConfigService, redisCache)
+	deviceActuatorService := service.NewDeviceActuatorService(deviceThingRepo, deviceConfigService, redisCache)
 	services := provideRouterServices(userService, deviceService, deviceReportService, influxDBService, downlinkService, deviceConfigService, deviceSensorService, deviceActuatorService)
 	wsHandler := websocket.NewWsHandler(hub)
 	appComponents := &AppComponents{
@@ -63,13 +62,6 @@ type AppComponents struct {
 	Cache     *cache.RedisCache
 }
 
-func provideMqttPublisher() service.MqttPublisher {
-	if !config.Cfg.MqttGateway.Enabled {
-		return nil
-	}
-	return mqtt.NewPublisher()
-}
-
 func provideInfluxDBService() *service.InfluxDBService {
 	cfg := config.Cfg
 	maxIdleConns := cfg.InfluxDB.MaxIdleConnections
@@ -86,6 +78,15 @@ func provideInfluxDBService() *service.InfluxDBService {
 		IdleConnectionTimeout: 90 * time.Second,
 		MaxIdleConnections:    maxIdleConns,
 	})
+}
+
+// provideMqttPublisher MQTT 下行发布器：网关未启用（Broker 不可达）时返回 nil，
+// 各服务将仅走 HTTP/WS/命令队列通道。wire 注入单实例供多个服务共享。
+func provideMqttPublisher() service.MqttPublisher {
+	if !config.Cfg.MqttGateway.Enabled {
+		return nil
+	}
+	return mqtt.NewPublisher()
 }
 
 func provideRouterServices(

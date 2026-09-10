@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
@@ -49,11 +48,11 @@ func newSensorTestEnv(t *testing.T) *sensorTestEnv {
 
 	deviceRepo := repository.NewDeviceRepo(client)
 	configRepo := repository.NewDeviceConfigRepo(client)
-	sensorRepo := repository.NewDeviceSensorRepo(client)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	sensorRepo := repository.NewDeviceThingRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 
 	rcache := cache.NewRedisCache(rdb)
-	deviceSvc := service.NewDeviceService(deviceRepo, rcache, sensorRepo, nil, configRepo)
+	deviceSvc := service.NewDeviceService(deviceRepo, rcache, sensorRepo, configRepo)
 	downlinkSvc := service.NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
 	configSvc := service.NewDeviceConfigService(configRepo, downlinkSvc, nil)
 	sensorSvc := service.NewDeviceSensorService(sensorRepo, configSvc, rcache)
@@ -68,22 +67,7 @@ func newSensorTestEnv(t *testing.T) *sensorTestEnv {
 
 func (e *sensorTestEnv) seedDevice(t *testing.T, deviceID string) uint {
 	t.Helper()
-	now := time.Now()
-	owner, err := repository.NewUserRepo(e.client).Create(context.Background(), &ent.User{
-		Account: "owner_" + deviceID, Passwd: "h", Role: "user", Status: "ACTIVE",
-		CreateTime: now, UpdateTime: now,
-	})
-	if err != nil {
-		t.Fatalf("种子用户失败: %v", err)
-	}
-	_, err = repository.NewDeviceRepo(e.client).Create(context.Background(), &ent.Device{
-		ID: deviceID, DeviceName: "设备", OwnerID: owner.ID, Status: "ONLINE",
-		CreatedAt: now, UpdatedAt: now,
-	})
-	if err != nil {
-		t.Fatalf("种子设备失败: %v", err)
-	}
-	return owner.ID
+	return seedOwnedDevice(t, e.client, deviceID, "设备")
 }
 
 // doSensor 构造带 userId 与路径参数的 gin.Context 并执行 handler

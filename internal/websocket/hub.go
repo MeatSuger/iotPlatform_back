@@ -135,18 +135,6 @@ func (h *Hub) SendToOwner(ownerID uint, message []byte) {
 	}
 }
 
-// SendToDeviceOwner 向指定设备的 owner 管理端推送消息（从内存取 ownerID，零查库）
-// 典型用途：DownlinkService 发送命令后，通知 owner 管理端「命令已下发」
-func (h *Hub) SendToDeviceOwner(deviceID string, message []byte) {
-	h.mu.RLock()
-	deviceClient, ok := h.deviceClients[deviceID]
-	h.mu.RUnlock()
-	if !ok || deviceClient.OwnerID == 0 {
-		return
-	}
-	h.SendToOwner(deviceClient.OwnerID, message)
-}
-
 // IsDeviceOnline 判断设备是否在线
 func (h *Hub) IsDeviceOnline(deviceID string) bool {
 	h.mu.RLock()

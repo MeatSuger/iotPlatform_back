@@ -50,11 +50,11 @@ func newDetailTestEnv(t *testing.T) *detailTestEnv {
 	rcache := cache.NewRedisCache(rdb)
 	deviceRepo := repository.NewDeviceRepo(client)
 	configRepo := repository.NewDeviceConfigRepo(client)
-	sensorRepo := repository.NewDeviceSensorRepo(client)
-	actuatorRepo := repository.NewDeviceActuatorRepo(client)
-	cmdRepo := repository.NewDownlinkCmdRepo(client)
+	sensorRepo := repository.NewDeviceThingRepo(client)
+	actuatorRepo := repository.NewDeviceThingRepo(client)
+	cmdRepo := repository.NewMessageLogRepo(client)
 
-	deviceSvc := service.NewDeviceService(deviceRepo, rcache, sensorRepo, actuatorRepo, configRepo)
+	deviceSvc := service.NewDeviceService(deviceRepo, rcache, sensorRepo, configRepo)
 	downlinkSvc := service.NewDownlinkService(cmdRepo, deviceRepo, rdb, nil, nil)
 	configSvc := service.NewDeviceConfigService(configRepo, downlinkSvc, nil)
 	sensorSvc := service.NewDeviceSensorService(sensorRepo, configSvc, rcache)
@@ -75,22 +75,7 @@ func newDetailTestEnv(t *testing.T) *detailTestEnv {
 
 func (e *detailTestEnv) seedDevice(t *testing.T, deviceID string) uint {
 	t.Helper()
-	now := time.Now()
-	owner, err := repository.NewUserRepo(e.client).Create(context.Background(), &ent.User{
-		Account: "owner_" + deviceID, Passwd: "h", Role: "user", Status: "ACTIVE",
-		CreateTime: now, UpdateTime: now,
-	})
-	if err != nil {
-		t.Fatalf("种子用户失败: %v", err)
-	}
-	_, err = repository.NewDeviceRepo(e.client).Create(context.Background(), &ent.Device{
-		ID: deviceID, DeviceName: "测试设备", OwnerID: owner.ID, Status: "ONLINE",
-		CreatedAt: now, UpdatedAt: now,
-	})
-	if err != nil {
-		t.Fatalf("种子设备失败: %v", err)
-	}
-	return owner.ID
+	return seedOwnedDevice(t, e.client, deviceID, "测试设备")
 }
 
 // doDetail 构造带 userId 的 gin.Context 并执行设备详情 handler
@@ -127,10 +112,10 @@ func TestDeviceDetail_ThingModelAggregation(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	actuatorRepo := repository.NewDeviceActuatorRepo(env.client)
-	_, err = actuatorRepo.Create(ctx, &ent.DeviceActuator{
-		DeviceID: "dev1", ActuatorID: "led1", Name: "指示灯", Driver: "led",
-		Enabled: true,
+	actuatorRepo := repository.NewDeviceThingRepo(env.client)
+	_, err = actuatorRepo.Create(ctx, &ent.DeviceThing{
+		DeviceID: "dev1", Kind: "actuator", ThingID: "led1", Name: "指示灯",
+		Specs: `{"driver":"led"}`, Enabled: true,
 	})
 	assert.NoError(t, err)
 

@@ -232,11 +232,6 @@ func (s *DeviceReportService) reportStatusFast(ctx context.Context, deviceID str
 		s.writeSensorsSync(deviceID, dto)
 	}
 
-	// 失效查询缓存（新数据入库，旧查询结果过期），异步执行不阻塞响应
-	go func() {
-		_ = s.cache.EvictSensorQueryCache(context.Background(), deviceID)
-	}()
-
 	// 4. 防抖批量更新 PostgreSQL（合并 5s 窗口内的所有更新为一次）
 	s.schedulePGUpdate(deviceID)
 
@@ -391,14 +386,9 @@ func (s *DeviceReportService) GetDeviceStatus(ctx context.Context, deviceID stri
 	}, nil
 }
 
-// EvictSensorRecentCache 失效设备传感器最新数据缓存
-func (s *DeviceReportService) EvictSensorRecentCache(ctx context.Context, deviceID string) error {
-	return s.cache.EvictSensorRecentCache(ctx, util.NormalizeDeviceID(deviceID))
-}
-
 var (
-	ErrInvalidDeviceToken  = &common.AppError{HTTPCode: 401, BizCode: 401, Message: "设备Token无效"}
-	ErrDeviceTokenMismatch = &common.AppError{HTTPCode: 401, BizCode: 401, Message: "设备Token不匹配"}
-	ErrDeviceNotFound      = &common.AppError{HTTPCode: 404, BizCode: 404, Message: "设备不存在"}
-	ErrDeviceTokenNotFound = &common.AppError{HTTPCode: 401, BizCode: 401, Message: "缺少设备Token"}
+	ErrInvalidDeviceToken  = &common.AppError{BizCode: 401, Message: "设备Token无效"}
+	ErrDeviceTokenMismatch = &common.AppError{BizCode: 401, Message: "设备Token不匹配"}
+	ErrDeviceNotFound      = &common.AppError{BizCode: 404, Message: "设备不存在"}
+	ErrDeviceTokenNotFound = &common.AppError{BizCode: 401, Message: "缺少设备Token"}
 )

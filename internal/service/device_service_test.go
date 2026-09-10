@@ -40,7 +40,7 @@ func TestDeviceRegisterResponse_Fields(t *testing.T) {
 }
 
 func TestNewDeviceService(t *testing.T) {
-	svc := NewDeviceService(nil, nil, nil, nil, nil)
+	svc := NewDeviceService(nil, nil, nil, nil)
 	assert.NotNil(t, svc)
 	assert.Nil(t, svc.repo)
 	assert.Nil(t, svc.cache)
@@ -96,7 +96,7 @@ func newDeviceCtx(t *testing.T) (*ent.Client, *repository.DeviceRepo, *DeviceSer
 	client := newTestEnt(t)
 	repo := repository.NewDeviceRepo(client)
 	_, rcache := newTestRedisCache(t)
-	return client, repo, NewDeviceService(repo, rcache, nil, nil, nil)
+	return client, repo, NewDeviceService(repo, rcache, nil, nil)
 }
 
 func strPtr(s string) *string { return &s }

@@ -102,26 +102,6 @@ func (h *WsHandler) NotifyOwner(ownerID uint, message []byte) {
 	h.hub.SendToOwner(ownerID, message)
 }
 
-// Handle 处理WebSocket连接（MQTT 桥接遗留接口，已不再使用，保留兼容）
-func (h *WsHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		zap.S().Warnf("[WebSocket] 升级失败: %v", err)
-		return
-	}
-
-	client := &Client{
-		Conn: conn,
-		Send: make(chan []byte, 256),
-	}
-
-	h.hub.Register(client)
-
-	// 启动读写协程
-	go h.writePump(client)
-	go h.readPump(client)
-}
-
 // HandleUser 用户管理端 WebSocket（owner 连接后可接收其所有设备的实时消息）
 // 认证方式：复用 sa-token stputil，与 HTTP AuthMiddleware 一致
 // Token 提取：Header "Authorization" > Cookie "Authorization" > Query "token"
@@ -270,31 +250,6 @@ func (h *WsHandler) replyOwner(ownerID uint, msgType string, data map[string]any
 	}
 	msg, _ := json.Marshal(resp)
 	h.hub.SendToOwner(ownerID, msg)
-}
-
-// readPump 读取消息并丢弃（MQTT 桥接已移除，仅维持 ping/pong 心跳）
-func (h *WsHandler) readPump(client *Client) {
-	defer func() {
-		h.hub.Unregister(client)
-		client.Conn.Close()
-	}()
-
-	client.Conn.SetReadLimit(maxMessageSize)
-	client.Conn.SetReadDeadline(time.Now().Add(pongWait))
-	client.Conn.SetPongHandler(func(string) error {
-		client.Conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
-	})
-
-	for {
-		_, _, err := client.Conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				zap.S().Warnf("[WebSocket] 读取错误: %v", err)
-			}
-			break
-		}
-	}
 }
 
 // HandleDevice 设备 WebSocket（实时下放通道）— 支持多种方式携带 Token

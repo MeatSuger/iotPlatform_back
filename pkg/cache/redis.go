@@ -41,7 +41,6 @@ const (
 	PrefixDevice       = "cache:device:"        // 设备元数据
 	PrefixDeviceStatus = "cache:device_status:" // 设备运行时状态（Hash）
 	PrefixSensorRecent = "cache:sensor_recent:" // 传感器最新数据
-	PrefixSensorQuery  = "cache:sensor_query:"  // 传感器查询结果缓存
 	PrefixUser         = "cache:user:"          // 用户信息
 	PrefixDeviceList   = "cache:device_list:"   // 用户设备列表
 	PrefixMQTTMessage  = "cache:mqtt_msg:"      // MQTT 消息历史
@@ -60,7 +59,6 @@ const (
 	TTLDeviceLocal  = 30 * time.Second // 设备元数据（L1）
 	TTLDeviceStatus = 10 * time.Minute // 设备运行时状态
 	TTLSensorRecent = 8 * time.Minute  // 传感器最新数据（短于设备元数据 TTL，减少 miss）
-	TTLSensorQuery  = 15 * time.Second // 传感器查询结果（短TTL，保证数据新鲜度）
 	TTLUser         = 15 * time.Minute // 用户信息
 	TTLUserLocal    = 60 * time.Second // 用户信息（L1）
 	TTLDeviceList   = 2 * time.Minute  // 用户设备列表
@@ -287,14 +285,20 @@ func (c *RedisCache) CacheDevice(ctx context.Context, deviceID string, device an
 	return c.PublishInvalidate(ctx, key)
 }
 
-// EvictDeviceCache 失效设备缓存（Write-Invalidate）
-func (c *RedisCache) EvictDeviceCache(ctx context.Context, deviceID string) error {
-	key := PrefixDevice + deviceID
-	c.local.Delete(key)
+// evictKey 失效缓存键：按需清除本实例 L1、删除 L2、广播跨实例失效
+func (c *RedisCache) evictKey(ctx context.Context, key string, evictLocal bool) error {
+	if evictLocal {
+		c.local.Delete(key)
+	}
 	if err := c.Delete(ctx, key); err != nil {
 		return err
 	}
 	return c.PublishInvalidate(ctx, key)
+}
+
+// EvictDeviceCache 失效设备缓存（Write-Invalidate）
+func (c *RedisCache) EvictDeviceCache(ctx context.Context, deviceID string) error {
+	return c.evictKey(ctx, PrefixDevice+deviceID, true)
 }
 
 // ============================================================
@@ -360,12 +364,7 @@ type deviceStatusEntry struct {
 
 // EvictDeviceStatusCache 清除设备状态缓存
 func (c *RedisCache) EvictDeviceStatusCache(ctx context.Context, deviceID string) error {
-	key := PrefixDeviceStatus + deviceID
-	c.local.Delete(key)
-	if err := c.Delete(ctx, key); err != nil {
-		return err
-	}
-	return c.PublishInvalidate(ctx, key)
+	return c.evictKey(ctx, PrefixDeviceStatus+deviceID, true)
 }
 
 // ============================================================
@@ -385,11 +384,7 @@ func (c *RedisCache) GetCachedSensorRecent(ctx context.Context, deviceID string,
 
 // EvictSensorRecentCache 清除传感器缓存
 func (c *RedisCache) EvictSensorRecentCache(ctx context.Context, deviceID string) error {
-	key := PrefixSensorRecent + deviceID + ":latest"
-	if err := c.Delete(ctx, key); err != nil {
-		return err
-	}
-	return c.PublishInvalidate(ctx, key)
+	return c.evictKey(ctx, PrefixSensorRecent+deviceID+":latest", false)
 }
 
 // ============================================================
@@ -406,12 +401,7 @@ func (c *RedisCache) GetCachedSensorDefsWithLoader(ctx context.Context, deviceID
 
 // EvictSensorDefsCache 失效设备传感器定义列表缓存（Write-Invalidate，跨实例通知）
 func (c *RedisCache) EvictSensorDefsCache(ctx context.Context, deviceID string) error {
-	key := PrefixSensorDefs + deviceID
-	c.local.Delete(key)
-	if err := c.Delete(ctx, key); err != nil {
-		return err
-	}
-	return c.PublishInvalidate(ctx, key)
+	return c.evictKey(ctx, PrefixSensorDefs+deviceID, true)
 }
 
 // GetCachedActuatorDefsWithLoader 读取设备执行器定义列表（带 DB loader，L1/L2 两层）
@@ -422,73 +412,20 @@ func (c *RedisCache) GetCachedActuatorDefsWithLoader(ctx context.Context, device
 
 // EvictActuatorDefsCache 失效设备执行器定义列表缓存（Write-Invalidate，跨实例通知）
 func (c *RedisCache) EvictActuatorDefsCache(ctx context.Context, deviceID string) error {
-	key := PrefixActuatorDefs + deviceID
-	c.local.Delete(key)
-	if err := c.Delete(ctx, key); err != nil {
-		return err
-	}
-	return c.PublishInvalidate(ctx, key)
-}
-
-// ---- 传感器查询结果缓存（Cache-Aside，减少 InfluxDB 压力） ----
-// 键含设备级版本号 (cache:sensor_query:{deviceID}:{ver}:{limit})：
-// 上报时 INCR 版本号使旧查询缓存自然失效（TTL 15s 自愈），
-// 避免每次上报执行 SCAN 全 keyspace 清理（高 QPS 下为纯开销）。
-
-// CacheSensorQuery 缓存传感器查询结果
-func (c *RedisCache) CacheSensorQuery(ctx context.Context, deviceID string, limit int, data any) error {
-	ver, err := c.client.Get(ctx, sensorQueryVerKey(deviceID)).Int64()
-	if err != nil && err != redis.Nil {
-		return err
-	}
-	key := fmt.Sprintf("%s%s:%d:%d", PrefixSensorQuery, deviceID, ver, limit)
-	return c.Set(ctx, key, data, TTLSensorQuery)
-}
-
-// GetCachedSensorQuery 获取缓存的传感器查询结果
-// 与 CacheSensorQuery 对称：版本号键缺失时按 ver=0 处理，
-// 否则写入用 ver=0、读取却报错，缓存永不命中。
-func (c *RedisCache) GetCachedSensorQuery(ctx context.Context, deviceID string, limit int, dest any) error {
-	ver, err := c.client.Get(ctx, sensorQueryVerKey(deviceID)).Int64()
-	if err != nil && err != redis.Nil {
-		return err
-	}
-	key := fmt.Sprintf("%s%s:%d:%d", PrefixSensorQuery, deviceID, ver, limit)
-	return c.Get(ctx, key, dest)
-}
-
-// EvictSensorQueryCache 使设备查询缓存失效：INCR 版本号（O(1)，非 SCAN）
-// 版本号键带 1 小时 TTL 防残留（每次 INCR 顺带刷新）
-func (c *RedisCache) EvictSensorQueryCache(ctx context.Context, deviceID string) error {
-	pipe := c.client.Pipeline()
-	verKey := sensorQueryVerKey(deviceID)
-	pipe.Incr(ctx, verKey)
-	pipe.Expire(ctx, verKey, time.Hour)
-	_, err := pipe.Exec(ctx)
-	return err
-}
-
-// sensorQueryVerKey 查询缓存版本号键（TTL 1 小时防残留）
-func sensorQueryVerKey(deviceID string) string {
-	return PrefixSensorQuery + deviceID + ":ver"
+	return c.evictKey(ctx, PrefixActuatorDefs+deviceID, true)
 }
 
 // EvictDeviceAllCaches 设备删除时清理该设备的所有关联缓存
-// 包括: 查询缓存、下行命令队列、MQTT 消息历史（精确键）
+// 包括: 下行命令队列、MQTT 消息历史（精确键）
 func (c *RedisCache) EvictDeviceAllCaches(ctx context.Context, deviceID string) error {
 	var errs []error
 
-	// 1. 传感器查询缓存：删版本号键（旧 key 靠 TTL 自愈）
-	if err := c.Delete(ctx, sensorQueryVerKey(deviceID)); err != nil {
-		errs = append(errs, fmt.Errorf("查询缓存: %w", err))
-	}
-
-	// 2. 下行命令队列
+	// 1. 下行命令队列
 	if err := c.Delete(ctx, "cmd:queue:"+deviceID); err != nil {
 		errs = append(errs, fmt.Errorf("命令队列: %w", err))
 	}
 
-	// 3. MQTT 消息历史
+	// 2. MQTT 消息历史
 	if err := c.Delete(ctx, PrefixMQTTMessage+deviceID); err != nil {
 		errs = append(errs, fmt.Errorf("MQTT消息: %w", err))
 	}
@@ -552,12 +489,7 @@ func (c *RedisCache) GetCachedUser(ctx context.Context, userID string, dest any,
 
 // EvictUserCache 失效用户缓存
 func (c *RedisCache) EvictUserCache(ctx context.Context, userID string) error {
-	key := PrefixUser + userID
-	c.local.Delete(key)
-	if err := c.Delete(ctx, key); err != nil {
-		return err
-	}
-	return c.PublishInvalidate(ctx, key)
+	return c.evictKey(ctx, PrefixUser+userID, true)
 }
 
 // ============================================================
@@ -573,12 +505,7 @@ func (c *RedisCache) GetCachedDeviceList(ctx context.Context, ownerID uint, dest
 
 // EvictDeviceListCache 失效用户设备列表缓存
 func (c *RedisCache) EvictDeviceListCache(ctx context.Context, ownerID uint) error {
-	key := fmt.Sprintf("%s%d", PrefixDeviceList, ownerID)
-	c.local.Delete(key)
-	if err := c.Delete(ctx, key); err != nil {
-		return err
-	}
-	return c.PublishInvalidate(ctx, key)
+	return c.evictKey(ctx, fmt.Sprintf("%s%d", PrefixDeviceList, ownerID), true)
 }
 
 // ============================================================
@@ -802,19 +729,6 @@ func (lc *LocalCache) Set(key string, value any) {
 	shard.items[key] = localCacheEntry{
 		data:      data,
 		expiresAt: time.Now().Add(10 * time.Second),
-		isNeg:     false,
-	}
-	shard.mu.Unlock()
-}
-
-// SetWithTTL 使用指定 TTL 设置
-func (lc *LocalCache) SetWithTTL(key string, value any, ttl time.Duration) {
-	data, _ := json.Marshal(value)
-	shard := lc.getShard(key)
-	shard.mu.Lock()
-	shard.items[key] = localCacheEntry{
-		data:      data,
-		expiresAt: time.Now().Add(ttl),
 		isNeg:     false,
 	}
 	shard.mu.Unlock()

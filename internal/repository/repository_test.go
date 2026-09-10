@@ -126,12 +126,12 @@ func TestDeviceRepo_CRUD(t *testing.T) {
 	owner, err := userRepo.Create(context.Background(), makeUser("owner"))
 	assert.NoError(t, err)
 
-	// Create / GetByID / GetByDeviceID
+	// Create / GetByDeviceID
 	d, err := repo.Create(context.Background(), makeDevice("abc123", owner.ID))
 	assert.NoError(t, err)
 	assert.Equal(t, "abc123", d.ID)
 
-	got, err := repo.GetByID(context.Background(), "abc123")
+	got, err := repo.GetByDeviceID(context.Background(), "abc123")
 	assert.NoError(t, err)
 	assert.Equal(t, "设备abc123", got.DeviceName)
 	got2, err := repo.GetByDeviceID(context.Background(), "abc123")
@@ -148,7 +148,7 @@ func TestDeviceRepo_CRUD(t *testing.T) {
 	got3, _ := repo.GetByDeviceID(context.Background(), "abc123")
 	assert.Equal(t, "新名字", got3.DeviceName)
 
-	// 第二台设备 + ListByOwnerID / ListByDeviceID
+	// 第二台设备 + ListByOwnerID
 	_, err = repo.Create(context.Background(), makeDevice("def456", owner.ID))
 	assert.NoError(t, err)
 	otherOwner, _ := userRepo.Create(context.Background(), makeUser("other"))
@@ -159,10 +159,6 @@ func TestDeviceRepo_CRUD(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, devs, 2)
 	assert.Equal(t, "def456", devs[0].ID) // ID 倒序
-
-	devs2, err := repo.ListByDeviceID(context.Background(), "abc123")
-	assert.NoError(t, err)
-	assert.Len(t, devs2, 1)
 
 	// UpdateStatus / UpdateLastActive
 	assert.NoError(t, repo.UpdateStatus(context.Background(), "abc123", "OFFLINE"))
@@ -198,7 +194,7 @@ func TestDeviceRepo_CRUD(t *testing.T) {
 
 	// Delete
 	assert.NoError(t, repo.Delete(context.Background(), "abc123"))
-	_, err = repo.GetByID(context.Background(), "abc123")
+	_, err = repo.GetByDeviceID(context.Background(), "abc123")
 	assert.True(t, ent.IsNotFound(err))
 }
 
@@ -210,58 +206,103 @@ func TestDeviceUpdateFields_IsEmpty(t *testing.T) {
 	assert.False(t, DeviceUpdateFields{Location: &empty}.IsEmpty())
 }
 
-func TestNewDownlinkCmdRepo(t *testing.T) {
-	repo := NewDownlinkCmdRepo(nil)
+func TestNewMessageLogRepo(t *testing.T) {
+	repo := NewMessageLogRepo(nil)
 	assert.NotNil(t, repo)
 	assert.Nil(t, repo.client)
 }
 
-func TestDownlinkCmdRepo_FullFlow(t *testing.T) {
+func TestMessageLogRepo_FullFlow(t *testing.T) {
 	client := newRepoEnt(t)
 	userRepo := NewUserRepo(client)
 	deviceRepo := NewDeviceRepo(client)
-	repo := NewDownlinkCmdRepo(client)
+	repo := NewMessageLogRepo(client)
 
 	owner, _ := userRepo.Create(context.Background(), makeUser("owner"))
 	deviceRepo.Create(context.Background(), makeDevice("dev1", owner.ID))
 
-	// Create
-	cmd, err := repo.Create(context.Background(), &ent.DownlinkCmd{
-		DeviceID: "dev1", Type: "reboot", Payload: `{}`, Status: "pending",
-		CreatedAt: time.Now(),
+	// 下行命令
+	cmd, err := repo.Create(context.Background(), &ent.MessageLog{
+		Direction: "down", Category: "cmd", DeviceID: "dev1",
+		Type: "reboot", Payload: `{}`, Status: "pending", CreatedAt: time.Now(),
 	})
 	assert.NoError(t, err)
 	assert.NotZero(t, cmd.ID)
 
-	// ListPending
-	pending, err := repo.ListPending(context.Background(), "dev1")
+	got, err := client.MessageLog.Get(context.Background(), cmd.ID)
 	assert.NoError(t, err)
-	assert.Len(t, pending, 1)
+	assert.Equal(t, "pending", got.Status)
 
 	// MarkSent
 	assert.NoError(t, repo.MarkSent(context.Background(), []uint{cmd.ID}))
-	pending2, err := repo.ListPending(context.Background(), "dev1")
+	sent, err := client.MessageLog.Get(context.Background(), cmd.ID)
 	assert.NoError(t, err)
-	assert.Empty(t, pending2)
+	assert.Equal(t, "sent", sent.Status)
 
 	// 空列表 MarkSent 安全
 	assert.NoError(t, repo.MarkSent(context.Background(), nil))
 
 	// MarkDelivered
 	assert.NoError(t, repo.MarkDelivered(context.Background(), cmd.ID))
-}
+	delivered, err := client.MessageLog.Get(context.Background(), cmd.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, "delivered", delivered.Status)
 
-func TestMqttPublishLogRepo_Create(t *testing.T) {
-	client := newRepoEnt(t)
-	repo := NewMqttPublishLogRepo(client)
-	log, err := repo.Create(context.Background(), &ent.MqttPublishLog{
-		Topic: "dev/up", Payload: `{"a":1}`, Qos: 1, Retained: false,
-		ClientID: "gw-1", BrokerURL: "tcp://mqtt:1883", CreateTime: time.Now(),
+	// 上行日志
+	up, err := repo.Create(context.Background(), &ent.MessageLog{
+		Direction: "up", Category: "telemetry", DeviceID: "dev1",
+		Topic: "iot/dev1/telemetry", Payload: `{"a":1}`, Qos: 1, CreatedAt: time.Now(),
 	})
 	assert.NoError(t, err)
-	assert.NotZero(t, log.ID)
-	// 读回校验
-	got, err := client.MqttPublishLog.Get(context.Background(), log.ID)
+	assert.NotZero(t, up.ID)
+}
+
+func TestNewDeviceThingRepo(t *testing.T) {
+	repo := NewDeviceThingRepo(nil)
+	assert.NotNil(t, repo)
+	assert.Nil(t, repo.client)
+}
+
+func TestDeviceThingRepo_CRUD(t *testing.T) {
+	client := newRepoEnt(t)
+	userRepo := NewUserRepo(client)
+	deviceRepo := NewDeviceRepo(client)
+	repo := NewDeviceThingRepo(client)
+
+	owner, _ := userRepo.Create(context.Background(), makeUser("owner"))
+	deviceRepo.Create(context.Background(), makeDevice("dev1", owner.ID))
+
+	ctx := context.Background()
+	created, err := repo.Create(ctx, &ent.DeviceThing{
+		DeviceID: "dev1", Kind: "sensor", ThingID: "temp", Name: "温度",
+		Specs: `{"type":"temperature"}`, Enabled: true,
+	})
 	assert.NoError(t, err)
-	assert.Equal(t, "dev/up", got.Topic)
+	assert.NotZero(t, created.ID)
+
+	got, err := repo.Get(ctx, "dev1", "sensor", "temp")
+	assert.NoError(t, err)
+	assert.Equal(t, "温度", got.Name)
+
+	list, err := repo.ListByDeviceID(ctx, "dev1", "sensor")
+	assert.NoError(t, err)
+	assert.Len(t, list, 1)
+
+	// 其它 kind 隔离
+	listA, err := repo.ListByDeviceID(ctx, "dev1", "actuator")
+	assert.NoError(t, err)
+	assert.Empty(t, listA)
+
+	name := "温度2"
+	specs := `{"type":"temperature","unit":"C"}`
+	updated, err := repo.Update(ctx, "dev1", "sensor", "temp", ThingUpdateFields{Name: &name, Specs: &specs})
+	assert.NoError(t, err)
+	assert.Equal(t, "温度2", updated.Name)
+
+	n, err := repo.Delete(ctx, "dev1", "sensor", "temp")
+	assert.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	_, err = repo.Get(ctx, "dev1", "sensor", "temp")
+	assert.True(t, ent.IsNotFound(err))
 }
