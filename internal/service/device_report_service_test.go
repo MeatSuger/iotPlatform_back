@@ -47,7 +47,7 @@ func newReportCtx(t *testing.T) (*DeviceReportService, *repository.DeviceRepo, *
 	client := newTestEnt(t)
 	repo := repository.NewDeviceRepo(client)
 	_, rcache := newTestRedisCache(t)
-	influx := NewInfluxDBService(InfluxDBConfig{Database: "iot"})
+	influx := NewInfluxDBService(InfluxDBConfig{Database: "iot"}, nil)
 	influx.client = nil // 本组测试不连真实 InfluxDB，WriteSensors 走"未连接"错误分支（异步无害）
 	deviceSvc := NewDeviceService(repo, rcache, nil, nil)
 	svc := NewDeviceReportService(repo, influx, rcache, deviceSvc)
@@ -221,7 +221,7 @@ func TestReportStatusFast_ValueValidation(t *testing.T) {
 	client := newTestEnt(t)
 	repo := repository.NewDeviceRepo(client)
 	_, rcache := newTestRedisCache(t)
-	influx := NewInfluxDBService(InfluxDBConfig{Database: "iot"})
+	influx := NewInfluxDBService(InfluxDBConfig{Database: "iot"}, nil)
 	influx.client = nil
 	deviceSvc := NewDeviceService(repo, rcache, nil, nil)
 

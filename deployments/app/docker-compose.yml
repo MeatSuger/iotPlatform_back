@@ -12,6 +12,7 @@ services:
       start_period: 20s
     environment:
       - CONFIG_PATH=configs/config.prod.yaml
+      - HISTORY_DOWNSAMPLE=${HISTORY_DOWNSAMPLE:-on}
     ports:
       - "127.0.0.1:9091:9091"
     networks:

@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/InfluxCommunity/influxdb3-go/v2/influxdb3"
 	"go.uber.org/zap"
+
+	"iot-platform.local/pkg/cache"
 )
 
 // InfluxDBService InfluxDB v3 时序数据服务
@@ -18,6 +21,7 @@ import (
 type InfluxDBService struct {
 	client   *influxdb3.Client
 	database string
+	cache    *cache.RedisCache // 历史查询缓存（可为 nil，自动降级直查）
 }
 
 // InfluxDBConfig 暴露 ClientConfig 的常用调优参数
@@ -36,7 +40,7 @@ type InfluxDBConfig struct {
 
 // NewInfluxDBService 创建 InfluxDB v3 服务
 // Host / Token / Database 为必填；连接池与超时参数可经 InfluxDBConfig 调优
-func NewInfluxDBService(cfg InfluxDBConfig) *InfluxDBService {
+func NewInfluxDBService(cfg InfluxDBConfig, redisCache *cache.RedisCache) *InfluxDBService {
 	config := influxdb3.ClientConfig{
 		Host:       cfg.URL,
 		Token:      cfg.Token,
@@ -73,12 +77,13 @@ func NewInfluxDBService(cfg InfluxDBConfig) *InfluxDBService {
 	client, err := influxdb3.New(config)
 	if err != nil {
 		zap.L().Error("[InfluxDB] 创建客户端失败", zap.Error(err))
-		return &InfluxDBService{database: cfg.Database}
+		return &InfluxDBService{database: cfg.Database, cache: redisCache}
 	}
 
 	svc := &InfluxDBService{
 		client:   client,
 		database: cfg.Database,
+		cache:    redisCache,
 	}
 
 	return svc
@@ -149,6 +154,10 @@ func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID
 		limit = 50
 	}
 
+	// 先记录是否为"默认时间窗"——缓存键需要区分默认路径与显式时间窗，
+	// 下面的默认值填充会覆盖 start/end，所以必须在此之前判断。
+	isDefaultRange := start.IsZero() && end.IsZero()
+
 	// 默认时间范围：最近 3 天
 	now := time.Now()
 	if end.IsZero() {
@@ -158,14 +167,56 @@ func (s *InfluxDBService) QueryRecentDeviceSensors(ctx context.Context, deviceID
 		start = now.Add(-72 * time.Hour)
 	}
 
-	// 查 InfluxDB
-	return s.queryRecentDeviceSensors(ctx, deviceID, limit, start, end)
+	// Redis 未就绪时降级直查，保证可用性（不因缓存故障阻塞业务）
+	if s.cache == nil {
+		return s.queryRecentDeviceSensors(ctx, deviceID, limit, start, end)
+	}
+
+	// Cache-Aside：L1 → L2 → singleflight 回源 → 回填
+	// singleflight 保证缓存过期瞬间的并发 miss 只有一个请求真正打到 InfluxDB，
+	// 避免"缓存击穿"——这正是压测中把 InfluxDB 打满的直接原因之一。
+	var records []map[string]any
+	err := s.cache.GetCachedSensorHistoryWithLoader(
+		ctx, deviceID, limit, start, end, isDefaultRange, &records,
+		func(loadCtx context.Context) (any, error) {
+			return s.queryRecentDeviceSensors(loadCtx, deviceID, limit, start, end)
+		})
+	if err != nil {
+		return nil, err
+	}
+	return records, nil
 }
 
 // queryRecentDeviceSensors 直接查询 InfluxDB v3
 func (s *InfluxDBService) queryRecentDeviceSensors(ctx context.Context, deviceID string, limit int, start, end time.Time) ([]map[string]any, error) {
 	if s.client == nil {
 		return nil, fmt.Errorf("[InfluxDB] 客户端未连接")
+	}
+
+	// 大跨度降采样：3 天窗口的原始数据点扫描代价高（是全部接口里唯一的重查询）。
+	// 先用时间桶聚合；任何失败都回退原始查询，保证功能不退化。
+	//
+	// 用 first_value() 而非 avg() —— 物模型含 bool/enum/string 类型，avg 只能作用于数值。
+	// （已实测：InfluxDB3 DataFusion 不支持 last()，first_value() 可用）
+	if bucket := downsampleBucket(end.Sub(start)); bucket != "" {
+		aggQuery := fmt.Sprintf(`
+			SELECT date_bin(INTERVAL '%s', time, TIMESTAMP '1970-01-01T00:00:00Z') AS time,
+			       "sensorName" AS name, "type", first_value("value") AS value
+			FROM "device_sensors"
+			WHERE "deviceID" = $deviceID
+			  AND time >= TIMESTAMP '%s'
+			  AND time <= TIMESTAMP '%s'
+			GROUP BY 1, "sensorName", "type"
+			ORDER BY time DESC
+			LIMIT %d
+		`, bucket, start.Format(time.RFC3339), end.Format(time.RFC3339), limit)
+
+		if records, err := s.scanSensorRows(ctx, aggQuery, deviceID); err == nil {
+			return records, nil
+		} else {
+			zap.L().Warn("[InfluxDB] 降采样查询失败，回退原始查询",
+				zap.String("bucket", bucket), zap.Error(err))
+		}
 	}
 
 	// RFC3339 + TIMESTAMP 关键字（DataFusion 标准语法）
@@ -180,6 +231,11 @@ func (s *InfluxDBService) queryRecentDeviceSensors(ctx context.Context, deviceID
 		LIMIT %d
 	`, start.Format(time.RFC3339), end.Format(time.RFC3339), limit)
 
+	return s.scanSensorRows(ctx, query, deviceID)
+}
+
+// scanSensorRows 执行查询并把 time 格式化为字符串（兼容旧 API 返回格式）
+func (s *InfluxDBService) scanSensorRows(ctx context.Context, query, deviceID string) ([]map[string]any, error) {
 	iterator, err := s.client.QueryWithParameters(ctx, query,
 		influxdb3.QueryParameters{
 			"deviceID": deviceID,
@@ -191,7 +247,6 @@ func (s *InfluxDBService) queryRecentDeviceSensors(ctx context.Context, deviceID
 	var records []map[string]any
 	for iterator.Next() {
 		value := iterator.Value()
-		// 将 time 格式化为字符串（兼容旧 API 返回格式）
 		if t, ok := value["time"].(time.Time); ok {
 			value["timestamp"] = t.Format("2006-01-02T15:04:05.000")
 			delete(value, "time")
@@ -202,8 +257,26 @@ func (s *InfluxDBService) queryRecentDeviceSensors(ctx context.Context, deviceID
 	if iterator.Err() != nil {
 		return nil, fmt.Errorf("查询结果解析错误: %w", iterator.Err())
 	}
-
 	return records, nil
+}
+
+// downsampleBucket 按查询跨度选择降采样桶大小；返回空串表示不降采样。
+//
+// 阈值取 24h：小窗口（实时/当日曲线）保持原始分辨率，
+// 大跨度（默认 3 天）才聚合，避免改变用户高频场景的返回语义。
+func downsampleBucket(span time.Duration) string {
+	// 可用 HISTORY_DOWNSAMPLE=off 关闭降采样（用于 A/B 与线上回退，无需重新编译）
+	if v := os.Getenv("HISTORY_DOWNSAMPLE"); v == "off" || v == "false" || v == "0" {
+		return ""
+	}
+	switch {
+	case span >= 72*time.Hour:
+		return "1 hour"
+	case span >= 24*time.Hour:
+		return "30 minutes"
+	default:
+		return ""
+	}
 }
 
 // QueryDeviceSensorsByTime 按时间范围查询传感器数据

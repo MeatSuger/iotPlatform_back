@@ -39,14 +39,14 @@ func TestSensorData_Fields(t *testing.T) {
 }
 
 func TestNewInfluxDBService(t *testing.T) {
-	svc := NewInfluxDBService(testConfig("http://localhost:8086"))
+	svc := NewInfluxDBService(testConfig("http://localhost:8086"), nil)
 	assert.NotNil(t, svc)
 	assert.Equal(t, "my-database", svc.database)
 	defer svc.Close()
 }
 
 func TestInfluxDBService_Close(t *testing.T) {
-	svc := NewInfluxDBService(testConfig("http://localhost:8086"))
+	svc := NewInfluxDBService(testConfig("http://localhost:8086"), nil)
 	// 关闭不应 panic
 	assert.NotPanics(t, func() {
 		svc.Close()
@@ -54,7 +54,7 @@ func TestInfluxDBService_Close(t *testing.T) {
 }
 
 func TestInfluxDBService_DoubleClose(t *testing.T) {
-	svc := NewInfluxDBService(testConfig("http://localhost:8086"))
+	svc := NewInfluxDBService(testConfig("http://localhost:8086"), nil)
 	svc.Close()
 	// 重复关闭应安全
 	assert.NotPanics(t, func() {
@@ -63,7 +63,7 @@ func TestInfluxDBService_DoubleClose(t *testing.T) {
 }
 
 func TestInfluxDBService_PingNoConnection(t *testing.T) {
-	svc := NewInfluxDBService(testConfig("http://localhost:9999"))
+	svc := NewInfluxDBService(testConfig("http://localhost:9999"), nil)
 	defer svc.Close()
 	// 无真实 InfluxDB 时 Ping 应返回错误
 	err := svc.Ping(t.Context())
@@ -87,7 +87,7 @@ func TestInfluxDBService_WriteSensors_ConnectionRefused(t *testing.T) {
 		Token:        "t",
 		Database:     "iot",
 		WriteTimeout: 500 * time.Millisecond,
-	})
+	}, nil)
 
 	// 零值 Timestamp/Measurement 在写失败路径前已被规范化（不 panic）
 	data := []SensorData{{DeviceID: "d1", SensorName: "t", Value: 1.0}}

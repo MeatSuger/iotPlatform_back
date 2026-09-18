@@ -60,7 +60,7 @@ func InitializeApp(entClient *ent.Client, rdb *redis.Client) (*AppComponents, er
 	return nil, nil
 }
 
-func provideInfluxDBService() *service.InfluxDBService {
+func provideInfluxDBService(redisCache *cache.RedisCache) *service.InfluxDBService {
 	cfg := config.Cfg
 	maxIdleConns := cfg.InfluxDB.MaxIdleConnections
 	if maxIdleConns <= 0 {
@@ -75,7 +75,7 @@ func provideInfluxDBService() *service.InfluxDBService {
 		QueryTimeout:          2 * time.Minute,
 		IdleConnectionTimeout: 90 * time.Second,
 		MaxIdleConnections:    maxIdleConns,
-	})
+	}, redisCache)
 }
 
 // provideMqttPublisher MQTT 下行发布器：网关未启用（Broker 不可达）时返回 nil，

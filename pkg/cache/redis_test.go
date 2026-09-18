@@ -326,7 +326,7 @@ func TestRedisCache_FastReportWrite(t *testing.T) {
 	ctx := context.Background()
 
 	err := c.FastReportWrite(ctx, "dev1", "ONLINE", 1700000000000,
-		[]any{map[string]any{"name": "t"}}, []byte(`{"device_id":"dev1"}`))
+		[]byte(`[{"name":"t"}]`), []byte(`{"device_id":"dev1"}`))
 	assert.NoError(t, err)
 
 	st, _, _ := c.GetCachedDeviceStatus(ctx, "dev1")

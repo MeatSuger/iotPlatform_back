@@ -48,6 +48,8 @@ const (
 
 	PrefixSensorDefs   = "cache:def_sensor:"   // 传感器定义列表（物模型）
 	PrefixActuatorDefs = "cache:def_actuator:" // 执行器定义列表（物模型）
+
+	PrefixSensorHistory = "cache:sensor_history:" // 传感器历史曲线（时序查询，Cache-Aside）
 )
 
 // ============================================================
@@ -67,6 +69,13 @@ const (
 
 	TTLDefs      = 30 * time.Minute // 物模型定义列表（L2，低频变更；写路径显式失效，TTL 仅兜底）
 	TTLDefsLocal = 10 * time.Second // 物模型定义列表（L1）
+
+	// 传感器历史曲线：单次查询要扫 InfluxDB 的 3 天窗口并排序，
+	// 是全部接口里唯一的重查询（压测实测 P95 比其他接口高 8~10 倍）。
+	// TTL 取"图表可接受的延迟"而非"数据实时性"——3 天趋势图落后 2 分钟无感知，
+	// 却能把 InfluxDB 查询量降 1~2 个数量级（30s → 120s 再降 4 倍）。
+	TTLSensorHistory      = 120 * time.Second // L2（3 天趋势图对 2 分钟延迟无感知）
+	TTLSensorHistoryLocal = 15 * time.Second  // L1（须 < L2）
 )
 
 // ============================================================
@@ -387,6 +396,37 @@ func (c *RedisCache) EvictSensorRecentCache(ctx context.Context, deviceID string
 	return c.evictKey(ctx, PrefixSensorRecent+deviceID+":latest", false)
 }
 
+// GetCachedSensorHistoryWithLoader 读取设备历史曲线（Cache-Aside + singleflight）
+//
+// 为什么必须缓存：历史查询要扫 InfluxDB 的 3 天窗口并排序，是全部接口里
+// 唯一的重查询。压测显示它是把 InfluxDB 打满（147% CPU）进而拖垮写路径的根因。
+//
+// 走 GetOrLoad 直接复用了缓存层已有的三项保护：
+//   - singleflight 防击穿：缓存过期瞬间的并发 miss 只回源一次
+//   - TTL 抖动防雪崩：±25% 随机偏移，避免批量同时过期
+//   - L1(本地) + L2(Redis) 两级缓存
+//
+// key 组成：deviceID + limit + 时间窗
+//   - 默认时间窗 → ":default"（高频路径，稳定命中）
+//   - 显式时间窗 → 按 unix 秒区分（避免不同窗口互相污染）
+func (c *RedisCache) GetCachedSensorHistoryWithLoader(
+	ctx context.Context,
+	deviceID string,
+	limit int,
+	start, end time.Time,
+	isDefaultRange bool,
+	dest any,
+	loader func(context.Context) (any, error),
+) error {
+	key := fmt.Sprintf("%s%s:%d", PrefixSensorHistory, deviceID, limit)
+	if isDefaultRange {
+		key += ":default"
+	} else {
+		key += fmt.Sprintf(":%d:%d", start.Unix(), end.Unix())
+	}
+	return c.GetOrLoad(ctx, key, dest, TTLSensorHistory, TTLSensorHistoryLocal, loader)
+}
+
 // ============================================================
 // 物模型定义列表缓存（Cache-Aside + Write-Invalidate）
 // 物模型为低频写（CRUD）、高频读（详情页/物模型页），整设备列表作为
@@ -448,7 +488,11 @@ const BufferQueueMaxLen = 20000
 
 // FastReportWrite 一次 Pipeline 完成：更新设备状态 Hash + 缓存传感器数据 + 推入缓冲队列
 // 将多次 Redis 往返合并为 1 次
-func (c *RedisCache) FastReportWrite(ctx context.Context, deviceID string, status string, lastActiveTime int64, sensors any, bufferData []byte) error {
+// FastReportWrite 上报热路径的一次性 Pipeline 写入。
+//
+// sensorJSON 由调用方预先序列化（entity 形态，与 CacheSensorRecent 一致），
+// 避免在本函数内重复 json.Marshal —— 上报是最热路径，每次省一次反射序列化。
+func (c *RedisCache) FastReportWrite(ctx context.Context, deviceID string, status string, lastActiveTime int64, sensorJSON []byte, bufferData []byte) error {
 	// 写穿透：先失效 L1 读回填缓存（与 CacheDeviceStatus 一致），
 	// 否则上报置 ONLINE 后 5s 内 GetCachedDeviceStatus 仍读到旧状态
 	c.local.Delete(PrefixDeviceStatus + deviceID)
@@ -462,8 +506,7 @@ func (c *RedisCache) FastReportWrite(ctx context.Context, deviceID string, statu
 
 	// 2. 缓存传感器最新数据
 	sensorKey := PrefixSensorRecent + deviceID + ":latest"
-	sensorJSON, err := json.Marshal(sensors)
-	if err != nil {
+	if len(sensorJSON) == 0 {
 		sensorJSON = []byte("[]")
 	}
 	pipe.Set(ctx, sensorKey, sensorJSON, jitterTTL(TTLSensorRecent))
@@ -472,7 +515,7 @@ func (c *RedisCache) FastReportWrite(ctx context.Context, deviceID string, statu
 	pipe.LPush(ctx, BufferDeviceReportsKey, bufferData)
 	pipe.LTrim(ctx, BufferDeviceReportsKey, 0, BufferQueueMaxLen-1)
 
-	_, err = pipe.Exec(ctx)
+	_, err := pipe.Exec(ctx)
 	return err
 }
 

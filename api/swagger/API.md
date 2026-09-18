@@ -1467,18 +1467,21 @@ conn, _, err := websocket.DefaultDialer.Dial("wss://api.meatsuger.top/api/ws/dev
 | 项目 | 说明 |
 |------|------|
 | **端点** | `GET /api/ws/mqtt/broker`（WebSocket 子协议 `mqtt`） |
-| **认证** | 设备 Token（两种方式二选一，见下） |
+| **认证** | 设备 Token 或 管理端用户 Token（三种方式，见下） |
 | **协议** | MQTT 3.1.1 / 5.0，二进制帧透传 |
-| **用途** | 标准 MQTT 客户端（paho / ESP32 / mqtt.js）接入 |
+| **用途** | 标准 MQTT 客户端（paho / ESP32 / mqtt.js）接入；浏览器可用用户登录态接入 |
 
-#### 鉴权方式（二选一）
+#### 鉴权方式（三选一）
 
 | 方式 | 凭证位置 | 适用客户端 |
 |------|----------|------------|
-| 1 | HTTP 层 `X-Device-Token`（Header / Cookie / Query `?X-Device-Token=xxx`） | mqtt.js 等可拼 URL 的客户端 |
-| 2 | MQTT CONNECT 包 `username=设备ID` / `password=设备Token` | 标准 MQTT 客户端（paho / ESP32） |
+| 1 | HTTP 层 `X-Device-Token`（Header / Cookie / Query `?X-Device-Token=xxx`） | mqtt.js 等可拼 URL 的客户端（设备身份） |
+| 2 | HTTP 层用户 Token（`Authorization` Header/Cookie 或 Query `?token=xxx`） | 管理端浏览器（用户身份，代表用户下发到其名下设备） |
+| 3 | MQTT CONNECT 包 `username=设备ID` / `password=设备Token` | 标准 MQTT 客户端（paho / ESP32） |
 
 > 鉴权失败时返回 MQTT 标准 CONNACK `not authorized (0x05)`，而不是 HTTP 拒绝。
+>
+> **用户身份连接（方式 2）语义**：连接以 `user:<loginID>` 作为内部连接标识，**不会**与设备连接互踢（见下「同设备多连接」仅约束设备身份）；只允许 PUBLISH / SUBSCRIBE `iot/{deviceId}/...` 话题且该设备必须归属此用户；网关仅为它做透明转发，**不**写设备消息日志、**不**做上报入库、**不**参与设备在线/离线判定。典型用途：浏览器经 MQTT over WSS 向自己名下设备的图片/控制话题下发数据。
 
 #### Topic 与 Payload 约定
 
@@ -1517,12 +1520,13 @@ conn, _, err := websocket.DefaultDialer.Dial("wss://api.meatsuger.top/api/ws/dev
 >
 > **遗嘱（Will）**：设备 CONNECT 携带的遗嘱原样随帧透传，异常断线时由外部 Broker 按遗嘱发布到遗嘱主题（透明转发天然生效）；平台离线判定不依赖遗嘱主题订阅，由网关直接检测连接死亡驱动，更快更可靠。
 >
-> **同设备多连接**：新连接到来会踢下线旧连接（与原生 WS 一致，同一设备只保留一个活跃桥接）。
+> **同设备多连接**：设备身份连接（方式 1 / 3）新连接到来会踢下线旧连接（与原生 WS 一致，同一设备只保留一个活跃桥接）；**用户身份连接（方式 2）使用独立连接标识，不受此约束，也不会踢掉设备。**
 
 #### 连接示例
 
 ```
-wss://api.meatsuger.top/api/ws/mqtt/broker?X-Device-Token=<token>
+wss://api.meatsuger.top/api/ws/mqtt/broker?X-Device-Token=<deviceToken>   # 设备身份
+wss://api.meatsuger.top/api/ws/mqtt/broker?token=<userToken>              # 管理端用户身份
 ```
 
 或标准 MQTT 客户端配置: `host=api.meatsuger.top, port=443, path=/api/ws/mqtt/broker, username=<deviceId>, password=<deviceToken>`。

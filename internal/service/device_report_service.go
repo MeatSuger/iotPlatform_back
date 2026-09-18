@@ -216,9 +216,14 @@ func (s *DeviceReportService) reportStatusFast(ctx context.Context, deviceID str
 		Timestamp: nowMs,
 	})
 
+	// 传感器最新值的 JSON：在调用方序列化一次，供 FastReportWrite 直接使用。
+	// 必须是 entity 形态（含 time.Time），与回退路径的 CacheSensorRecent 保持一致，
+	// 否则设备详情接口读回缓存时字段格式会变化。
+	sensorsJSON, _ := json.Marshal(dto.Sensors)
+
 	// 3. 一次 Pipeline 完成所有 Redis 写操作（1 次往返！）
 	if s.buffer != nil {
-		if err := s.cache.FastReportWrite(ctx, deviceID, "ONLINE", nowMs, dto.Sensors, bufferData); err != nil {
+		if err := s.cache.FastReportWrite(ctx, deviceID, "ONLINE", nowMs, sensorsJSON, bufferData); err != nil {
 			zap.S().Warnf("[DeviceReport] 快速写入失败 [device=%s]: %v", deviceID, err)
 			// 降级：逐条写入
 			s.cache.CacheDeviceStatus(ctx, deviceID, "ONLINE", nowMs)

@@ -60,7 +60,7 @@ func newDetailTestEnv(t *testing.T) *detailTestEnv {
 	sensorSvc := service.NewDeviceSensorService(sensorRepo, configSvc, rcache)
 	actuatorSvc := service.NewDeviceActuatorService(actuatorRepo, configSvc, rcache)
 
-	influx := service.NewInfluxDBService(service.InfluxDBConfig{Database: "iot"})
+	influx := service.NewInfluxDBService(service.InfluxDBConfig{Database: "iot"}, nil)
 	// URL 为空 → client 未建立，WriteSensors 走"未连接"错误分支（异步无害）
 	reportSvc := service.NewDeviceReportService(deviceRepo, influx, rcache, deviceSvc)
 

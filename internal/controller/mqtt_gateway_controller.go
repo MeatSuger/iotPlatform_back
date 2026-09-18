@@ -7,9 +7,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +21,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	sagin "github.com/sa-tokens/sa-token-go/integrations/gin"
+	"github.com/sa-tokens/sa-token-go/stputil"
 
 	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/middleware"
@@ -79,6 +83,15 @@ type mqttConn struct {
 	deviceID string
 	ownerID  uint          // 设备归属用户（上线/下线推送用）
 	timeout  time.Duration // 空闲看护阈值（keepalive×1.5 提炼，无任何帧即判失联）
+
+	// —— 管理端用户连接（MQTT over WSS，用户登录态）——
+	// 用户连接以 "user:<loginID>" 作为 deviceID 参与登记，与设备 ID 不冲突，
+	// 因此不会触发「同设备单连接」顶号，不会把 ESP32 等设备踢下线。
+	// 用户连接只做透明转发 + 话题属主校验：不写设备消息日志、不做数据入库、
+	// 不参与设备在线/离线判定。
+	isUser bool
+	userID uint
+	acl    map[string]bool // 话题内 deviceId 属主校验缓存（仅泵协程访问，无需加锁）
 
 	subOnce        sync.Once   // 订阅自身主题 → 上线标记，每连接仅一次
 	unregisterOnce sync.Once   // 连接收尾（登记移除 + 离线标记）仅一次
@@ -298,10 +311,21 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 	clientID, username, mqttToken, protocolLevel, keepAlive, parseOK := parseConnectCredentials(connectBytes)
 	zap.S().Debugf("[MQTT网关] 设备连接: client=%s, device=%s, level=%d, parseOK=%v", clientID, username, protocolLevel, parseOK)
 
-	// 3. 鉴权（框架 Sa-Token 体系，两种凭证方式二选一）
-	var deviceID, token string
-	if httpToken := middleware.GetDeviceToken(c); httpToken != "" {
+	// 3. 鉴权（三种凭证方式，按优先级）：
+	//   1) HTTP 层 X-Device-Token（Header/Cookie/Query）——设备自身
+	//   2) 管理端用户登录态（Authorization/Cookie/?token=）——浏览器经 MQTT over WSS 下发，
+	//      以独立连接身份 user:<loginID> 参与，与设备 ID 不冲突 → 不会顶掉设备连接
+	//   3) MQTT CONNECT username=设备ID / password=设备Token——标准 MQTT 客户端
+	var (
+		deviceID string
+		token    string
+		isUser   bool
+		userID   uint
+	)
+	switch {
+	case middleware.GetDeviceToken(c) != "":
 		// 方式1：HTTP 层 X-Device-Token（Header/Cookie/Query），适合 mqtt.js 等可拼 URL 的客户端
+		httpToken := middleware.GetDeviceToken(c)
 		deviceMgr := middleware.GetDeviceManager()
 		if deviceMgr == nil {
 			zap.S().Warn("[MQTT网关] 设备 Manager 未初始化，拒绝连接")
@@ -316,8 +340,22 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 		}
 		deviceID = loginID
 		token = httpToken
-	} else {
-		// 方式2：MQTT CONNECT username=设备ID / password=设备Token（标准 MQTT 客户端）
+
+	case userTokenFromRequest(c) != "":
+		// 方式2：管理端用户登录态（用户 auth → 设备 auth：浏览器代表用户下发到其名下设备）
+		uid, ok := authenticateUserToken(userTokenFromRequest(c))
+		if !ok {
+			zap.S().Warn("[MQTT网关] 用户 Token 鉴权失败, 拒绝连接")
+			_ = ws.WriteMessage(websocket.BinaryMessage, buildConnackReject(protocolLevel))
+			return
+		}
+		isUser = true
+		userID = uid
+		deviceID = fmt.Sprintf("user:%d", uid)
+		token = userTokenFromRequest(c)
+
+	default:
+		// 方式3：MQTT CONNECT username=设备ID / password=设备Token（标准 MQTT 客户端）
 		if !parseOK || !authenticateDevice(username, mqttToken) {
 			zap.S().Warnf("[MQTT网关] CONNECT 鉴权失败, 拒绝设备: %s", username)
 			_ = ws.WriteMessage(websocket.BinaryMessage, buildConnackReject(protocolLevel))
@@ -326,7 +364,11 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 		deviceID = strings.ToLower(username)
 		token = mqttToken
 	}
-	zap.S().Infof("[MQTT网关] 设备 %s 鉴权通过", deviceID)
+	if isUser {
+		zap.S().Infof("[MQTT网关] 管理端用户 %d 鉴权通过（连接身份 %s，仅转发其名下设备话题）", userID, deviceID)
+	} else {
+		zap.S().Infof("[MQTT网关] 设备 %s 鉴权通过", deviceID)
+	}
 
 	// 4. 连接外部 broker
 	dialer := &net.Dialer{
@@ -351,17 +393,24 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 	// 5.5 记录设备 Token（onPublish 入库校验用），连接断开时清理。
 	// 统一小写：方式1 HTTP Token 的 loginID 可能大小写混杂，
 	// 而话题约定 / 设备ID 均以小写为准（onPublish/deviceToken 查找一致化）。
+	// 用户连接不登记设备 Token（它不是设备，也不能用于设备上报入库）。
 	deviceID = strings.ToLower(deviceID)
-	g.registerDeviceToken(deviceID, token)
-	defer g.unregisterDeviceToken(deviceID, token)
+	if !isUser {
+		g.registerDeviceToken(deviceID, token)
+		defer g.unregisterDeviceToken(deviceID, token)
+	}
 
 	// 5.6 连接生命周期状态：登记 + 上线/下线判定
 	conn := &mqttConn{
 		deviceID: deviceID,
 		timeout:  g.computeIdleTimeout(keepAlive),
+		isUser:   isUser,
+		userID:   userID,
 	}
-	// 解析设备 Owner（owner 端上线/下线推送用），失败不阻断桥接
-	if g.deviceSvc != nil {
+	if isUser {
+		conn.acl = make(map[string]bool)
+	} else if g.deviceSvc != nil {
+		// 解析设备 Owner（owner 端上线/下线推送用），失败不阻断桥接
 		if d, err := g.deviceSvc.GetByDeviceID(context.Background(), deviceID); err == nil && d.OwnerID > 0 {
 			conn.ownerID = d.OwnerID
 		}
@@ -403,8 +452,17 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 				frame := buf[:total]
 				buf = buf[total:]
 
-				g.logPublish(frame, clientID, protocolLevel, conn.deviceID)
-				g.onSubscribe(frame, protocolLevel, conn)
+				if conn.isUser {
+					// 用户连接：仅透明转发，且限制在「该用户名下设备」的 iot/{deviceId}/... 话题内。
+					// 不写设备消息日志、不做上报入库、不触发设备上线判定。
+					if !g.userFrameAllowed(conn, frame, protocolLevel) {
+						zap.S().Warnf("[MQTT网关] 用户 %d 非法/越权话题帧，已丢弃", conn.userID)
+						continue
+					}
+				} else {
+					g.logPublish(frame, clientID, protocolLevel, conn.deviceID)
+					g.onSubscribe(frame, protocolLevel, conn)
+				}
 
 				if _, err := tcp.Write(frame); err != nil {
 					conn.close()
@@ -710,6 +768,97 @@ func parseSubscribeTopics(frame []byte, protocolLevel byte) []string {
 		}
 	}
 	return topics
+}
+
+// ============ 管理端用户接入（用户 auth → 设备 auth）============
+
+// userTokenFromRequest 提取管理端用户登录 Token（Authorization Header/Cookie → Query token），
+// 与用户通道 /api/ws/user 的提取方式一致。浏览器 WebSocket 无法自定义 Header，
+// 因此额外支持 ?token=xxx（mqtt.js 可直接拼进 URL）。
+func userTokenFromRequest(c *gin.Context) string {
+	if tok := sagin.GetTokenFromCtx(c); tok != "" {
+		return tok
+	}
+	return c.Query("token")
+}
+
+// authenticateUserToken 校验管理端用户 Token，返回用户 ID。
+func authenticateUserToken(token string) (uint, bool) {
+	info, err := stputil.GetTokenInfo(token)
+	if err != nil || info == nil {
+		return 0, false
+	}
+	uid, perr := strconv.ParseUint(info.LoginID, 10, 64)
+	if perr != nil || uid == 0 {
+		return 0, false
+	}
+	return uint(uid), true
+}
+
+// userFrameAllowed 校验用户连接的一帧是否可转发到 Broker：
+//   - 非 PUBLISH / SUBSCRIBE 帧（PINGREQ 等）直接放行；
+//   - PUBLISH / SUBSCRIBE 的话题必须形如 iot/{deviceId}/...，且该设备归属此用户。
+//
+// 结果按 deviceId 缓存到连接上（仅本连接泵协程访问，无需加锁）。
+func (g *MqttGatewayController) userFrameAllowed(conn *mqttConn, frame []byte, protocolLevel byte) bool {
+	if len(frame) < 2 {
+		return true
+	}
+
+	var topics []string
+	switch frame[0] & 0xF0 {
+	case 0x30: // PUBLISH
+		if t, ok := parsePublishTopic(frame); ok {
+			topics = append(topics, t)
+		}
+	case 0x80: // SUBSCRIBE
+		topics = parseSubscribeTopics(frame, protocolLevel)
+	default:
+		return true
+	}
+
+	for _, topic := range topics {
+		list := strings.Split(topic, "/")
+		if len(list) < 3 || list[0] != "iot" {
+			return false
+		}
+		deviceID := strings.ToLower(list[1])
+		allowed, hit := conn.acl[deviceID]
+		if !hit {
+			allowed = g.userOwnsDevice(conn.userID, deviceID)
+			conn.acl[deviceID] = allowed
+		}
+		if !allowed {
+			return false
+		}
+	}
+	return true
+}
+
+// userOwnsDevice 设备是否归属指定用户。
+func (g *MqttGatewayController) userOwnsDevice(userID uint, deviceID string) bool {
+	if g.deviceSvc == nil || userID == 0 {
+		return false
+	}
+	d, err := g.deviceSvc.GetByDeviceID(context.Background(), deviceID)
+	return err == nil && d != nil && d.OwnerID == userID
+}
+
+// parsePublishTopic 解析 PUBLISH 帧的 topic（跳过可变长度与 topic 长度字段），失败返回 ok=false。
+func parsePublishTopic(frame []byte) (string, bool) {
+	if len(frame) < 2 || frame[0]&0xF0 != 0x30 {
+		return "", false
+	}
+	_, pos, valid := mqttVarint(frame, 1)
+	if !valid || pos+2 > len(frame) {
+		return "", false
+	}
+	topicLen := int(binary.BigEndian.Uint16(frame[pos : pos+2]))
+	pos += 2
+	if topicLen <= 0 || pos+topicLen > len(frame) {
+		return "", false
+	}
+	return string(frame[pos : pos+topicLen]), true
 }
 
 // ============ CONNECT 解析 & 鉴权 ============
