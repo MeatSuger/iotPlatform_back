@@ -57,6 +57,13 @@ GO_BUILD_FLAGS = -ldflags="$(LDFLAGS)" -trimpath $(GOFLAGS) -tags sonic
 BUILD_DIR  ?= ./build
 BIN         = $(BUILD_DIR)/$(PACKAGE)
 
+# ------------------------------------------------------------
+# 代码生成产物（缺失时由 generate 目标自动补齐，见下）
+# ------------------------------------------------------------
+ENT_GENERATED   := internal/ent/ent.go
+WIRE_GENERATED  := cmd/iot-platform/wire_gen.go
+SWAGGER_DOCS    := api/swagger/docs.go
+
 SSH_HOST   ?= aliyun-ubuntu
 REMOTE_DIR ?= /home/ubuntu/iotPlatform_back
 
@@ -94,24 +101,48 @@ DIST_FILE   = dist/$(PACKAGE)-$(VERSION).tar.gz
 # ------------------------------------------------------------
 # 目标声明
 # ------------------------------------------------------------
-.PHONY: all check check-expensive dev \
+.PHONY: all check check-expensive dev generate \
         install uninstall \
         clean mostlyclean distclean maintainer-clean \
         html dist distcheck \
         version help deploy restart rollback health-check status
 
-# 默认目标 (GNU 惯例: all)
-# 原 deps + build 拆解于此: 依赖整理 -> 格式化 -> vet ->
-# 生成代码 -> 测试 -> 编译
 # ============================================================
-all:
+# 代码生成 (generate)
+#
+# 目标：不管有没有手动跑过 go generate、也不管生成物是否被删、缓存是否被清，
+#       直接 `make` 就能编译出二进制 —— 生成物缺失/过期时自动补生成：
+#         Ent      internal/ent/*.go   已 gitignore（干净 clone 里不存在）；
+#                  schema 改动后按 mtime 自动重生成
+#         Wire     wire_gen.go         缺失/过期时直接调用 wire
+#                  （不依赖它自身的 go:generate：该文件被删后那行 directive 也没了）
+#         Swagger  api/swagger/docs.go router.go 空导入引用，缺失会直接编译失败；
+#                  只在缺失时生成（swag init 慢，且刷新文档与本步无关，可用 make html）
+# 强制全部重生成：make maintainer-clean && make
+# ============================================================
+$(ENT_GENERATED): $(wildcard internal/ent/schema/*.go) internal/ent/generate.go go.mod
+	@printf '$(C_CYAN)→ 生成 Ent 代码...$(C_RESET)\n'
+	$(GO) tool ent generate ./internal/ent/schema
+
+$(WIRE_GENERATED): $(ENT_GENERATED) cmd/iot-platform/wire.go $(wildcard internal/*/*.go) $(wildcard pkg/*/*.go) go.mod
+	@printf '$(C_CYAN)→ 生成 Wire 依赖注入代码...$(C_RESET)\n'
+	$(GO) tool wire ./cmd/iot-platform
+
+generate: $(ENT_GENERATED) $(WIRE_GENERATED)
+	@if [ ! -f $(SWAGGER_DOCS) ]; then \
+		printf '$(C_CYAN)→ 生成 Swagger 文档代码...$(C_RESET)\n'; \
+		$(MAKE) --no-print-directory html || exit 1; \
+	fi
+
+# 默认目标 (GNU 惯例: all)
+# 原 deps + build 拆解于此: 代码生成 -> 依赖整理 -> 格式化 -> vet -> 测试 -> 编译
+# ============================================================
+all: generate
 	@printf '$(C_CYAN)→ 整理依赖...$(C_RESET)\n'
 	$(GO) mod tidy
 	$(GO) mod download
 	@printf '$(C_CYAN)→ 格式化...$(C_RESET)\n'
 	$(GO) fmt ./...
-	@printf '$(C_CYAN)→ 生成 Ent 代码...$(C_RESET)\n'
-	$(GO) generate ./internal/ent
 	@printf '$(C_CYAN)→ 静态分析 (vet)...$(C_RESET)\n'
 	$(GO) vet ./...
 	@printf '$(C_CYAN)→ 测试...$(C_RESET)\n'
@@ -246,8 +277,13 @@ clean: mostlyclean
 distclean: clean
 	rm -rf dist
 
+# maintainer-clean: 在 distclean 基础上删除代码生成产物
+# （Ent 生成代码 / Wire wire_gen.go / Swagger docs.go），
+# 之后直接 `make` 会自动把缺的全部重新生成。
 maintainer-clean: distclean
 	rm -f .version
+	rm -f $(WIRE_GENERATED) $(SWAGGER_DOCS) api/swagger/swagger.json api/swagger/swagger.yaml
+	find internal/ent -mindepth 1 -maxdepth 1 ! -name schema ! -name generate.go -exec rm -rf {} +
 
 # ============================================================
 # 文档 (GNU: info/dvi/html/ps/pdf)
@@ -256,7 +292,7 @@ maintainer-clean: distclean
 #       此处直接列出目录更稳妥）；--packageName docs 与现有包名保持一致
 # ============================================================
 html:
-	go run github.com/swaggo/swag/cmd/swag@v1.16.6 init \
+	$(GO) tool swag init \
 	  -d cmd/iot-platform,internal/controller,internal/router,internal/service,internal/model,internal/ent,pkg/common \
 	  -g main.go --output api/swagger --packageName docs
 
@@ -265,7 +301,7 @@ html:
 # 原 release 的发布包部分拆解于此。
 # tarball 含顶层目录 PACKAGE-VERSION/ (GNU tarball 惯例)
 # ============================================================
-dist:
+dist: generate
 	@mkdir -p dist
 	@tar --exclude='.git' --exclude='$(BUILD_DIR)' --exclude='dist' \
 	  --transform='s,^\./,$(PACKAGE)-$(VERSION)/,' \
@@ -299,7 +335,8 @@ version:
 help:
 	@printf '$(C_CYAN)用法: make [目标]  (GNU 标准目标)$(C_RESET)\n\n'
 	@printf '$(C_YELLOW)构建与测试:$(C_RESET)\n'
-	@echo "  all              构建 (默认目标; 含依赖整理/下载)"
+	@echo "  all              构建 (默认目标; 自动补齐生成代码 + 依赖整理/测试)"
+	@echo "  generate         只补齐代码生成产物 (Ent / Wire / Swagger, 缺什么补什么)"
 	@echo "  check            运行测试"
 	@echo "  check-expensive  运行测试 (详细输出)"
 	@echo "  dev              本地运行: SSH 隧道 + air 热重载, 按 q 退出"
@@ -314,7 +351,7 @@ help:
 	@echo "  mostlyclean      删除编译产物"
 	@echo "  clean            删除编译产物和覆盖率文件"
 	@echo "  distclean        再删除打包产物"
-	@echo "  maintainer-clean 再删除生成文件"
+	@echo "  maintainer-clean 再删除生成代码 (Ent/Wire/Swagger)"
 	@printf '$(C_YELLOW)文档与打包:$(C_RESET)\n'
 	@echo "  html             生成 Swagger API 文档"
 	@echo "  dist             打包发布包 dist/$(PACKAGE)-$(VERSION).tar.gz"

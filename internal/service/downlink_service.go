@@ -1,3 +1,19 @@
+// 物联网设备接入与物模型管理平台软件（物咸通）V1.0
+// Copyright (C) 2025-2026 余昊
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 package service
 
 import (
@@ -43,16 +59,18 @@ func NewDownlinkService(msgRepo *repository.MessageLogRepo, deviceRepo *reposito
 }
 
 // DownlinkCmdRequest 下发命令请求
+//
+// swaggertype 标注：swag 解析不了 json.RawMessage，不标注会把整个结构体丢成空对象。
 type DownlinkCmdRequest struct {
 	Type    string          `json:"type" binding:"required"`
-	Payload json.RawMessage `json:"payload" binding:"required"`
+	Payload json.RawMessage `json:"payload" binding:"required" swaggertype:"object"`
 }
 
 // DownlinkCmdResponse 设备拉取命令响应
 type DownlinkCmdResponse struct {
 	ID        uint            `json:"id"`
 	Type      string          `json:"type"`
-	Payload   json.RawMessage `json:"payload"`
+	Payload   json.RawMessage `json:"payload" swaggertype:"object"`
 	CreatedAt time.Time       `json:"createdAt"`
 }
 

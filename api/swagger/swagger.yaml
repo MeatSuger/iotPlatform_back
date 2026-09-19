@@ -95,6 +95,15 @@ definitions:
     - id
     type: object
   entity.ActuatorUpdateRequest:
+    properties:
+      driver:
+        type: string
+      enabled:
+        type: boolean
+      name:
+        type: string
+      specs:
+        type: object
     type: object
   entity.DeviceConfigReport:
     properties:
@@ -178,6 +187,21 @@ definitions:
         type: array
     type: object
   entity.SensorUpdateRequest:
+    properties:
+      dataType:
+        type: string
+      enabled:
+        type: boolean
+      name:
+        type: string
+      reportInterval:
+        type: integer
+      specs:
+        type: object
+      type:
+        type: string
+      unit:
+        type: string
     type: object
   entity.SpecsThresholds:
     properties:
@@ -226,6 +250,14 @@ definitions:
         type: string
     type: object
   service.DownlinkCmdRequest:
+    properties:
+      payload:
+        type: object
+      type:
+        type: string
+    required:
+    - payload
+    - type
     type: object
   service.LoginRequest:
     properties:

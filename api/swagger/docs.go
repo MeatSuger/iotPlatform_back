@@ -25,11 +25,6 @@ const docTemplate = `{
     "paths": {
         "/api/devices": {
             "get": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    }
-                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -68,14 +63,14 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            },
-            "post": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            },
+            "post": {
                 "consumes": [
                     "application/json"
                 ],
@@ -122,16 +117,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/devices/{deviceId}": {
-            "get": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/devices/{deviceId}": {
+            "get": {
                 "description": "设备元信息 + 在线状态 + sensors（定义+latest）/ actuators（定义）物模型数组",
                 "consumes": [
                     "application/json"
@@ -171,16 +166,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/devices/{deviceId}/actuators": {
-            "get": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/devices/{deviceId}/actuators": {
+            "get": {
                 "produces": [
                     "application/json"
                 ],
@@ -210,14 +205,14 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            },
-            "post": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            },
+            "post": {
                 "consumes": [
                     "application/json"
                 ],
@@ -259,16 +254,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/devices/{deviceId}/actuators/apply": {
-            "post": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/devices/{deviceId}/actuators/apply": {
+            "post": {
                 "produces": [
                     "application/json"
                 ],
@@ -298,16 +293,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/devices/{deviceId}/actuators/{actuatorId}": {
-            "get": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/devices/{deviceId}/actuators/{actuatorId}": {
+            "get": {
                 "produces": [
                     "application/json"
                 ],
@@ -344,16 +339,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/devices/{deviceId}/actuators/{actuatorId}/delete": {
-            "post": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/devices/{deviceId}/actuators/{actuatorId}/delete": {
+            "post": {
                 "produces": [
                     "application/json"
                 ],
@@ -390,16 +385,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/devices/{deviceId}/actuators/{actuatorId}/update": {
-            "post": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/devices/{deviceId}/actuators/{actuatorId}/update": {
+            "post": {
                 "consumes": [
                     "application/json"
                 ],
@@ -448,16 +443,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ]
             }
         },
         "/api/devices/{deviceId}/commands": {
             "get": {
-                "security": [
-                    {
-                        "DeviceAuth": []
-                    }
-                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -490,14 +485,14 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            },
-            "post": {
+                },
                 "security": [
                     {
-                        "UserAuth": []
+                        "DeviceAuth": []
                     }
-                ],
+                ]
+            },
+            "post": {
                 "consumes": [
                     "application/json"
                 ],
@@ -539,19 +534,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ]
             }
         },
         "/api/devices/{deviceId}/config": {
             "get": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    },
-                    {
-                        "DeviceAuth": []
-                    }
-                ],
                 "produces": [
                     "application/json"
                 ],
@@ -581,14 +573,17 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            },
-            "post": {
+                },
                 "security": [
                     {
                         "UserAuth": []
+                    },
+                    {
+                        "DeviceAuth": []
                     }
-                ],
+                ]
+            },
+            "post": {
                 "consumes": [
                     "application/json"
                 ],
@@ -630,16 +625,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ]
             }
         },
         "/api/devices/{deviceId}/config/report": {
             "post": {
-                "security": [
-                    {
-                        "DeviceAuth": []
-                    }
-                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -681,16 +676,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "DeviceAuth": []
+                    }
+                ]
             }
         },
         "/api/devices/{deviceId}/delete": {
             "post": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    }
-                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -723,16 +718,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ]
             }
         },
         "/api/devices/{deviceId}/heartbeat": {
             "post": {
-                "security": [
-                    {
-                        "DeviceAuth": []
-                    }
-                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -765,7 +760,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "DeviceAuth": []
+                    }
+                ]
             }
         },
         "/api/devices/{deviceId}/login": {
@@ -808,11 +808,6 @@ const docTemplate = `{
         },
         "/api/devices/{deviceId}/ping": {
             "post": {
-                "security": [
-                    {
-                        "DeviceAuth": []
-                    }
-                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -845,7 +840,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "DeviceAuth": []
+                    }
+                ]
             }
         },
         "/api/devices/{deviceId}/sensorData": {
@@ -902,11 +902,6 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "security": [
-                    {
-                        "DeviceAuth": []
-                    }
-                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -948,16 +943,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "DeviceAuth": []
+                    }
+                ]
             }
         },
         "/api/devices/{deviceId}/sensors": {
             "get": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    }
-                ],
                 "produces": [
                     "application/json"
                 ],
@@ -987,14 +982,14 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            },
-            "post": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            },
+            "post": {
                 "consumes": [
                     "application/json"
                 ],
@@ -1036,16 +1031,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/devices/{deviceId}/sensors/apply": {
-            "post": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/devices/{deviceId}/sensors/apply": {
+            "post": {
                 "produces": [
                     "application/json"
                 ],
@@ -1075,16 +1070,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/devices/{deviceId}/sensors/{sensorId}": {
-            "get": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/devices/{deviceId}/sensors/{sensorId}": {
+            "get": {
                 "produces": [
                     "application/json"
                 ],
@@ -1121,16 +1116,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/devices/{deviceId}/sensors/{sensorId}/delete": {
-            "post": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/devices/{deviceId}/sensors/{sensorId}/delete": {
+            "post": {
                 "produces": [
                     "application/json"
                 ],
@@ -1167,16 +1162,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/devices/{deviceId}/sensors/{sensorId}/update": {
-            "post": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/devices/{deviceId}/sensors/{sensorId}/update": {
+            "post": {
                 "consumes": [
                     "application/json"
                 ],
@@ -1225,7 +1220,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ]
             }
         },
         "/api/devices/{deviceId}/token": {
@@ -1268,11 +1268,6 @@ const docTemplate = `{
         },
         "/api/devices/{deviceId}/update": {
             "post": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    }
-                ],
                 "description": "仅设备所有者或设备自身可更新；增量更新，仅请求体中出现的字段会被更新，未传字段保持原值",
                 "consumes": [
                     "application/json"
@@ -1327,16 +1322,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/users": {
-            "get": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/users": {
+            "get": {
                 "consumes": [
                     "application/json"
                 ],
@@ -1395,7 +1390,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ]
             },
             "post": {
                 "consumes": [
@@ -1519,11 +1519,6 @@ const docTemplate = `{
         },
         "/api/users/logout": {
             "post": {
-                "security": [
-                    {
-                        "UserAuth": []
-                    }
-                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -1547,16 +1542,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/users/{userId}": {
-            "get": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/users/{userId}": {
+            "get": {
                 "consumes": [
                     "application/json"
                 ],
@@ -1601,16 +1596,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/users/{userId}/delete": {
-            "post": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/users/{userId}/delete": {
+            "post": {
                 "consumes": [
                     "application/json"
                 ],
@@ -1643,16 +1638,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
-            }
-        },
-        "/api/users/{userId}/update": {
-            "post": {
+                },
                 "security": [
                     {
                         "UserAuth": []
                     }
-                ],
+                ]
+            }
+        },
+        "/api/users/{userId}/update": {
+            "post": {
                 "consumes": [
                     "application/json"
                 ],
@@ -1706,7 +1701,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ]
             }
         },
         "/health": {
@@ -1875,7 +1875,21 @@ const docTemplate = `{
             }
         },
         "entity.ActuatorUpdateRequest": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+                "driver": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "specs": {
+                    "type": "object"
+                }
+            }
         },
         "entity.DeviceConfigReport": {
             "type": "object",
@@ -1999,7 +2013,30 @@ const docTemplate = `{
             }
         },
         "entity.SensorUpdateRequest": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+                "dataType": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "reportInterval": {
+                    "type": "integer"
+                },
+                "specs": {
+                    "type": "object"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "unit": {
+                    "type": "string"
+                }
+            }
         },
         "entity.SpecsThresholds": {
             "type": "object",
@@ -2073,7 +2110,19 @@ const docTemplate = `{
             }
         },
         "service.DownlinkCmdRequest": {
-            "type": "object"
+            "type": "object",
+            "required": [
+                "payload",
+                "type"
+            ],
+            "properties": {
+                "payload": {
+                    "type": "object"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
         },
         "service.LoginRequest": {
             "type": "object",
