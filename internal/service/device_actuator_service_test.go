@@ -230,6 +230,56 @@ func TestDeviceActuatorService_Apply(t *testing.T) {
 	assert.Contains(t, got.Payload, `"reportInterval"`)
 }
 
+// TestDeviceActuatorService_EPDConfig 墨水屏执行器：EPD 显示参数随定义持久化并编译进下发配置
+func TestDeviceActuatorService_EPDConfig(t *testing.T) {
+	svc, configSvc, deviceRepo, client := buildActuatorSvc(t)
+	seedThingModelDevice(t, client, deviceRepo)
+	ctx := context.Background()
+
+	_, err := svc.Create(ctx, "dev1", entity.ActuatorCreateRequest{
+		ID:     "epd",
+		Name:   "板载墨水屏",
+		Driver: "led",
+		Specs: map[string]any{
+			"transport":   "epd",
+			"size_inch":   4.2,
+			"width":       400,
+			"height":      300,
+			"chip":        "ssd1683",
+			"color_depth": "bwr",
+		},
+	})
+	assert.NoError(t, err)
+
+	got, err := svc.Get(ctx, "dev1", "epd")
+	assert.NoError(t, err)
+	assert.Equal(t, "epd", got.Specs["transport"])
+	assert.Equal(t, float64(400), got.Specs["width"])
+	assert.Equal(t, float64(300), got.Specs["height"])
+	assert.Equal(t, "ssd1683", got.Specs["chip"])
+	assert.Equal(t, "bwr", got.Specs["color_depth"])
+
+	resp, err := svc.Apply(ctx, "dev1")
+	assert.NoError(t, err)
+	assert.Equal(t, 1, resp.Count)
+
+	cfg, err := configSvc.Get(ctx, "dev1")
+	assert.NoError(t, err)
+	assert.Contains(t, cfg.Payload, `"color_depth":"bwr"`)
+	assert.Contains(t, cfg.Payload, `"chip":"ssd1683"`)
+
+	// 非法色深在持久化前即被拒绝
+	_, err = svc.Create(ctx, "dev1", entity.ActuatorCreateRequest{
+		ID:     "epd2",
+		Driver: "led",
+		Specs: map[string]any{
+			"transport": "epd", "size_inch": 4.2, "width": 400, "height": 300,
+			"chip": "ssd1683", "color_depth": "gray16",
+		},
+	})
+	assert.ErrorContains(t, err, "invalid specs.color_depth")
+}
+
 func TestDeviceActuatorService_ApplyEmpty(t *testing.T) {
 	svc, configSvc, deviceRepo, client := buildActuatorSvc(t)
 	seedThingModelDevice(t, client, deviceRepo)

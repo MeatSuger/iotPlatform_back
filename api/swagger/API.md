@@ -264,9 +264,12 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
 | `name` | string | REQUIRED | 传感器名称 |
 | `type` | string | REQUIRED | 传感器类型（如 `temperature`） |
 | `value` | any | REQUIRED | 值（数值 / 字符串 / 布尔） |
-| `timestamp` | string | OPTIONAL | 采样时间，缺省为服务端接收时间 |
+| `timestamp` | string \| number | OPTIONAL | 采样时间，缺省/不可用时取服务端接收时间 |
 
 存储于 InfluxDB；最新一条缓存于 Redis。数据一经写入不可修改。
+
+时间戳容错规则同 [5.4 SensorData 资源 → Report](#report--上报传感器数据-post-apidevicesdeviceidsensordata)：
+缺失或不可用时由服务端补当前时间。
 
 ### 4.4 DownlinkCmd
 
@@ -369,7 +372,7 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
 | `id` | string | Create: REQUIRED · IMMUTABLE | 执行器标识符：小写字母开头，仅含小写字母/数字/下划线，**≤11 字符**（固件 periph 设备名 / 控制命令 `action` 契约），设备内唯一 |
 | `name` | string | OPTIONAL | 执行器名称，≤100 字符 |
 | `driver` | string | Create: REQUIRED · Update: OPTIONAL | 驱动名：`led` / `servo` / `speaker`（与固件驱动对齐，未来可扩展） |
-| `specs` | object | OPTIONAL | 驱动参数（GPIO/数量/脉宽范围等，**命名已统一**：原 `config` 改名为 `specs`，与 Sensor 定义体同名；结构见固件协议文档，平台侧不过度约束）；传 `{}` 显式清空 |
+| `specs` | object | OPTIONAL | 驱动参数（GPIO/数量/脉宽范围等，**命名已统一**：原 `config` 改名为 `specs`，与 Sensor 定义体同名；非 EPD 结构见固件协议文档，平台侧不过度约束；EPD 见下方约定）；传 `{}` 显式清空 |
 | `enabled` | bool | OPTIONAL | 是否启用，默认 `true`（禁用 = 期望设备卸载该执行器） |
 | `createdAt` / `updatedAt` | string | OUTPUT_ONLY | 创建 / 更新时间 |
 
@@ -385,6 +388,37 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
   "enabled": true
 }
 ```
+
+**EPD（墨水屏）specs 约定**（`specs.transport = "epd"`）
+
+平台对 EPD 定义做结构校验（其他 transport 仍保持自由键值）：
+
+| 键 | 类型 | 行为 | 说明 |
+|------|------|------|------|
+| `size_inch` | number | REQUIRED | 屏幕尺寸（英寸，0–100，如 `4.2` / `7.5`）；前端只展示该值作为「屏幕尺寸」|
+| `width` | int | REQUIRED | 显示逻辑宽度（像素）：8–4096；2bpp 位图（`bw`/`bwr`/`bwry`）须为 **8 的倍数** |
+| `height` | int | REQUIRED | 显示逻辑高度（像素）：8–4096 |
+| `chip` | string | REQUIRED | 显示控制器型号（≤40 字符，大小写不敏感），如 `ssd1683` / `jd79665`；固件据此选择/校验面板驱动 |
+| `color_depth` | string | REQUIRED | 色深与配色：`bw`（黑白 1bpp）/ `bwr`（三色 黑白红）/ `bwry`（四色 黑白红黄 2bpp）/ `rgb565`（16 位 RGB）/ `rgb888`（24 位 RGB） |
+
+```json
+{
+  "id": "epd",
+  "name": "板载墨水屏",
+  "driver": "led",
+  "specs": {
+    "transport": "epd",
+    "size_inch": 4.2,
+    "width": 400,
+    "height": 300,
+    "chip": "ssd1683",
+    "color_depth": "bwr"
+  },
+  "enabled": true
+}
+```
+
+> 存量定义若只有 `{"transport":"epd"}` 仍可读取与下发（固件回退到编译期面板配置）；新建/更新 EPD 执行器时必须补全上述四个键。
 
 **方法**（全部 UserAuth）：
 
@@ -915,7 +949,7 @@ GET /api/devices/90431b/token
 | `sensors[].name` | string | REQUIRED | 传感器名称 |
 | `sensors[].type` | string | REQUIRED | 传感器类型 |
 | `sensors[].value` | any | REQUIRED | 值 |
-| `sensors[].timestamp` | string | OPTIONAL | 采样时间，缺省为服务端时间 |
+| `sensors[].timestamp` | string \| number | OPTIONAL | 采样时间，缺省/不可用时取服务端时间 |
 
 **示例**
 
@@ -934,6 +968,11 @@ GET /api/devices/90431b/token
 
 > 数据经 Redis 缓冲后异步批量写入 InfluxDB；上报同时更新设备在线状态与最新数据缓存。
 
+> **时间戳容错**（终端时钟不可信，统一约定「不带时间戳就用服务端时间」）：
+> 字段缺失、`null`、`""`、`0`、负数、无法识别的值、以及 Go 零值时间 `0001-01-01T00:00:00Z`
+> 一律回退为服务端当前时间；也兼容 Unix 秒/毫秒时间戳（数字或数字串）与
+> `2006-01-02 15:04:05` 这类空格分隔格式。**任何时间戳异常都不会导致整条上报被拒**。
+
 **错误码**：400（`sensors` 为空 / 字段缺失）、401（Token 无效）
 
 ---
@@ -951,6 +990,12 @@ GET /api/devices/90431b/token
 | `limit` | int | OPTIONAL | `50` | 返回条数上限 |
 | `start` | string | OPTIONAL | 3 天前 | 起始时间（RFC3339） |
 | `end` | string | OPTIONAL | 当前时间 | 结束时间（RFC3339） |
+| `downsample` | string | OPTIONAL | `raw` | 降采样：`raw` 原始点 / `auto` 按跨度 / `1m`、`5m`、`15m`、`30m`、`1h`、`6h`、`1d` |
+
+> **降采样默认关闭**：默认返回设备**原始采样点**（如每 30 秒一条），时间戳不做任何取整。
+> 需要聚合必须显式传 `downsample`；`auto` 按查询跨度选桶（≥72h → 1h，≥24h → 30m）。
+> 非法值返回 400，不静默降级（避免调用方误以为拿到的是原始点）。
+> 聚合桶取桶内 `first_value()`（非均值）：物模型含 bool/enum/string，均值只适用于数值。
 
 ```
 GET /api/devices/90431b/sensorData?limit=100
@@ -958,11 +1003,15 @@ GET /api/devices/90431b/sensorData?limit=100
 
 ```json
 {"code": 200, "message": "success", "data": [
-  {"name": "temperature", "type": "temperature", "value": 25.5, "timestamp": "2026-08-31T20:30:00.000"}
+  {"name": "temperature", "type": "temperature", "value": 25.5, "timestamp": "2026-08-31T20:30:00.000+00:00"}
 ]}
 ```
 
 > 结果按时间倒序；缺省时间范围（最近 3 天）可命中 Redis 查询缓存（15 秒 TTL）。
+>
+> `timestamp` 固定为 **UTC**（`+00:00`），毫秒精度，格式同 [2.3 时间格式](#23-时间格式)：
+> 时序数据按 UTC 存储，与设备上报时携带的任意时区无关（上报时的 `timestamp`
+> 只取其时刻，不影响此处输出）。前端按偏移解析即可正确换算为当地时间。
 
 ---
 
@@ -1665,6 +1714,7 @@ pending ──→ sent ──→ delivered
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.9.0 | 2026-09-19 | 执行器 `specs` 新增 EPD（墨水屏）显示配置约定：`transport=epd` 时校验并透传 `size_inch`（屏幕尺寸，英寸）/ `width` / `height`（像素，宽为 8 的倍数）/ `chip`（显示控制器型号）/ `color_depth`（`bw` 黑白、`bwr` 三色黑白红、`bwry` 四色黑白红黄、`rgb565`、`rgb888`） |
 | 1.8.0 | 2026-09-10 | 数据库表结构精简（7 → 5 表，纯内部变更，**REST/WS 契约不变**）：`iot_device_sensor` + `iot_device_actuator` 合并为 `iot_device_thing`（`kind` 判别，sensor 专有字段与物模型定义体入 `specs` JSON）；`iot_downlink_cmd` + `mqtt_publish_log` 合并为 `iot_message_log`（`direction=down/up` 判别）。**移除无鉴权的兼容端点 `GET /api/ws/mqtt`**（连同其 WebSocket 处理器），MQTT 接入统一走 `/api/ws/mqtt/broker`。新增 [数据存储（5 表）](#数据存储postgresql-5-表) 附录 |
 | 1.7.0 | 2026-09-06 | 设备详情接口改造为**物模型视图**：`GET /api/devices/{deviceId}` 响应 `data.sensors` 由「最近遥测快照」升级为「传感器定义 + `latest`(最近一次上报值,`null`=从未上报)」物模型数组,`data.actuators` 为执行器定义数组(无定义时均为 `[]`);服务端完成定义↔遥测 join(上报 `name` 优先匹配定义 `id`,其次匹配定义 `name`)。物模型定义列表(整设备)新增 Redis 缓存(`cache:def_sensor:/def_actuator:`,Cache-Aside + 写路径显式失效)。**破坏性变更:详情响应不再返回裸遥测 `sensors` 与 `thingModel` 嵌套字段,前端一次请求即可渲染完整设备页** |
 | 1.6.0 | 2026-09-05 | 执行器物模型落地 + MQTT 命令通道：新增 `Actuator` 资源（`devices/{deviceId}/actuators/{actuatorId}`，镜像 Sensor 模式，CRUD + `POST /actuators/apply` 编译进 `DeviceConfig.payload.actuators`，`id` ≤11 字符 = 固件 periph 设备名 = 控制命令 `action`）；下行发布器泛化（`EnqueueCmd` 对非 config 类型实时发布 `iot/{deviceId}/cmd`，与 `GET /commands` 返回项同构）；固件重构：执行器定义唯一真源 = 配置快照（diff 实例化/卸载、重启 NVS 重放），控制命令经 MQTT/HTTP 双通道按 `action` 路由执行，遥测统一 `iot/{deviceId}/telemetry`，移除旧 register/`device/{id}` 主题/应答流。**破坏性变更：`payload.actuator`（单数运行对象）移除，由 `actuators` 定义数组取代；旧 `type=register` 协议不再支持** |

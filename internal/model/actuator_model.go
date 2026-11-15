@@ -20,6 +20,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"iot-platform.local/pkg/common"
 )
@@ -89,6 +92,44 @@ var actuatorIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,10}$`)
 // ActuatorDrivers 固件支持的执行器驱动名
 var ActuatorDrivers = []string{"led", "servo", "speaker"}
 
+// ── EPD（墨水屏）specs 约定 ───────────────────────────────────────────────
+//
+// specs.transport=epd 时，平台对以下键做结构校验（其余 transport 继续保留
+// 自由键值，由固件驱动 probe 约定）：
+//
+//	size_inch       屏幕尺寸（英寸，如 4.2 / 7.5），前端只展示该值
+//	width / height  显示逻辑分辨率（像素，8 的倍数，便于整字节打包）
+//	chip            显示控制器型号（如 ssd1683 / jd79665），≤40 字符
+//	color_depth     色深/配色：bw / bwr / bwry / rgb565 / rgb888
+//
+// 存量定义（仅 {"transport":"epd"}）继续可读可下发，固件回退到编译期面板；
+// 新建/更新时要求补全上述字段，避免云端与面板配置漂移。
+const (
+	// ActuatorTransportEPD 墨水屏 transport 名
+	ActuatorTransportEPD = "epd"
+
+	// EPD 色深/配色（specs.color_depth）
+	EPDColorDepthBW     = "bw"     // 黑白（1bpp）
+	EPDColorDepthBWR    = "bwr"    // 三色：黑白红（BWR）
+	EPDColorDepthBWRY   = "bwry"   // 四色：黑白红黄（BWRY，2bpp）
+	EPDColorDepthRGB565 = "rgb565" // 16 位 RGB
+	EPDColorDepthRGB888 = "rgb888" // 24 位 RGB
+
+	epdMinSide    = 8
+	epdMaxSide    = 4096
+	epdMaxChipLen = 40
+	epdMaxInch    = 100.0
+)
+
+// EPDColorDepths EPD 支持的色深 / 配色取值（specs.color_depth）
+var EPDColorDepths = []string{
+	EPDColorDepthBW,
+	EPDColorDepthBWR,
+	EPDColorDepthBWRY,
+	EPDColorDepthRGB565,
+	EPDColorDepthRGB888,
+}
+
 // ValidateActuatorID 校验执行器标识符格式
 func ValidateActuatorID(id string) error {
 	if !actuatorIDPattern.MatchString(id) {
@@ -107,6 +148,81 @@ func ValidateDriver(driver string) error {
 	return fmt.Errorf("无效的驱动名: %s（可选 led/servo/speaker）", driver)
 }
 
+// ValidateActuatorSpecs 校验执行器 specs 结构。
+//
+// 仅对 specs.transport=epd 做约束：width/height/chip/color_depth 必填；
+// 其他 transport 与空 specs 保持自由键值（结构由固件各驱动 probe 约定）。
+func ValidateActuatorSpecs(specs map[string]any) error {
+	if len(specs) == 0 {
+		return nil
+	}
+	raw, ok := specs["transport"]
+	if !ok || raw == nil {
+		return nil
+	}
+	transport, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("specs.transport 必须是字符串, 收到 %T", raw)
+	}
+	if transport != ActuatorTransportEPD {
+		return nil
+	}
+	return validateEPDSpecs(specs)
+}
+
+// validateEPDSpecs 校验墨水屏显示参数
+func validateEPDSpecs(specs map[string]any) error {
+	depth, ok := specs["color_depth"].(string)
+	if !ok || depth == "" {
+		return fmt.Errorf("specs.color_depth 必填（可选 %s）", strings.Join(EPDColorDepths, "/"))
+	}
+	if !slices.Contains(EPDColorDepths, depth) {
+		return fmt.Errorf("invalid specs.color_depth: %s（可选 %s）", depth, strings.Join(EPDColorDepths, "/"))
+	}
+
+	width, err := epdPixelSpec(specs, "width")
+	if err != nil {
+		return err
+	}
+	if _, err := epdPixelSpec(specs, "height"); err != nil {
+		return err
+	}
+	// BW/BWR/BWRY 走整字节位图打包，宽度须为 8 的倍数；RGB565/RGB888 无此约束
+	if depth != EPDColorDepthRGB565 && depth != EPDColorDepthRGB888 && width%8 != 0 {
+		return fmt.Errorf("specs.width 必须是 8 的倍数（位图整字节打包）: %d", width)
+	}
+
+	chip, ok := specs["chip"].(string)
+	if !ok || strings.TrimSpace(chip) == "" {
+		return fmt.Errorf("specs.chip 必填（显示控制器型号，如 ssd1683）")
+	}
+	if utf8.RuneCountInString(chip) > epdMaxChipLen {
+		return fmt.Errorf("specs.chip 过长（≤%d 字符）", epdMaxChipLen)
+	}
+
+	inch, ok := toFloat64(specs["size_inch"])
+	if !ok || inch <= 0 || inch > epdMaxInch {
+		return fmt.Errorf("specs.size_inch 必填（屏幕尺寸，英寸，0–%.0f）", epdMaxInch)
+	}
+	return nil
+}
+
+// epdPixelSpec 读取并校验 EPD 边长（像素，整数）
+func epdPixelSpec(specs map[string]any, key string) (int, error) {
+	raw, ok := specs[key]
+	if !ok || raw == nil {
+		return 0, fmt.Errorf("specs.%s 必填（像素）", key)
+	}
+	n, ok := toInt(raw)
+	if !ok {
+		return 0, fmt.Errorf("specs.%s 必须是整数, 收到 %T", key, raw)
+	}
+	if n < epdMinSide || n > epdMaxSide {
+		return 0, fmt.Errorf("specs.%s 超出范围（%d–%d）: %d", key, epdMinSide, epdMaxSide, n)
+	}
+	return n, nil
+}
+
 // Validate 创建请求校验
 func (r ActuatorCreateRequest) Validate() error {
 	if err := ValidateActuatorID(r.ID); err != nil {
@@ -116,6 +232,9 @@ func (r ActuatorCreateRequest) Validate() error {
 		return fmt.Errorf("执行器名称过长（≤100字符）")
 	}
 	if err := ValidateDriver(r.Driver); err != nil {
+		return err
+	}
+	if err := ValidateActuatorSpecs(r.Specs); err != nil {
 		return err
 	}
 	return nil
@@ -140,6 +259,13 @@ func (r ActuatorUpdateRequest) Validate() error {
 		empty = false
 		if err := validateJSONObject(*r.Specs); err != nil {
 			return fmt.Errorf("specs 非法: %w", err)
+		}
+		var specs map[string]any
+		if err := json.Unmarshal(*r.Specs, &specs); err != nil {
+			return fmt.Errorf("specs 非法: %w", err)
+		}
+		if err := ValidateActuatorSpecs(specs); err != nil {
+			return err
 		}
 	}
 	if r.Enabled != nil {
