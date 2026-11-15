@@ -552,7 +552,7 @@ func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protoc
 	switch {
 	case strings.HasSuffix(topic, configReportTopicSuffix):
 		category = "config_report"
-	case strings.HasSuffix(topic, "/telemetry"):
+	case telemetryTopic(topic):
 		category = "telemetry"
 	}
 	zap.S().Debugf("[MQTT网关] PUBLISH topic=%s qos=%d", topic, qos)
@@ -582,6 +582,21 @@ func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protoc
 // configReportTopicSuffix iot/{deviceId}/config/report 的设备配置回执主题
 const configReportTopicSuffix = "/config/report"
 
+// telemetryTopic 判断主题是否为遥测上报通道（iot/{deviceId}/telemetry，兼容 /data 后缀）。
+// 遥测主题上的任何丢弃都必须可见（Warn），否则设备侧无法感知数据没入库。
+func telemetryTopic(topic string) bool {
+	return strings.HasSuffix(topic, "/telemetry") || strings.HasSuffix(topic, "/data")
+}
+
+// truncatePayload 截断日志中的 payload，避免超长/恶意报文刷爆日志
+func truncatePayload(payload []byte) string {
+	const maxLen = 256
+	if len(payload) <= maxLen {
+		return string(payload)
+	}
+	return string(payload[:maxLen]) + "...(truncated)"
+}
+
 // onPublish PUBLISH 消息解析与入库
 // 此时 frame 已写入 iot_message_log 并转发到外部 broker
 //
@@ -597,7 +612,13 @@ const configReportTopicSuffix = "/config/report"
 func (g *MqttGatewayController) onPublish(topic string, payload []byte, connDeviceID string) {
 	list := strings.Split(topic, "/")
 	if len(list) < 3 {
-		zap.S().Debugf("[MQTT网关] PUBLISH topic=%s payload=%s (未处理)", topic, string(payload))
+		// 遥测主题段数不对（如漏了 iot/ 前缀）：数据会丢，必须提示预期格式
+		if telemetryTopic(topic) {
+			zap.S().Warnf("[MQTT网关] 遥测主题段数不足（期望 iot/{deviceId}/telemetry）[topic=%s payload=%s]",
+				topic, truncatePayload(payload))
+		} else {
+			zap.S().Debugf("[MQTT网关] PUBLISH topic=%s payload=%s (未处理)", topic, truncatePayload(payload))
+		}
 		return
 	}
 	deviceID := strings.ToLower(list[1])
@@ -616,13 +637,24 @@ func (g *MqttGatewayController) onPublish(topic string, payload []byte, connDevi
 	}
 
 	// 1. 解析 JSON → DeviceStatusDTO（与 HTTP 上报同一 DTO）
+	// 遥测主题上解析失败 / 无 sensors = 数据丢失，一律 Warn（其它主题可能是自定义报文，保持 Debug）
 	var dto entity.DeviceStatusDTO
 	if err := json.Unmarshal(payload, &dto); err != nil {
-		zap.S().Debugf("[MQTT网关] PUBLISH payload 解析失败 [device=%s topic=%s]: %v", deviceID, topic, err)
+		if telemetryTopic(topic) {
+			zap.S().Warnf("[MQTT网关] 遥测报文解析失败，本条数据丢弃 [device=%s topic=%s payload=%s]: %v",
+				deviceID, topic, truncatePayload(payload), err)
+		} else {
+			zap.S().Debugf("[MQTT网关] PUBLISH payload 解析失败 [device=%s topic=%s]: %v", deviceID, topic, err)
+		}
 		return
 	}
 	if len(dto.Sensors) == 0 {
-		zap.S().Debugf("[MQTT网关] PUBLISH payload 无传感器数据 [device=%s topic=%s]", deviceID, topic)
+		if telemetryTopic(topic) {
+			zap.S().Warnf("[MQTT网关] 遥测报文无 sensors 数组，本条数据丢弃 [device=%s topic=%s payload=%s]",
+				deviceID, topic, truncatePayload(payload))
+		} else {
+			zap.S().Debugf("[MQTT网关] PUBLISH payload 无传感器数据 [device=%s topic=%s]", deviceID, topic)
+		}
 		return
 	}
 

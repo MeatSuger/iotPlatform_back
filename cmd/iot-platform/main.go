@@ -216,7 +216,7 @@ func main() {
 		msg, _ := json.Marshal(map[string]any{
 			"type":      eventType,
 			"deviceId":  deviceID,
-			"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
+			"timestamp": time.Now().Format(common.DateTimeFormatWithZone),
 		})
 		wsHandler.NotifyOwner(ownerID, msg)
 	}
@@ -305,7 +305,7 @@ func main() {
 	go func() {
 		warmCtx, warmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer warmCancel()
-		_, err := influxSvc.QueryDeviceSensorsByTime(warmCtx, "", "", time.Now().Add(-1*time.Hour), time.Now())
+		err := influxSvc.WarmupConnection(warmCtx)
 		if err != nil {
 			zap.L().Warn("[Main] InfluxDB 预热失败", zap.Error(err))
 		} else {

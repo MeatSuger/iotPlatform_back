@@ -580,3 +580,44 @@ func TestMqttDataReport(t *testing.T) {
 		assert.Equal(t, float64(200), resp["code"])
 	})
 }
+
+// TestDataReport_TimestampFallback 设备上报不带时间戳 / 时间戳不可用时，
+// 后端补服务端时间并正常接收（不再因时间戳格式把整条数据判为 400）。
+func TestDataReport_TimestampFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		{"不带 timestamp", `{"sensors":[{"name":"temp1","type":"temperature","value":26.32}]}`},
+		{"timestamp 空字符串", `{"sensors":[{"name":"temp1","type":"temperature","value":26.32,"timestamp":""}]}`},
+		{"timestamp 为 0", `{"sensors":[{"name":"temp1","type":"temperature","value":26.32,"timestamp":0}]}`},
+		{"timestamp 为毫秒时间戳", `{"sensors":[{"name":"temp1","type":"temperature","value":26.32,"timestamp":1737000000000}]}`},
+		{"timestamp 无法识别", `{"sensors":[{"name":"temp1","type":"temperature","value":26.32,"timestamp":"N/A"}]}`},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			r := gin.New()
+			r.POST("/data", func(c *gin.Context) {
+				var dto entity.DeviceStatusDTO
+				if err := c.ShouldBindJSON(&dto); err != nil {
+					common.FailWithMsg(c, common.CodeBadRequest, err.Error())
+					return
+				}
+				assert.Len(t, dto.Sensors, 1)
+				assert.False(t, dto.Sensors[0].Timestamp.IsZero(), "时间戳应被补成服务端时间")
+				common.Success(c, nil)
+			})
+
+			req := httptest.NewRequest("POST", "/data", bytes.NewReader([]byte(tt.payload)))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			resp := parseResp(w)
+			assert.Equal(t, common.CodeSuccess, resp.Code)
+		})
+	}
+}

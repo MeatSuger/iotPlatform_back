@@ -24,6 +24,7 @@ import (
 	"go.uber.org/zap"
 
 	"iot-platform.local/internal/model"
+	"iot-platform.local/pkg/common"
 )
 
 // DeviceTokenProvider 设备 Token → deviceID 查询接口（由 main 中 sa-token deviceMgr 实现）
@@ -101,7 +102,7 @@ func (h *WsHandler) SetupDeviceWS(tokenProvider DeviceTokenProvider, report Repo
 		msg, _ := json.Marshal(map[string]any{
 			"type":      "deviceOnline",
 			"deviceId":  deviceID,
-			"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
+			"timestamp": time.Now().Format(common.DateTimeFormatWithZone),
 		})
 		h.hub.SendToOwner(ownerID, msg)
 	}
@@ -115,7 +116,7 @@ func (h *WsHandler) SetupDeviceWS(tokenProvider DeviceTokenProvider, report Repo
 		msg, _ := json.Marshal(map[string]any{
 			"type":      "deviceOffline",
 			"deviceId":  deviceID,
-			"timestamp": time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
+			"timestamp": time.Now().Format(common.DateTimeFormatWithZone),
 		})
 		h.hub.SendToOwner(ownerID, msg)
 	}

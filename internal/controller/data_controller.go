@@ -113,15 +113,37 @@ func (ctl *DataController) Heartbeat(c *gin.Context) {
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
 // @Router       /api/devices/{deviceId}/sensorData [get]
+// QueryData 查询设备历史传感器数据 (GET /devices/:deviceId/sensorData)
+//
+// @Summary      查询传感器数据
+// @Tags         data
+// @Produce      json
+// @Param        deviceId    path      string  true   "设备ID"
+// @Param        limit       query     int     false  "返回条数上限（默认 50）"
+// @Param        start       query     string  false  "起始时间（RFC3339）"
+// @Param        end         query     string  false  "结束时间（RFC3339）"
+// @Param        downsample  query     string  false  "降采样：raw（默认，原始点）/ auto / 1m|5m|15m|30m|1h|6h|1d"
+// @Success      200       {object}  common.ApiResponse
+// @Failure      400       {object}  common.ApiResponse
+// @Security     UserAuth
+// @Router       /api/devices/{deviceId}/sensorData [get]
 func (ctl *DataController) QueryData(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
 	limitStr := c.DefaultQuery("limit", "50")
 	limit, _ := strconv.Atoi(limitStr)
 
+	// 降采样模式：默认原始点（聚合会丢失设备真实采样点，必须调用方显式要求）
+	mode, bucket, ok := service.ParseDownsampleMode(c.Query("downsample"))
+	if !ok {
+		common.FailWithMsg(c, common.CodeBadRequest,
+			"downsample 取值无效，可用：raw（默认）/ auto / 1m / 5m / 15m / 30m / 1h / 6h / 1d")
+		return
+	}
+
 	// 解析时间范围（默认最近 3 天）
 	start, end := parseTimeRange(c)
 
-	records, err := ctl.influxSvc.QueryRecentDeviceSensors(c.Request.Context(), deviceID, limit, start, end)
+	records, err := ctl.influxSvc.QueryRecentDeviceSensors(c.Request.Context(), deviceID, limit, start, end, mode, bucket)
 	if err != nil {
 		common.FailWithMsg(c, common.CodeServerError, err.Error())
 		return

@@ -158,11 +158,6 @@ func (c *RedisCache) Delete(ctx context.Context, keys ...string) error {
 	return c.client.Del(ctx, keys...).Err()
 }
 
-// Exists 检查键是否存在
-func (c *RedisCache) Exists(ctx context.Context, keys ...string) (int64, error) {
-	return c.client.Exists(ctx, keys...).Result()
-}
-
 // Pipeline 创建一个 Redis Pipeline
 func (c *RedisCache) Pipeline() redis.Pipeliner {
 	return c.client.Pipeline()
@@ -422,15 +417,17 @@ func (c *RedisCache) EvictSensorRecentCache(ctx context.Context, deviceID string
 //   - TTL 抖动防雪崩：±25% 随机偏移，避免批量同时过期
 //   - L1(本地) + L2(Redis) 两级缓存
 //
-// key 组成：deviceID + limit + 时间窗
+// key 组成：deviceID + limit + 时间窗 + variant
 //   - 默认时间窗 → ":default"（高频路径，稳定命中）
 //   - 显式时间窗 → 按 unix 秒区分（避免不同窗口互相污染）
+//   - variant → 降采样模式等变体，必须区分：否则原始点请求会命中聚合缓存（反之亦然）
 func (c *RedisCache) GetCachedSensorHistoryWithLoader(
 	ctx context.Context,
 	deviceID string,
 	limit int,
 	start, end time.Time,
 	isDefaultRange bool,
+	variant string,
 	dest any,
 	loader func(context.Context) (any, error),
 ) error {
@@ -439,6 +436,9 @@ func (c *RedisCache) GetCachedSensorHistoryWithLoader(
 		key += ":default"
 	} else {
 		key += fmt.Sprintf(":%d:%d", start.Unix(), end.Unix())
+	}
+	if variant != "" {
+		key += ":" + variant
 	}
 	return c.GetOrLoad(ctx, key, dest, TTLSensorHistory, TTLSensorHistoryLocal, loader)
 }

@@ -1100,3 +1100,73 @@ func TestMqttGatewayController_OnPublishConfigReportBad(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "pending", got.Status, "非法配置回执不得置为 acked")
 }
+
+// TestMqttGatewayController_OnPublishTimestampFallback MQTT 上行与 HTTP 共用 DeviceStatusDTO，
+// 因此「不带/不可用时间戳 → 服务端补时间」必须同样生效，且**数据不能因为时间戳被丢弃**。
+func TestMqttGatewayController_OnPublishTimestampFallback(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+		wantTs  int64 // 非 0 时断言设备上报的时间戳被原样保留
+	}{
+		{
+			name:    "不带 timestamp（固件实际格式）",
+			payload: `{"sensors":[{"name":"temp","type":"temperature","value":25.5}]}`,
+		},
+		{
+			name:    "timestamp 空字符串",
+			payload: `{"sensors":[{"name":"temp","type":"temperature","value":25.5,"timestamp":""}]}`,
+		},
+		{
+			name:    "timestamp 为 0",
+			payload: `{"sensors":[{"name":"temp","type":"temperature","value":25.5,"timestamp":0}]}`,
+		},
+		{
+			name:    "timestamp 无法识别",
+			payload: `{"sensors":[{"name":"temp","type":"temperature","value":25.5,"timestamp":"N/A"}]}`,
+		},
+		{
+			name:    "timestamp 为毫秒时间戳",
+			payload: `{"sensors":[{"name":"temp","type":"temperature","value":25.5,"timestamp":1737000000000}]}`,
+			wantTs:  1737000000000,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			gw, _, deviceID, writer := newPublishEnv(t)
+			token := deviceLogin(t, deviceID)
+			gw.registerDeviceToken(deviceID, token)
+
+			gw.onPublish("iot/"+deviceID+"/telemetry", []byte(tt.payload), deviceID)
+
+			require.Eventually(t, func() bool { return writer.count() == 1 }, 5*time.Second, 20*time.Millisecond,
+				"时间戳异常不应导致 MQTT 上行数据被丢弃")
+
+			first := writer.first()
+			require.Len(t, first.Sensors, 1, "传感器数据点应完整入库")
+			gotTs := first.Sensors[0].Timestamp
+			assert.Greater(t, gotTs, int64(0), "时间戳必须非 0（0 会被写成 1970 年）")
+
+			if tt.wantTs != 0 {
+				assert.Equal(t, tt.wantTs, gotTs, "设备上报的时间戳应被保留，不应被服务端时间覆盖")
+			} else {
+				assert.InDelta(t, time.Now().UnixMilli(), gotTs, 60_000, "应回退为服务端当前时间")
+			}
+		})
+	}
+}
+
+// TestMqttGatewayController_OnPublishTopicShapeWarn 主题段数不足的遥测报文同样丢弃，
+// 但必须走 Warn（数据丢失不能静默）。
+func TestMqttGatewayController_OnPublishTopicShapeWarn(t *testing.T) {
+	gw, _, deviceID, writer := newPublishEnv(t)
+	token := deviceLogin(t, deviceID)
+	gw.registerDeviceToken(deviceID, token)
+
+	// 漏了 iot/ 前缀：2 段主题
+	gw.onPublish(deviceID+"/telemetry", []byte(`{"sensors":[{"name":"temp","type":"temperature","value":25.5}]}`), deviceID)
+
+	time.Sleep(300 * time.Millisecond)
+	assert.Equal(t, 0, writer.count(), "主题格式不对时不入库")
+}

@@ -146,3 +146,102 @@ func TestDateTimeFormat(t *testing.T) {
 	assert.Equal(t, "2006-01-02 15:04:05", DateTimeFormat)
 	assert.Equal(t, "2006-01-02T15:04:05.000-07:00", DateTimeFormatWithZone)
 }
+
+func TestParseFlexibleTime(t *testing.T) {
+	want := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+
+	tests := []struct {
+		name   string
+		input  string
+		want   time.Time
+		wantOK bool
+	}{
+		{"RFC3339", "2024-01-15T10:30:00Z", want, true},
+		{"RFC3339 带毫秒", "2024-01-15T10:30:00.000Z", want, true},
+		{"带时区偏移", "2024-01-15T18:30:00+08:00", want, true},
+		{"空格分隔（无时区）", "2024-01-15 10:30:00", want, true},
+		{"空格分隔（带时区）", "2024-01-15 10:30:00-07:00", want.Add(7 * time.Hour), true},
+		{"毫秒无时区", "2024-01-15T10:30:00.000", want, true},
+		{"空字符串", "", time.Time{}, false},
+		{"垃圾字符串", "not-a-time", time.Time{}, false},
+		{"纯数字（不处理 Unix 时间戳）", "1737000000000", time.Time{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseFlexibleTime(tt.input)
+			assert.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				assert.True(t, tt.want.Equal(got), "want %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestParseEpochValue(t *testing.T) {
+	want := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+
+	tests := []struct {
+		name   string
+		in     any
+		want   time.Time
+		wantOK bool
+	}{
+		{"time.Time 直接返回", want, want, true},
+		{"epoch 秒 int64", want.Unix(), want, true},
+		{"epoch 毫秒 int64", want.UnixMilli(), want, true},
+		{"epoch 微秒 int64", want.UnixMicro(), want, true},
+		{"epoch 纳秒 int64", want.UnixNano(), want, true},
+		{"epoch 秒 int", int(want.Unix()), want, true},
+		{"epoch 毫秒 float64", float64(want.UnixMilli()), want, true},
+		{"epoch 毫秒 数字串", "1736937000000", time.UnixMilli(1736937000000), true},
+		{"epoch 秒 数字串", "1736937000", time.Unix(1736937000, 0), true},
+		{"json.Number", json.Number("1736937000000"), time.UnixMilli(1736937000000), true},
+		{"零", int64(0), time.Time{}, false},
+		{"负数", int64(-1), time.Time{}, false},
+		{"nil", nil, time.Time{}, false},
+		{"bool", true, time.Time{}, false},
+		{"非数字串", "not-a-time", time.Time{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseEpochValue(tt.in)
+			assert.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				assert.True(t, tt.want.Equal(got), "want %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
+
+// namedTimestamp 模拟 arrow.Timestamp（int64 的命名类型）：
+// 类型断言匹配不到内置 int64，必须靠反射按 Kind 兜底。
+type namedTimestamp int64
+
+func TestParseEpochValue_NamedTypes(t *testing.T) {
+	want := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		in   any
+	}{
+		{"命名 int64（arrow.Timestamp）", namedTimestamp(want.UnixNano())},
+		{"命名 int64 毫秒", namedTimestamp(want.UnixMilli())},
+		{"命名 int64 秒", namedTimestamp(want.Unix())},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseEpochValue(tt.in)
+			assert.True(t, ok, "命名数值类型必须能解析（%T）", tt.in)
+			assert.True(t, want.Equal(got), "want %v, got %v", want, got)
+		})
+	}
+
+	// nil / 非数值不能 panic
+	_, ok := ParseEpochValue(nil)
+	assert.False(t, ok)
+	_, ok = ParseEpochValue(struct{}{})
+	assert.False(t, ok)
+}

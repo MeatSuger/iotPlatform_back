@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"iot-platform.local/pkg/common"
@@ -33,18 +34,78 @@ type SensorData struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// UnmarshalJSON 反序列化时自动修正零值时间戳
+// sensorDataPayload 仅用于反序列化：字段/标签与 SensorData 一一对应，
+// 区别是 timestamp 先以原始 JSON 收下。
+//
+// 为什么不能继续用 `type alias SensorData`：time.Time 只认 RFC 3339，
+// 设备发 ""、秒级数字、"2006-01-02 15:04:05" 都会让 json.Unmarshal 直接报错，
+// 而报错会拖垮整条上报（MQTT 直接丢弃、HTTP 返回 400）。
+//
+// ⚠️ 字段名与 struct tag 必须与 SensorData 保持同步（TestSensorDataPayload_TagsMatch 会校验）。
+type sensorDataPayload struct {
+	Name      string          `json:"name" binding:"required"`
+	Type      string          `json:"type" binding:"required"`
+	Value     any             `json:"value" binding:"required"`
+	Timestamp json.RawMessage `json:"timestamp"`
+}
+
+// UnmarshalJSON 反序列化时宽松解析时间戳：终端时钟不可信也不统一，
+// 约定「不带可用时间戳就用服务端当前时间」，且绝不因为时间戳格式问题丢整条数据。
+//
+// 具体规则：
+//   - 缺失 / null / "" / 0          → 服务端当前时间
+//   - RFC 3339 及空格分隔等兼容格式   → 按解析结果
+//   - 秒级 / 毫秒级 Unix 数字或数字串  → 按解析结果
+//   - 其它无法识别的值               → 服务端当前时间
 func (s *SensorData) UnmarshalJSON(data []byte) error {
-	type alias SensorData
-	tmp := alias{}
-	if err := json.Unmarshal(data, &tmp); err != nil {
+	var payload sensorDataPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
 		return err
 	}
-	if tmp.Timestamp.IsZero() {
-		tmp.Timestamp = time.Now()
+	*s = SensorData{
+		Name:      payload.Name,
+		Type:      payload.Type,
+		Value:     payload.Value,
+		Timestamp: parseReportTimestamp(payload.Timestamp),
 	}
-	*s = SensorData(tmp)
 	return nil
+}
+
+// parseReportTimestamp 宽松解析上报时间戳。
+//
+// 设备时钟不可信也不统一，统一约定「不带可用时间戳就用服务端当前时间」：
+//   - 缺失 / null / "" / 0 / 负数 / 无法识别 → 服务端当前时间
+//   - RFC 3339 及空格分隔等兼容格式       → 按解析结果
+//   - 秒/毫秒/微秒/纳秒 Unix 数字或数字串  → 按解析结果
+//   - 0001-01-01（Go 零值，设备未对时）   → 服务端当前时间
+func parseReportTimestamp(raw json.RawMessage) time.Time {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return time.Now()
+	}
+
+	// 字符串：先按兼容布局解析，再尝试当作 Unix 时间戳数字串
+	if strings.HasPrefix(s, `"`) {
+		s = strings.Trim(s, `"`)
+		if t, ok := common.ParseFlexibleTime(s); ok {
+			return fallbackIfZero(t)
+		}
+	}
+
+	// 数字（或数字串）：Unix 时间戳（秒/毫秒/微秒/纳秒）
+	if t, ok := common.ParseEpochValue(s); ok {
+		return t
+	}
+	return time.Now()
+}
+
+// fallbackIfZero 把零值时间（0001-01-01：Go 零值 / 设备未对时）
+// 回退为服务端当前时间，避免 InfluxDB 里出现 0001 年的数据点。
+func fallbackIfZero(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Now()
+	}
+	return t
 }
 
 // MarshalJSON 序列化时统一输出 3 位毫秒精度（与 DateTime 格式一致）
@@ -62,7 +123,7 @@ func (s SensorData) MarshalJSON() ([]byte, error) {
 		Name:      s.Name,
 		Type:      s.Type,
 		Value:     s.Value,
-		Timestamp: ts.Format("2006-01-02T15:04:05.000-07:00"),
+		Timestamp: ts.Format(common.DateTimeFormatWithZone),
 	})
 }
 

@@ -293,26 +293,33 @@ func (s *DeviceReportService) FlushReports(_ context.Context, reports []Buffered
 	var allData []SensorData
 	for _, report := range reports {
 		for _, sensor := range report.Sensors {
-			ts := sensor.Timestamp
-			if ts == 0 {
-				ts = report.Timestamp
-			}
-			t := time.UnixMilli(ts)
-			if t.IsZero() {
-				t = time.Now()
-			}
 			allData = append(allData, SensorData{
 				DeviceID:   report.DeviceID,
 				SensorName: sensor.Name,
 				Type:       sensor.Type,
 				Value:      sensor.Value,
-				Timestamp:  t,
+				Timestamp:  resolveReportTime(sensor.Timestamp, report.Timestamp),
 			})
 		}
 	}
 
 	s.influxSvc.WriteSensorsAsync(allData)
 	return nil
+}
+
+// resolveReportTime 决定数据点写入时间：传感器时间戳 → report 时间戳 → 服务端当前时间。
+//
+// 不能写成 `time.UnixMilli(ts).IsZero()`：Unix 0 是 1970-01-01（不是零值时间），
+// 一旦两个时间戳都缺，数据点会被写成 1970 年而在曲线上“消失”，必须显式拦下。
+func resolveReportTime(sensorTs, reportTs int64) time.Time {
+	ts := sensorTs
+	if ts <= 0 {
+		ts = reportTs
+	}
+	if ts <= 0 {
+		return time.Now()
+	}
+	return time.UnixMilli(ts)
 }
 
 // Heartbeat 设备心跳（带 Token 校验，供非 HTTP 入口调用）

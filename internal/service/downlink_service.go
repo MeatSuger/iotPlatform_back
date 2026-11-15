@@ -28,6 +28,7 @@ import (
 	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/repository"
 	"iot-platform.local/internal/websocket"
+	"iot-platform.local/pkg/common"
 )
 
 const (
@@ -130,7 +131,7 @@ func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req D
 			"id":        cmd.ID,
 			"cmdType":   cmd.Type,
 			"payload":   payloadObj,
-			"createdAt": cmd.CreatedAt.Format("2006-01-02T15:04:05.000-07:00"),
+			"createdAt": cmd.CreatedAt.Format(common.DateTimeFormatWithZone),
 		})
 		s.wsHub.SendToDevice(deviceID, msg)
 	}

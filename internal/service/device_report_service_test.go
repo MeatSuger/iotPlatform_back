@@ -306,3 +306,34 @@ func seedOnline2(t *testing.T, client *ent.Client, repo *repository.DeviceRepo) 
 	owner := newOwner(t, client)
 	seedDevice(t, repo, "dev1", owner, "ONLINE")
 }
+
+// TestResolveReportTime 数据点写入时间的三级回退：传感器 → report → 服务端当前时间。
+// 重点：两个时间戳都缺时不能写成 1970（Unix 0）或 0001（Go 零值）年。
+func TestResolveReportTime(t *testing.T) {
+	sensorTs := int64(1737000000000)
+	reportTs := int64(1737000001000)
+
+	t.Run("优先用传感器自身时间戳", func(t *testing.T) {
+		assert.Equal(t, time.UnixMilli(sensorTs), resolveReportTime(sensorTs, reportTs))
+	})
+
+	t.Run("传感器时间戳缺失时用 report 时间戳", func(t *testing.T) {
+		assert.Equal(t, time.UnixMilli(reportTs), resolveReportTime(0, reportTs))
+		assert.Equal(t, time.UnixMilli(reportTs), resolveReportTime(-1, reportTs))
+	})
+
+	t.Run("两者都缺失时补服务端当前时间", func(t *testing.T) {
+		zeroTimeMillis := time.Time{}.UnixMilli() // Go 零值时间的毫秒值（负几十亿毫秒）
+		for _, pair := range [][2]int64{
+			{0, 0},
+			{-1, -1},
+			{zeroTimeMillis, 0},
+			{0, zeroTimeMillis},
+		} {
+			got := resolveReportTime(pair[0], pair[1])
+			assert.False(t, got.IsZero(), "不得返回零值时间 (input=%v)", pair)
+			assert.InDelta(t, time.Now().UnixMilli(), got.UnixMilli(), 60_000,
+				"应回退为服务端当前时间 (input=%v)", pair)
+		}
+	})
+}

@@ -18,6 +18,7 @@ package entity
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -58,6 +59,70 @@ func TestSensorData_JSON(t *testing.T) {
 			assert.Equal(t, tt.want.Type, s.Type)
 			assert.Equal(t, tt.want.Value, s.Value)
 		})
+	}
+}
+
+func TestSensorData_UnmarshalJSON_TimestampFallback(t *testing.T) {
+	// 设备时钟不可信：不带时间戳（或时间戳不可用）时必须补服务端时间，
+	// 且绝不能因为时间戳格式问题让整条上报失败。
+	tests := []struct {
+		name     string
+		tsField  string
+		wantTime time.Time // 非零时断言具体值，零值时只断言「不是零值且接近当前时间」
+	}{
+		{name: "缺失 timestamp", tsField: ""},
+		{name: "null", tsField: `,"timestamp":null`},
+		{name: "空字符串", tsField: `,"timestamp":""`},
+		{name: "数字 0", tsField: `,"timestamp":0`},
+		{name: "负数", tsField: `,"timestamp":-1`},
+		{name: "无法识别的字符串", tsField: `,"timestamp":"not-a-time"`},
+		{name: "对象", tsField: `,"timestamp":{"a":1}`},
+		{name: "毫秒时间戳（数字）", tsField: `,"timestamp":1737000000000`, wantTime: time.UnixMilli(1737000000000)},
+		{name: "秒时间戳（数字）", tsField: `,"timestamp":1737000000`, wantTime: time.Unix(1737000000, 0)},
+		{name: "毫秒时间戳（字符串）", tsField: `,"timestamp":"1737000000000"`, wantTime: time.UnixMilli(1737000000000)},
+		{name: "空格分隔本地时间", tsField: `,"timestamp":"2024-01-15 10:30:00"`, wantTime: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)},
+		{name: "RFC3339", tsField: `,"timestamp":"2024-01-15T10:30:00Z"`, wantTime: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := `{"name":"temp1","type":"temperature","value":26.32` + tt.tsField + `}`
+			var s SensorData
+			err := json.Unmarshal([]byte(payload), &s)
+			assert.NoError(t, err, "时间戳异常不应导致整条数据反序列化失败")
+			assert.Equal(t, "temp1", s.Name)
+			assert.False(t, s.Timestamp.IsZero(), "时间戳不应为零值")
+
+			if tt.wantTime.IsZero() {
+				assert.WithinDuration(t, time.Now(), s.Timestamp, 5*time.Second, "应回退为服务端当前时间")
+			} else {
+				assert.True(t, tt.wantTime.Equal(s.Timestamp), "want %v, got %v", tt.wantTime, s.Timestamp)
+			}
+		})
+	}
+}
+
+func TestDeviceStatusDTO_UnmarshalJSON_NoTimestamp(t *testing.T) {
+	// 固件实际上报格式（见 firmware/docs/mqtt-api.md）：sensors[] 不带 timestamp
+	payload := `{"sensors":[{"name":"temp1","type":"temperature","value":26.32}]}`
+	var dto DeviceStatusDTO
+	assert.NoError(t, json.Unmarshal([]byte(payload), &dto))
+	assert.Len(t, dto.Sensors, 1)
+	assert.False(t, dto.Sensors[0].Timestamp.IsZero())
+	assert.WithinDuration(t, time.Now(), dto.Sensors[0].Timestamp, 5*time.Second)
+}
+
+// TestSensorDataPayload_TagsMatch 防止 sensorDataPayload 与 SensorData 字段/标签脱节：
+// 反序列化载体漏掉字段会静默丢数据，漏掉 binding 标签会让 HTTP 上报校验失效。
+func TestSensorDataPayload_TagsMatch(t *testing.T) {
+	src := reflect.TypeOf(SensorData{})
+	dst := reflect.TypeOf(sensorDataPayload{})
+
+	assert.Equal(t, src.NumField(), dst.NumField(), "字段数量不一致")
+	for i := 0; i < src.NumField(); i++ {
+		s, d := src.Field(i), dst.Field(i)
+		assert.Equal(t, s.Name, d.Name, "第 %d 个字段名不一致", i)
+		assert.Equal(t, string(s.Tag), string(d.Tag), "字段 %s 的 struct tag 不一致", s.Name)
 	}
 }
 
@@ -160,4 +225,24 @@ func TestDeviceStatusDTO_MissingSensors(t *testing.T) {
 	err := json.Unmarshal([]byte(`{}`), &dto)
 	assert.NoError(t, err)
 	assert.Len(t, dto.Sensors, 0)
+}
+
+func TestSensorData_JSONRoundTrip(t *testing.T) {
+	// 缓存往返（sensorsJSON 写 Redis → 详情接口读回）必须保持时间戳不变：
+	// MarshalJSON 输出 "2006-01-02T15:04:05.000-07:00"，UnmarshalJSON 必须认得。
+	loc := time.FixedZone("CST", 8*3600)
+	original := SensorData{
+		Name:      "hum",
+		Type:      "int",
+		Value:     float64(60),
+		Timestamp: time.Date(2026, 7, 13, 15, 25, 33, 25000000, loc),
+	}
+
+	b, err := json.Marshal(original)
+	assert.NoError(t, err)
+
+	var restored SensorData
+	assert.NoError(t, json.Unmarshal(b, &restored))
+	assert.True(t, original.Timestamp.Equal(restored.Timestamp),
+		"往返后时间戳不一致: want %v, got %v", original.Timestamp, restored.Timestamp)
 }
