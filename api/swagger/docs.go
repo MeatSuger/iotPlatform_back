@@ -770,7 +770,7 @@ const docTemplate = `{
         },
         "/api/devices/{deviceId}/login": {
             "get": {
-                "description": "使用设备6位hex ID认证（路径参数），无需额外Token",
+                "description": "必须携带注册时返回的 X-Device-Secret 头；仅设备 ID 不再能换取凭证",
                 "consumes": [
                     "application/json"
                 ],
@@ -787,6 +787,13 @@ const docTemplate = `{
                         "description": "设备ID（6位hex）",
                         "name": "deviceId",
                         "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "设备引导密钥（注册时返回一次）",
+                        "name": "X-Device-Secret",
+                        "in": "header",
                         "required": true
                     }
                 ],
@@ -848,18 +855,60 @@ const docTemplate = `{
                 ]
             }
         },
+        "/api/devices/{deviceId}/secret": {
+            "post": {
+                "description": "仅设备属主；返回新密钥一次，旧设备 Token 同时吊销，设备需用新密钥重新取 Token",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "轮换设备引导密钥",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/common.ApiResponse"
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ]
+            }
+        },
         "/api/devices/{deviceId}/sensorData": {
             "get": {
                 "consumes": [
                     "application/json"
                 ],
                 "produces": [
+                    "application/json",
                     "application/json"
                 ],
                 "tags": [
+                    "data",
                     "data"
                 ],
-                "summary": "查询设备传感器数据",
+                "summary": "查询传感器数据",
                 "parameters": [
                     {
                         "type": "string",
@@ -884,6 +933,37 @@ const docTemplate = `{
                         "description": "结束时间（RFC3339），默认当前时间",
                         "name": "end",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "返回条数上限（默认 50）",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "起始时间（RFC3339）",
+                        "name": "start",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "结束时间（RFC3339）",
+                        "name": "end",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "降采样：raw（默认，原始点）/ auto / 1m|5m|15m|30m|1h|6h|1d",
+                        "name": "downsample",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -899,7 +979,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/common.ApiResponse"
                         }
                     }
-                }
+                },
+                "security": [
+                    {
+                        "UserAuth": []
+                    }
+                ]
             },
             "post": {
                 "consumes": [
@@ -1230,7 +1315,7 @@ const docTemplate = `{
         },
         "/api/devices/{deviceId}/token": {
             "get": {
-                "description": "使用设备6位hex ID认证（路径参数），无需额外Token",
+                "description": "必须携带注册时返回的 X-Device-Secret 头；仅设备 ID 不再能换取凭证",
                 "consumes": [
                     "application/json"
                 ],
@@ -1247,6 +1332,13 @@ const docTemplate = `{
                         "description": "设备ID（6位hex）",
                         "name": "deviceId",
                         "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "设备引导密钥（注册时返回一次）",
+                        "name": "X-Device-Secret",
+                        "in": "header",
                         "required": true
                     }
                 ],
@@ -2079,6 +2171,10 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "deviceId": {
+                    "type": "string"
+                },
+                "deviceSecret": {
+                    "description": "仅注册时返回一次，用于设备首次取 Token",
                     "type": "string"
                 },
                 "deviceToken": {

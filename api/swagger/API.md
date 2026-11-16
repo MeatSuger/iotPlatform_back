@@ -188,7 +188,7 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
 | **UserAuth** | 用户 Token（UUID） | Header `Authorization` / Cookie `Authorization` | 用户管理接口 |
 | **DeviceAuth** | 设备 Token（UUID） | Header `X-Device-Token` / Cookie / Query | 数据上报、心跳、命令拉取 |
 | **UserOrDeviceAuth** | 两者之一 | 上述任一方式 | 设备更新接口 |
-| **DeviceIDAuth** | 无 Token | 路径参数 `{deviceId}`（6 位 hex） | 设备获取 Token |
+| **DeviceSecretAuth** | 设备引导密钥 | Header `X-Device-Secret` + 路径 `{deviceId}` | 设备首次获取 Token |
 
 双通道接口（如设备更新）优先识别用户 Token；用户 Token 无效时回退识别设备 Token；两者均无效返回 401。
 
@@ -205,17 +205,21 @@ devices/{deviceId}/actuators           ← 执行器定义（物模型）
 
 ### 3.3 设备 Token
 
-- 获取：`GET /api/devices/{deviceId}/token`（仅需 6 位 hex 设备 ID，无需其他凭证；兼容别名 `GET /api/devices/{deviceId}/login`，行为完全一致）；
+- 获取：`GET /api/devices/{deviceId}/token`，**必须携带**注册时返回的 `X-Device-Secret`（仅保存 SHA-256，仅返回一次；兼容别名 `GET /api/devices/{deviceId}/login`，行为一致）；
 - **有效期：永久**（`NeverExpire`），但设备 **30 天未上线**会被定时任务清理 Token（**不删除设备**，重新获取 Token 即可）；
 - **复用语义**：同一 deviceId 的有效期内重复调用，返回**同一个 Token**（不会轮换）；需要轮换时先登出（服务端调用 Logout）再重新获取才会签发新 Token；
 - 旧 Token 被替换 / 被清理时**立即物理删除**，不再残留标记。
+- **删除设备**会立即吊销其 Token；删除后 30 天清理任务不再扫描该设备，因此必须依赖删除时吊销。
+- **密钥轮换**：设备属主可 `POST /api/devices/{deviceId}/secret` 重新生成引导密钥（新密钥仅返回一次，旧 Token 同时吊销）。
 
 ### 3.4 授权规则
 
 | 操作 | 规则 |
 |------|------|
 | 更新 / 删除 / 查看设备 | 仅设备属主（UserAuth），或设备本身（DeviceAuth 且 Token 与路径设备一致） |
-| 下发命令 | 仅设备属主 |
+| 上报遥测 / 心跳 / 拉取命令 / 配置回执 | 仅设备本身（DeviceAuth 且 Token 与路径设备一致） |
+| 查询历史遥测 | 仅设备属主（UserAuth） |
+| 下发命令 / 保存配置 | 仅设备属主 |
 | 用户列表 / 用户状态修改 | 仅 `admin` / `super-admin` 角色 |
 | 修改 / 删除用户 | 本人，或管理员 |
 
@@ -771,11 +775,16 @@ POST /api/users/2/delete
 {
   "code": 200,
   "message": "success",
-  "data": {"deviceId": "90431b", "deviceToken": "uuid-device-token"}
+  "data": {
+    "deviceId": "90431b",
+    "deviceToken": "uuid-device-token",
+    "deviceSecret": "<64位hex，仅返回一次，烧录到设备>"
+  }
 }
 ```
 
 > 注册成功同时下发 `X-Device-Token` Cookie。`deviceToken` 用于数据上报 / WebSocket / MQTT 接入。
+> `deviceSecret` **只返回这一次**：设备首次调用 `GET /api/devices/{deviceId}/token` 时必须携带 `X-Device-Secret`。
 
 ---
 
@@ -909,7 +918,9 @@ POST /api/devices/90431b/update
 
 别名端点：`GET /api/devices/{deviceId}/login`（兼容别名，行为完全一致）。
 
-**授权**：DeviceIDAuth（仅需 6 位 hex 设备 ID）。
+**授权**：DeviceSecretAuth（路径 6 位 hex 设备 ID + Header `X-Device-Secret`）。
+
+设备引导密钥在 `POST /api/devices` 注册响应中返回一次（`deviceSecret`），服务端只保存 SHA-256；丢失后可由设备属主调用 `POST /api/devices/{deviceId}/secret` 重新生成（旧 Token 同时吊销），或重新注册设备。
 
 **Token 语义**（见 [3.3](#33-设备-token)）：
 
@@ -921,6 +932,7 @@ POST /api/devices/90431b/update
 
 ```
 GET /api/devices/90431b/token
+X-Device-Secret: <注册时返回的 deviceSecret>
 ```
 
 ```json
@@ -987,10 +999,12 @@ GET /api/devices/90431b/token
 
 | 参数 | 类型 | 行为 | 默认 | 说明 |
 |------|------|------|------|------|
-| `limit` | int | OPTIONAL | `50` | 返回条数上限 |
+| `limit` | int | OPTIONAL | `50` | 返回条数上限，取值范围 1..1000（超出按 1000 处理） |
 | `start` | string | OPTIONAL | 3 天前 | 起始时间（RFC3339） |
-| `end` | string | OPTIONAL | 当前时间 | 结束时间（RFC3339） |
+| `end` | string | OPTIONAL | 当前时间 | 结束时间（RFC3339），不得早于 `start` |
 | `downsample` | string | OPTIONAL | `raw` | 降采样：`raw` 原始点 / `auto` 按跨度 / `1m`、`5m`、`15m`、`30m`、`1h`、`6h`、`1d` |
+
+> `start` 与 `end` 同时提供时，跨度不得超过 **31 天**，否则返回 400。
 
 > **降采样默认关闭**：默认返回设备**原始采样点**（如每 30 秒一条），时间戳不做任何取整。
 > 需要聚合必须显式传 `downsample`；`auto` 按查询跨度选桶（≥72h → 1h，≥24h → 30m）。
@@ -1531,6 +1545,8 @@ conn, _, err := websocket.DefaultDialer.Dial("wss://api.meatsuger.top/api/ws/dev
 > 鉴权失败时返回 MQTT 标准 CONNACK `not authorized (0x05)`，而不是 HTTP 拒绝。
 >
 > **用户身份连接（方式 2）语义**：连接以 `user:<loginID>` 作为内部连接标识，**不会**与设备连接互踢（见下「同设备多连接」仅约束设备身份）；只允许 PUBLISH / SUBSCRIBE `iot/{deviceId}/...` 话题且该设备必须归属此用户；网关仅为它做透明转发，**不**写设备消息日志、**不**做上报入库、**不**参与设备在线/离线判定。典型用途：浏览器经 MQTT over WSS 向自己名下设备的图片/控制话题下发数据。
+>
+> **设备身份连接话题白名单（方式 1 / 3）**：只允许 PUBLISH / SUBSCRIBE `iot/{自身deviceId}/...`。`iot/#`、`iot/{其他设备}/...` 以及 `$SYS/#` 等越权帧在网关层直接丢弃，不会转发到 Broker；这是设备间隔离的强制边界，不依赖客户端自律。
 
 #### Topic 与 Payload 约定
 
@@ -1600,8 +1616,9 @@ wss://api.meatsuger.top/api/ws/mqtt/broker?token=<userToken>              # 管�
 | GET | `/api/devices/{deviceId}` | UserAuth | 设备详情（物模型视图：设备信息 + 传感器定义与最近遥测 + 执行器定义） |
 | POST | `/api/devices/{deviceId}/update` | UserAuth / DeviceAuth | 更新设备信息（增量） |
 | POST | `/api/devices/{deviceId}/delete` | UserAuth | 删除设备 |
-| GET | `/api/devices/{deviceId}/token` | DeviceIDAuth | 获取设备 Token |
-| GET | `/api/devices/{deviceId}/login` | DeviceIDAuth | 获取设备 Token（兼容别名） |
+| GET | `/api/devices/{deviceId}/token` | DeviceSecretAuth | 获取设备 Token |
+| GET | `/api/devices/{deviceId}/login` | DeviceSecretAuth | 获取设备 Token（兼容别名） |
+| POST | `/api/devices/{deviceId}/secret` | UserAuth | 轮换设备引导密钥（属主） |
 | POST | `/api/devices/{deviceId}/sensorData` | DeviceAuth | 上报传感器数据 |
 | GET | `/api/devices/{deviceId}/sensorData` | UserAuth | 查询设备传感器数据 |
 | POST | `/api/devices/{deviceId}/heartbeat` | DeviceAuth | 设备心跳 |
@@ -1647,10 +1664,10 @@ wss://api.meatsuger.top/api/ws/mqtt/broker?token=<userToken>              # 管�
 | 字段 | 类型 | 行为 | 说明 |
 |------|------|------|------|
 | `deviceId` | string | REQUIRED | 6 位 hex 设备 ID |
-| `token` | string | OPTIONAL | 设备 Token（走与 HTTP 上报一致的 Token 校验） |
+| `token` | string | REQUIRED | 设备 Token（非空；空 Token 一律拒绝） |
 | `sensors` | array | REQUIRED | 传感器数据数组，格式同 [Report](#report--上报传感器数据-postapidevicesdeviceidsensordata) |
 
-> UDP 为单向通道（无响应），入库链路与 HTTP 上报一致。单包不超过 2048 字节。
+> UDP 为单向通道（无响应），入库链路与 HTTP 上报一致。单包不超过 2048 字节。`token` 为空或与 `deviceId` 不匹配时整包丢弃（不做匿名入库）。
 
 ### 命令状态流转
 
@@ -1714,6 +1731,7 @@ pending ──→ sent ──→ delivered
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.10.0 | 2026-11-16 | 设备凭证安全加固：`GET /devices/{deviceId}/token` 不再仅凭 6 位设备 ID 签发，必须携带注册时返回一次的 `X-Device-Secret`（服务端仅存 SHA-256）；`POST /devices` 响应新增 `deviceSecret`；新增属主轮换密钥 `POST /devices/{deviceId}/secret`（旧 Token 同时吊销）；删除设备立即吊销 Token。设备 HTTP 端点校验 Token 与路径设备一致；历史遥测查询补设备归属校验，`limit` 上限 1000、时间跨度上限 31 天；UDP 上报拒绝空 Token。MQTT 网关对设备连接强制 `iot/{自身设备ID}/...` 话题白名单（`iot/#`、跨设备话题、`$SYS/#` 一律丢弃）。**破坏性变更：存量设备需重新下发 `deviceSecret` 并更新固件** |
 | 1.9.0 | 2026-09-19 | 执行器 `specs` 新增 EPD（墨水屏）显示配置约定：`transport=epd` 时校验并透传 `size_inch`（屏幕尺寸，英寸）/ `width` / `height`（像素，宽为 8 的倍数）/ `chip`（显示控制器型号）/ `color_depth`（`bw` 黑白、`bwr` 三色黑白红、`bwry` 四色黑白红黄、`rgb565`、`rgb888`） |
 | 1.8.0 | 2026-09-10 | 数据库表结构精简（7 → 5 表，纯内部变更，**REST/WS 契约不变**）：`iot_device_sensor` + `iot_device_actuator` 合并为 `iot_device_thing`（`kind` 判别，sensor 专有字段与物模型定义体入 `specs` JSON）；`iot_downlink_cmd` + `mqtt_publish_log` 合并为 `iot_message_log`（`direction=down/up` 判别）。**移除无鉴权的兼容端点 `GET /api/ws/mqtt`**（连同其 WebSocket 处理器），MQTT 接入统一走 `/api/ws/mqtt/broker`。新增 [数据存储（5 表）](#数据存储postgresql-5-表) 附录 |
 | 1.7.0 | 2026-09-06 | 设备详情接口改造为**物模型视图**：`GET /api/devices/{deviceId}` 响应 `data.sensors` 由「最近遥测快照」升级为「传感器定义 + `latest`(最近一次上报值,`null`=从未上报)」物模型数组,`data.actuators` 为执行器定义数组(无定义时均为 `[]`);服务端完成定义↔遥测 join(上报 `name` 优先匹配定义 `id`,其次匹配定义 `name`)。物模型定义列表(整设备)新增 Redis 缓存(`cache:def_sensor:/def_actuator:`,Cache-Aside + 写路径显式失效)。**破坏性变更:详情响应不再返回裸遥测 `sensors` 与 `thingModel` 嵌套字段,前端一次请求即可渲染完整设备页** |

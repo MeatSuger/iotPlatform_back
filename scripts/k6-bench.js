@@ -29,18 +29,19 @@
 //   2) 服务端 MaxLoginCount=5 且 Sa-Token 同端互斥：不带 device 字段登录时，
 //      服务端回退用 User-Agent 生成设备端标识，k6 的 UA 全都一样 ⇒
 //      auth_flow 反复登录会把主 Token 一起顶掉。
-//   3) 演示账号 test/123456 名下**0 台设备**。设备侧走 DeviceIDAuth 不受影响，
-//      但 userTraffic 的设备详情会因归属校验返回 HTTP 200 + code:403，
+//   3) 演示账号 test/123456 名下**0 台设备**。设备侧虽不依赖用户账号，但现在取设备
+//      Token 必须带 DEVICE_SECRET（2026-11 安全加固），只靠设备 ID 会失败；
+//      同时 userTraffic 的设备详情会因归属校验返回 HTTP 200 + code:403，
 //      报告照样显示"业务失败"。必须改用**拥有设备的真实账号**。
 //
 // 修复：
 //   - 新增 setup()，**动态获取** User Token（账号密码登录）与 Device Token
-//     （GET /devices/{id}/token 只需 6 位 hex 设备 ID，无需其他凭证）。
+//     （GET /devices/{id}/token 需同时提供 DEVICE_SECRET，或直接用 DEVICE_TOKEN 覆盖）。
 //   - setup() 里做**三重预校验**：(a) 账号名下必须有设备；(b) 用户 Token 的
-//     isLogin 必须为 true；(c) 设备 Token 能通过 /commands 鉴权。
+//     isLogin 必须为 true；(c) 设备 Token 能通过只读 /config 校验（不用 /commands，避免消费命令）。
 //     任一不满足立即 fail() 中止，杜绝"跑满 2 分钟才发现全是假失败"。
 //   - auth_flow 使用**独立的 device 标识**，与主会话分属不同设备端，互不顶号。
-//   - 仍支持 USER_TOKEN / DEVICE_TOKEN 环境变量覆盖（调试用）。
+//   - 仍支持 USER_TOKEN / DEVICE_TOKEN / DEVICE_SECRET 环境变量覆盖（调试用；SECRET 仅用于换取 Token）。
 //
 // 附带修复：endpoint:update 之前 0 样本，是因为 list 校验失败后 did 取不到值、
 //           update 分支根本没进去；Token 恢复后该分支会正常执行。
@@ -50,6 +51,8 @@
 //   VUS=300 k6 run scripts/k6-bench.js               # 加压
 //   BASE_URL=http://127.0.0.1:9091/api k6 run scripts/k6-bench.js   # 直连后端（严格阈值）
 //   USER_ACCOUNT=xxx USER_PASSWD=yyy k6 run scripts/k6-bench.js     # 指定登录账号
+//   DEVICE_ID=90431b DEVICE_SECRET=<注册时的deviceSecret> k6 run scripts/k6-bench.js
+//   DEVICE_TOKEN=<已签发token> k6 run scripts/k6-bench.js           # 跳过密钥换取
 //   SKIP_SETUP_CHECK=1 k6 run scripts/k6-bench.js    # 跳过 setup 预校验（不推荐）
 // ============================================================
 import http from 'k6/http';
@@ -60,7 +63,14 @@ import ws from 'k6/ws';
 // ---------- 环境配置 ----------
 const BASE = __ENV.BASE_URL || 'https://api.meatsuger.top/api';
 const WS_BASE = BASE.replace(/^http/, 'ws');
-const DEVICE_ID = __ENV.DEVICE_ID || '369c04';
+
+// 设备凭证：2026-11 起 /devices/{id}/token 必须携带注册时返回的 X-Device-Secret，
+// 只给 DEVICE_ID 已经不够了。两种方式二选一：
+//   A. DEVICE_ID + DEVICE_SECRET（推荐；SECRET 只返回一次，见注册响应 deviceSecret）
+//   B. DEVICE_TOKEN（已签发的设备 Token，调试/复用已有会话时用）
+// 若只设置 DEVICE_ID 而不设 DEVICE_SECRET/DEVICE_TOKEN，setup() 会立刻失败并提示。
+const DEVICE_ID = __ENV.DEVICE_ID || '';
+const DEVICE_SECRET = __ENV.DEVICE_SECRET || '';
 const USER_ACCOUNT = __ENV.USER_ACCOUNT || 'test';
 const USER_PASSWD = __ENV.USER_PASSWD || '123456';
 const VUS = parseInt(__ENV.VUS || '100', 10);
@@ -180,10 +190,33 @@ function checkBiz(r, label) {
   const ok = bizOk(r);
   bizFail.add(!ok);
   check(r, { [label]: () => ok });
+  if (!ok) {
+    sampleFailure(label, r);
+  }
   return ok;
 }
 
+// 失败样本：只打印前若干条，避免压测报告被刷屏；用于定位业务码（401/403/400）
+let sampledFailures = 0;
+function sampleFailure(label, r) {
+  if (sampledFailures >= 10) {
+    return;
+  }
+  sampledFailures += 1;
+  console.warn(`[sample] ${label} code=${bodyCode(r)} body=${String(r.body).slice(0, 240)}`);
+}
+
 const mask = (t) => (t ? `${String(t).slice(0, 8)}…` : '(empty)');
+
+// 只读校验设备 Token 是否属于 deviceId：/config 走 UserOrDeviceAuth，
+// 设备身份会校验 Token 与路径设备一致。不要用 /commands 探测——它会消费待执行命令。
+function deviceTokenMatches(deviceId, token) {
+  const r = http.get(`${BASE}/devices/${deviceId}/config`, {
+    headers: { 'X-Device-Token': token },
+    tags: { endpoint: 'setup' },
+  });
+  return bizOk(r);
+}
 
 // ============================================================
 // setup：动态获取并预校验 Token（本次修复的核心）
@@ -233,11 +266,16 @@ export function setup() {
     console.log(`[setup] 用户登录成功 userToken=${mask(userToken)}`);
   }
 
-  // ---------- 2) 设备 ID（从用户设备列表取真实归属设备） ----------
+  // k6 会把登录响应的 Authorization Cookie 放进 cookie jar。设备 Token 探测必须只依赖
+  // X-Device-Token；否则 /config 会按“用户身份”通过，误判 DEVICE_TOKEN 的归属设备。
+  http.cookieJar().clear(BASE.replace(/\/api\/?$/, ''));
+
+  // ---------- 2) 设备 ID（优先用 DEVICE_ID，否则取账号名下的第一台设备） ----------
   // ⚠️ 必须用**拥有设备的真实账号**。演示账号 test/123456 名下 0 台设备，
   //    此时 userTraffic 的设备详情/更新会因归属校验返回 403，报告会再次出现假失败。
   let deviceId = DEVICE_ID;
   let listEmpty = false;
+  let ownedDeviceIds = [];
   const list = http.get(`${BASE}/devices`, {
     headers: { Authorization: userToken },
     tags: { endpoint: 'setup' },
@@ -245,33 +283,74 @@ export function setup() {
   if (bizOk(list)) {
     try {
       const arr = list.json('data');
-      if (Array.isArray(arr) && arr.length > 0 && arr[0].deviceId) {
-        deviceId = arr[0].deviceId;
+      if (Array.isArray(arr) && arr.length > 0) {
+        ownedDeviceIds = arr.map((d) => d.deviceId).filter(Boolean);
+        if (!deviceId) {
+          deviceId = arr[0].deviceId;
+        }
         console.log(`[setup] 设备列表 ${arr.length} 台，选用 deviceId=${deviceId}`);
       } else {
         listEmpty = true;
-        console.warn(`[setup] ⚠️ 账号 ${USER_ACCOUNT} 名下没有任何设备，回退 DEVICE_ID=${deviceId}`);
+        console.warn(`[setup] ⚠️ 账号 ${USER_ACCOUNT} 名下没有任何设备`);
       }
     } catch (e) {
       listEmpty = true;
-      console.warn(`[setup] ⚠️ 解析设备列表失败，回退 DEVICE_ID=${deviceId}`);
+      console.warn(`[setup] ⚠️ 解析设备列表失败`);
     }
   } else {
-    console.warn(`[setup] 拉取设备列表失败（code=${bodyCode(list)}），回退 DEVICE_ID=${deviceId}`);
+    console.warn(`[setup] 拉取设备列表失败（code=${bodyCode(list)}）`);
   }
 
-  // ---------- 3) 设备 Token（DeviceIDAuth：只需 6 位 hex 设备 ID，无需其他凭证） ----------
+  // 给了现成 DEVICE_TOKEN 但没指定 DEVICE_ID：用只读 /config 探测它属于哪台设备。
+  // 设备 Token 与 deviceId 强绑定，盲选列表第一台会命中 403（本次报错的原因）。
+  if (ENV_DEVICE_TOKEN && !DEVICE_ID && ownedDeviceIds.length > 0) {
+    const matched = ownedDeviceIds.find((id) => deviceTokenMatches(id, ENV_DEVICE_TOKEN));
+    if (matched) {
+      deviceId = matched;
+      console.log(`[setup] DEVICE_TOKEN 归属 deviceId=${matched}（自动匹配）`);
+    } else {
+      console.warn('[setup] ⚠️ DEVICE_TOKEN 未匹配到账号下任何设备，请显式设置 DEVICE_ID');
+    }
+  }
+
+  if (!deviceId) {
+    fail(
+      `[setup] 未确定压测设备 ID。\n` +
+        `  账号 ${USER_ACCOUNT} 名下没有设备，且未设置 DEVICE_ID。\n` +
+        `  请设置 DEVICE_ID + DEVICE_SECRET（注册响应中的 deviceId/deviceSecret），或用 DEVICE_TOKEN 覆盖。`
+    );
+  }
+
+  // ---------- 3) 设备 Token（设备 ID + X-Device-Secret，2026-11 起强制） ----------
   let deviceToken = ENV_DEVICE_TOKEN;
   if (deviceToken) {
     console.log('[setup] 使用环境变量 DEVICE_TOKEN 覆盖');
   } else {
-    const tok = http.get(`${BASE}/devices/${deviceId}/token`, { tags: { endpoint: 'setup' } });
+    if (!DEVICE_SECRET) {
+      fail(
+        `[setup] 缺少 DEVICE_SECRET。\n` +
+          `  deviceId=${deviceId}\n` +
+          `  /devices/{id}/token 现在必须携带注册时返回一次的 deviceSecret（Header X-Device-Secret）。\n` +
+          `  请设置 DEVICE_SECRET=<注册响应中的 deviceSecret>，或直接提供 DEVICE_TOKEN 覆盖。`
+      );
+    }
+    if (!SKIP_SETUP_CHECK && ownedDeviceIds.length > 0 && !ownedDeviceIds.includes(deviceId)) {
+      fail(
+        `[setup] DEVICE_ID=${deviceId} 不在账号 ${USER_ACCOUNT} 的设备列表中。\n` +
+          `  可选设备：${ownedDeviceIds.join(', ')}\n` +
+          `  DEVICE_SECRET 必须与所选设备对应；也可不设 DEVICE_ID 让脚本自动选第一台。`
+      );
+    }
+    const tok = http.get(`${BASE}/devices/${deviceId}/token`, {
+      headers: { 'X-Device-Secret': DEVICE_SECRET },
+      tags: { endpoint: 'setup' },
+    });
     if (!bizOk(tok)) {
       fail(
         `[setup] 获取设备 Token 失败，无法继续压测。\n` +
           `  deviceId=${deviceId}  HTTP ${tok.status}  code=${bodyCode(tok)}\n` +
           `  body=${String(tok.body).slice(0, 300)}\n` +
-          `  排查：deviceId 是否为已注册的 6 位 hex 设备 ID（可用 DEVICE_ID 覆盖）。`
+          `  排查：DEVICE_SECRET 是否与 deviceId 对应；密钥轮换/设备删除后旧密钥会失效。`
       );
     }
     try {
@@ -320,16 +399,18 @@ export function setup() {
       );
     }
 
-    // 4.2 设备 Token：命令拉取接口走 DeviceAuth，用它验证
-    const devCheck = http.get(`${BASE}/devices/${deviceId}/commands`, {
+    // 4.2 设备 Token：用只读 /config 校验 Token 与 deviceId 匹配
+    //     （不用 /commands，避免 setup 消费设备待执行命令）
+    const devCheck = http.get(`${BASE}/devices/${deviceId}/config`, {
       headers: { 'X-Device-Token': deviceToken },
       tags: { endpoint: 'setup' },
     });
     if (!bizOk(devCheck)) {
       fail(
-        `[setup] 设备 Token 预校验失败（/commands 返回 code=${bodyCode(devCheck)}）。\n` +
+        `[setup] 设备 Token 与 deviceId=${deviceId} 不匹配（/config 返回 code=${bodyCode(devCheck)}）。\n` +
           `  HTTP ${devCheck.status}  body=${String(devCheck.body).slice(0, 300)}\n` +
-          `  排查：设备 Token 可能已被轮换或清理，重新调用 /devices/${deviceId}/token 即可。`
+          `  若使用 DEVICE_TOKEN，请同时用 DEVICE_ID 指定它所属的设备（或留空让脚本自动匹配）；\n` +
+          `  也可改用 DEVICE_SECRET 让脚本为所选设备换取 Token。`
       );
     }
 
@@ -404,6 +485,9 @@ export function userTraffic(data) {
   }
   bizFail.add(!loginStateOk);
   check(islogin, { 'islogin ok': () => loginStateOk });
+  if (!loginStateOk) {
+    sampleFailure('islogin', islogin);
+  }
 
   const list = http.get(`${BASE}/devices`, {
     headers: hdrs,
@@ -430,7 +514,8 @@ export function userTraffic(data) {
   });
   checkBiz(detail, 'detail ok');
 
-  // 历史曲线（InfluxDB + 15s Redis 缓存；不传 start/end 走默认 3 天，缓存键稳定）
+  // 历史曲线（InfluxDB + L1 15s / L2 120s 缓存；不传 start/end 走默认 3 天，缓存键稳定；
+  // limit 上限 1000、跨度上限 31 天，本脚本用 limit=50 在合法范围内）
   const history = http.get(`${BASE}/devices/${did}/sensorData?limit=50`, {
     headers: hdrs,
     tags: { endpoint: 'history' },
