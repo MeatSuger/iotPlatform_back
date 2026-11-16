@@ -17,6 +17,8 @@
 package middleware
 
 import (
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +28,40 @@ import (
 // skipPaths 不记录访问日志的路径（健康检查等高频探测）
 var skipPaths = map[string]bool{
 	"/health": true,
+}
+
+// sensitiveQueryKeys 不允许落日志的查询参数（设备/用户 Token）。
+var sensitiveQueryKeys = map[string]bool{
+	"token":          true,
+	"access_token":   true,
+	"x-device-token": true,
+	"authorization":  true,
+	"devicetoken":    true,
+}
+
+// redactQuery 将敏感参数的原始值替换为 "***"，其余参数保持原样。
+func redactQuery(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return raw
+	}
+	changed := false
+	for key, vals := range values {
+		if !sensitiveQueryKeys[strings.ToLower(key)] {
+			continue
+		}
+		for i := range vals {
+			vals[i] = "***"
+		}
+		changed = true
+	}
+	if !changed {
+		return raw
+	}
+	return values.Encode()
 }
 
 // Logger 使用 Zap 的结构化 HTTP 请求日志中间件
@@ -39,7 +75,7 @@ func Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
-		query := c.Request.URL.RawQuery
+		query := redactQuery(c.Request.URL.RawQuery)
 
 		c.Next()
 

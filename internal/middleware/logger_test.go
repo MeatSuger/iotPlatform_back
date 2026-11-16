@@ -94,3 +94,16 @@ func TestLogger_SkipHealth(t *testing.T) {
 		assert.Empty(t, obs.TakeAll())
 	})
 }
+
+func TestRedactQuery_MasksTokens(t *testing.T) {
+	got := redactQuery("token=abc.def&deviceId=90431b&X-Device-Token=secret")
+	assert.NotContains(t, got, "abc.def")
+	assert.NotContains(t, got, "secret")
+	assert.Contains(t, got, "deviceId=90431b")
+	assert.Contains(t, got, "%2A%2A%2A")
+}
+
+func TestRedactQuery_KeepsOtherParams(t *testing.T) {
+	raw := "limit=50&start=2026-01-01T00:00:00Z"
+	assert.Equal(t, raw, redactQuery(raw))
+}
