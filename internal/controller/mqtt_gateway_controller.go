@@ -74,9 +74,16 @@ type MqttGatewayController struct {
 	cache       *cache.RedisCache            // MQTT 消息历史缓存（可为 nil）
 
 	// 设备Token注册表：框架鉴权通过后记录 deviceID → token，
-	// 供 onPublish 上报时使用（与 HTTP 上报共用 Sa-Token 体系）
+	// 供 onPublish 上报时使用（与 HTTP 上报共用 Sa-Token 体系）。
+	// 仅作连接态缓存：随连接建立/注销；设备长期未上线时由
+	// DeviceService.CleanupInactiveDeviceTokens 按 30 天清理持久 Token。
 	mu           sync.RWMutex
 	deviceTokens map[string]string
+
+	// 异步落库队列：每条 PUBLISH 都同步起 goroutine + 写 DB 会在高负载下失控。
+	// logCh：消息日志（可丢弃，仅审计用）；ingestCh：遥测入库（不可静默丢弃，满了回压）。
+	logCh    chan *ent.MessageLog
+	ingestCh chan reportJob
 
 	// —— 在线/离线状态机 ——
 	// conns 登记所有活跃的 MQTT 桥接连接（deviceID → 连接生命周期状态）：
@@ -97,6 +104,7 @@ type MqttGatewayController struct {
 // 连接关闭或空闲超时（设备失联）→ 立即离线。
 type mqttConn struct {
 	deviceID string
+	token    string        // 本连接 CONNECT 鉴权使用的设备 Token（用户连接为空）
 	ownerID  uint          // 设备归属用户（上线/下线推送用）
 	timeout  time.Duration // 空闲看护阈值（keepalive×1.5 提炼，无任何帧即判失联）
 
@@ -127,7 +135,7 @@ const connectReadTimeout = 30 * time.Second
 func NewMqttGatewayController(msgRepo *repository.MessageLogRepo, reportSvc *service.DeviceReportService, configSvc *service.DeviceConfigService, deviceSvc *service.DeviceService, cache *cache.RedisCache) *MqttGatewayController {
 	addr := strings.TrimPrefix(config.Cfg.MQTT.BrokerURL, "tcp://")
 	addr = strings.TrimPrefix(addr, "ssl://")
-	return &MqttGatewayController{
+	g := &MqttGatewayController{
 		brokerAddr:   addr,
 		dialTimeout:  5 * time.Second,
 		msgRepo:      msgRepo,
@@ -138,6 +146,69 @@ func NewMqttGatewayController(msgRepo *repository.MessageLogRepo, reportSvc *ser
 		deviceTokens: make(map[string]string),
 		idleTimeout:  time.Duration(config.Cfg.MqttGateway.IdleTimeoutSec) * time.Second,
 		conns:        make(map[string]*mqttConn),
+	}
+	g.startWriters()
+	return g
+}
+
+// reportJob 一条待入库的遥测（由 onPublish 生产，reportWorker 消费）
+type reportJob struct {
+	deviceID string
+	token    string
+	topic    string
+	payload  string
+	dto      entity.DeviceStatusDTO
+}
+
+// startWriters 启动有限的落库 worker；队列满时消息日志丢弃并告警，遥测回压不静默丢。
+func (g *MqttGatewayController) startWriters() {
+	if g.msgRepo != nil {
+		g.logCh = make(chan *ent.MessageLog, 1024)
+		for i := 0; i < 2; i++ {
+			go func() {
+				for m := range g.logCh {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					if _, err := g.msgRepo.Create(ctx, m); err != nil {
+						zap.S().Warnf("[MQTT网关] 写入消息日志失败: %v", err)
+					}
+					cancel()
+				}
+			}()
+		}
+	}
+	if g.reportSvc != nil {
+		g.ingestCh = make(chan reportJob, 1024)
+		for i := 0; i < 4; i++ {
+			go g.reportWorker()
+		}
+	}
+}
+
+// reportWorker 消费遥测：Token 校验 → 状态缓存 → Redis 缓冲 → InfluxDB。
+// 与原先的 per-message goroutine 相比，并发度和 DB 压力固定，不会被突发流量放大。
+func (g *MqttGatewayController) reportWorker() {
+	for job := range g.ingestCh {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// ReportStatus 用同一个 token 校验发送者与 deviceID，跨设备注入在这一层再挡一次。
+		err := g.reportSvc.ReportStatus(ctx, job.deviceID, job.token, job.dto)
+		cancel()
+		if err != nil {
+			zap.S().Warnf("[MQTT网关] PUBLISH 数据入库失败 [device=%s topic=%s]: %v", job.deviceID, job.topic, err)
+			continue
+		}
+		if g.cache != nil {
+			cacheCtx, cacheCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err := g.cache.LPushMQTTMessage(cacheCtx, job.deviceID, map[string]any{
+				"topic":   job.topic,
+				"payload": job.payload,
+				"ts":      time.Now().UnixMilli(),
+			})
+			cacheCancel()
+			if err != nil {
+				zap.S().Debugf("[MQTT网关] 消息历史写入失败 [device=%s topic=%s]: %v", job.deviceID, job.topic, err)
+			}
+		}
+		zap.S().Debugf("[MQTT网关] PUBLISH 数据已入库 [device=%s topic=%s sensors=%d]", job.deviceID, job.topic, len(job.dto.Sensors))
 	}
 }
 
@@ -151,14 +222,25 @@ func (g *MqttGatewayController) registerDeviceToken(deviceID, token string) {
 	g.mu.Unlock()
 }
 
-// unregisterDeviceToken 连接断开时移除 Token（仅当仍是本连接的 Token，避免误删并发连接）
-func (g *MqttGatewayController) unregisterDeviceToken(deviceID, token string) {
-	if deviceID == "" {
+// unregisterDeviceToken 连接断开时移除本连接的 Token。
+//
+// 先确认登记表仍指向本连接再删除：设备重连复用同一 Token（IsShare），
+// 旧连接收尾若只比较 Token 字符串，会把新连接刚登记的条目删掉，
+// 导致新连接上的遥测全部「未找到设备Token」跳过入库。
+// 这里删除的只是连接态缓存；持久 Token 不在此清理，由 30 天未上线清理任务负责。
+func (g *MqttGatewayController) unregisterDeviceToken(conn *mqttConn) {
+	if conn == nil || conn.deviceID == "" || conn.token == "" {
+		return
+	}
+	g.connMu.RLock()
+	isCurrent := g.conns[conn.deviceID] == conn
+	g.connMu.RUnlock()
+	if !isCurrent {
 		return
 	}
 	g.mu.Lock()
-	if g.deviceTokens[deviceID] == token {
-		delete(g.deviceTokens, deviceID)
+	if g.deviceTokens[conn.deviceID] == conn.token {
+		delete(g.deviceTokens, conn.deviceID)
 	}
 	g.mu.Unlock()
 }
@@ -406,26 +488,20 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 
 	zap.S().Infof("[MQTT网关] 设备 %s 已桥接到外部Broker %s", deviceID, g.brokerAddr)
 
-	// 5.5 记录设备 Token（onPublish 入库校验用），连接断开时清理。
-	// 统一小写：方式1 HTTP Token 的 loginID 可能大小写混杂，
+	// 5.5 统一小写：方式1 HTTP Token 的 loginID 可能大小写混杂，
 	// 而话题约定 / 设备ID 均以小写为准（onPublish/deviceToken 查找一致化）。
-	// 用户连接不登记设备 Token（它不是设备，也不能用于设备上报入库）。
 	deviceID = strings.ToLower(deviceID)
-	if !isUser {
-		g.registerDeviceToken(deviceID, token)
-		defer g.unregisterDeviceToken(deviceID, token)
-	}
 
 	// 5.6 连接生命周期状态：登记 + 上线/下线判定
 	conn := &mqttConn{
 		deviceID: deviceID,
+		token:    token,
 		timeout:  g.computeIdleTimeout(keepAlive),
 		isUser:   isUser,
 		userID:   userID,
+		acl:      make(map[string]bool),
 	}
-	if isUser {
-		conn.acl = make(map[string]bool)
-	} else if g.deviceSvc != nil {
+	if !isUser && g.deviceSvc != nil {
 		// 解析设备 Owner（owner 端上线/下线推送用），失败不阻断桥接
 		if d, err := g.deviceSvc.GetByDeviceID(context.Background(), deviceID); err == nil && d.OwnerID > 0 {
 			conn.ownerID = d.OwnerID
@@ -433,6 +509,15 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 	}
 	g.registerConn(conn, ws, tcp)
 	defer g.unregisterConn(conn)
+
+	// 5.7 记录设备 Token（onPublish 入库校验用）。必须在 registerConn 之后登记：
+	// 此时旧连接已被顶替，其收尾不会误删本连接条目；defer 顺序（LIFO）保证
+	// unregisterDeviceToken 先于 unregisterConn 执行，届时登记表仍指向本连接。
+	// 用户连接不登记设备 Token（它不是设备，也不能用于设备上报入库）。
+	if !isUser {
+		g.registerDeviceToken(deviceID, token)
+		defer g.unregisterDeviceToken(conn)
+	}
 
 	// 6. 双向桥接（ws→tcp 方向累积完整帧，转发前拦截 PUBLISH 写日志 + SUBSCRIBE 标记上线）
 	done := make(chan struct{}, 2)
@@ -476,6 +561,12 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 						continue
 					}
 				} else {
+					// 设备连接：只允许操作自身 iot/{deviceId}/... 话题。
+					// 否则任意设备 Token 都能订阅/伪造全平台话题。
+					if !g.deviceFrameAllowed(conn, frame, protocolLevel) {
+						zap.S().Warnf("[MQTT网关] 设备 %s 越权话题帧，已丢弃", conn.deviceID)
+						continue
+					}
 					g.logPublish(frame, clientID, protocolLevel, conn.deviceID)
 					g.onSubscribe(frame, protocolLevel, conn)
 				}
@@ -556,23 +647,28 @@ func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protoc
 		category = "telemetry"
 	}
 	zap.S().Debugf("[MQTT网关] PUBLISH topic=%s qos=%d", topic, qos)
-	if g.msgRepo != nil {
-		go func() {
-			if _, err := g.msgRepo.Create(context.Background(), &ent.MessageLog{
-				Direction: "up",
-				Category:  category,
-				DeviceID:  connDeviceID,
-				Topic:     topic,
-				Payload:   string(payload),
-				Qos:       int(qos),
-				Retained:  retained,
-				ClientID:  clientID,
-				BrokerURL: config.Cfg.MQTT.BrokerURL,
-				CreatedAt: time.Now(),
-			}); err != nil {
-				zap.S().Warnf("[MQTT网关] 写入消息日志失败: %v", err)
-			}
-		}()
+
+	// 图片二进制分片只写 Redis 历史（由 reportWorker 入库时写），不写 DB 消息日志：
+	// 一次刷屏会产生大量 4KB 行，且内容对审计无意义。
+	if g.msgRepo != nil && !strings.HasSuffix(topic, "/img/data") {
+		m := &ent.MessageLog{
+			Direction: "up",
+			Category:  category,
+			DeviceID:  connDeviceID,
+			Topic:     topic,
+			Payload:   string(payload),
+			Qos:       int(qos),
+			Retained:  retained,
+			ClientID:  clientID,
+			BrokerURL: config.Cfg.MQTT.BrokerURL,
+			CreatedAt: time.Now(),
+		}
+		select {
+		case g.logCh <- m:
+		default:
+			// 审计日志可丢，不能因为 DB 慢而阻塞帧转发
+			zap.S().Warnf("[MQTT网关] 消息日志队列已满，丢弃一条 [topic=%s]", topic)
+		}
 	}
 
 	// 用户自定义解析钩子
@@ -622,6 +718,11 @@ func (g *MqttGatewayController) onPublish(topic string, payload []byte, connDevi
 		return
 	}
 	deviceID := strings.ToLower(list[1])
+	if connDeviceID != "" && strings.ToLower(connDeviceID) != deviceID {
+		zap.S().Warnf("[MQTT网关] 拒绝跨设备发布 [conn=%s topicDevice=%s topic=%s]",
+			connDeviceID, deviceID, topic)
+		return
+	}
 
 	// 设备配置回执：iot/{deviceId}/config/report
 	// 与 HTTP POST /api/devices/{deviceId}/config/report 同协议（DeviceConfigReport），
@@ -665,24 +766,20 @@ func (g *MqttGatewayController) onPublish(topic string, payload []byte, connDevi
 		return
 	}
 
-	// 3. 异步入库：Token校验 → 状态缓存 → Redis缓冲 → InfluxDB（不阻塞帧转发）
-	go func() {
-		if err := g.reportSvc.ReportStatus(context.Background(), deviceID, token, dto); err != nil {
-			zap.S().Warnf("[MQTT网关] PUBLISH 数据入库失败 [device=%s topic=%s]: %v", deviceID, topic, err)
-			return
-		}
-		// 4. 写入设备 MQTT 消息历史（List + Lua 原子 LPush+LTrim+Expire，保留最近 499 条/24h）
-		if g.cache != nil {
-			if err := g.cache.LPushMQTTMessage(context.Background(), deviceID, map[string]any{
-				"topic":   topic,
-				"payload": string(payload),
-				"ts":      time.Now().UnixMilli(),
-			}); err != nil {
-				zap.S().Debugf("[MQTT网关] 消息历史写入失败 [device=%s topic=%s]: %v", deviceID, topic, err)
-			}
-		}
-		zap.S().Debugf("[MQTT网关] PUBLISH 数据已入库 [device=%s topic=%s sensors=%d]", deviceID, topic, len(dto.Sensors))
-	}()
+	// 3. 异步入库：固定 worker 池 + 有界队列（不再每条 PUBLISH 起 goroutine）。
+	// 队列满时回压 1s 后丢弃并告警，避免设备突发流量打爆 PG/Influx。
+	job := reportJob{
+		deviceID: deviceID,
+		token:    token,
+		topic:    topic,
+		payload:  string(payload),
+		dto:      dto,
+	}
+	select {
+	case g.ingestCh <- job:
+	case <-time.After(time.Second):
+		zap.S().Warnf("[MQTT网关] 遥测入库队列已满，本条数据丢弃 [device=%s topic=%s]", deviceID, topic)
+	}
 }
 
 // handleConfigReport 处理设备配置回执上行 iot/{deviceId}/config/report
@@ -847,8 +944,25 @@ func authenticateUserToken(token string) (uint, bool) {
 //   - 非 PUBLISH / SUBSCRIBE 帧（PINGREQ 等）直接放行；
 //   - PUBLISH / SUBSCRIBE 的话题必须形如 iot/{deviceId}/...，且该设备归属此用户。
 //
+// 归属判定必须传 userOwnsDevice：浏览器投图（img/ctl、img/data、img/reply）走这里，
+// 传 nil 会把用户连接的每一帧都判成越权丢弃。
 // 结果按 deviceId 缓存到连接上（仅本连接泵协程访问，无需加锁）。
 func (g *MqttGatewayController) userFrameAllowed(conn *mqttConn, frame []byte, protocolLevel byte) bool {
+	return g.iotFrameAllowed(conn, frame, protocolLevel, func(deviceID string) bool {
+		return g.userOwnsDevice(conn.userID, deviceID)
+	})
+}
+
+// deviceFrameAllowed 校验设备连接的一帧是否只操作自身话题（iot/{conn.deviceID}/...）。
+func (g *MqttGatewayController) deviceFrameAllowed(conn *mqttConn, frame []byte, protocolLevel byte) bool {
+	return g.iotFrameAllowed(conn, frame, protocolLevel, func(deviceID string) bool {
+		return deviceID == conn.deviceID
+	})
+}
+
+// iotFrameAllowed 统一的话题归属校验：PUBLISH/SUBSCRIBE 只允许 iot/{deviceId}/...
+// （设备=自身，用户=名下设备），归属由 allowed(deviceID) 判定。
+func (g *MqttGatewayController) iotFrameAllowed(conn *mqttConn, frame []byte, protocolLevel byte, allowed func(deviceID string) bool) bool {
 	if len(frame) < 2 {
 		return true
 	}
@@ -866,17 +980,20 @@ func (g *MqttGatewayController) userFrameAllowed(conn *mqttConn, frame []byte, p
 	}
 
 	for _, topic := range topics {
+		if !strings.HasPrefix(topic, "iot/") {
+			return false
+		}
 		list := strings.Split(topic, "/")
-		if len(list) < 3 || list[0] != "iot" {
+		if len(list) < 3 {
 			return false
 		}
 		deviceID := strings.ToLower(list[1])
-		allowed, hit := conn.acl[deviceID]
+		allowedNow, hit := conn.acl[deviceID]
 		if !hit {
-			allowed = g.userOwnsDevice(conn.userID, deviceID)
-			conn.acl[deviceID] = allowed
+			allowedNow = allowed(deviceID)
+			conn.acl[deviceID] = allowedNow
 		}
-		if !allowed {
+		if !allowedNow {
 			return false
 		}
 	}

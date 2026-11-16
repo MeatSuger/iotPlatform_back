@@ -318,7 +318,7 @@ func TestMqttGatewayControllerBridge(t *testing.T) {
 
 	// mock 回 CONNACK success（模拟 broker 放行）—— acceptLoop 已自动回复，此处不再手动调用
 	// 设备发布消息 → 应被网关转发到外部 broker
-	pubTok := client.Publish("iot/device/telemetry", 1, false, `{"token":"token-abc","sensors":[]}`)
+	pubTok := client.Publish("iot/dev-001/telemetry", 1, false, `{"token":"token-abc","sensors":[]}`)
 	require.True(t, pubTok.WaitTimeout(5*time.Second))
 	require.NoError(t, pubTok.Error())
 
@@ -835,6 +835,36 @@ func TestMqttGatewayController_ReconnectNewConnWins(t *testing.T) {
 	assert.Equal(t, "OFFLINE", status)
 }
 
+// TestMqttGatewayController_ReconnectKeepsNewToken 回归：设备重连复用同一 Token 时，
+// 旧连接收尾不得删除新连接登记的 Token（否则新连接的遥测全部被当成“无 Token”跳过入库）。
+func TestMqttGatewayController_ReconnectKeepsNewToken(t *testing.T) {
+	gw := NewMqttGatewayController(nil, nil, nil, nil, nil)
+	const deviceID = "tokdev1"
+	const token = "same-token"
+
+	// 旧连接建立并登记 Token
+	oldConn := &mqttConn{deviceID: deviceID, token: token}
+	gw.registerConn(oldConn, nil, nil)
+	gw.registerDeviceToken(deviceID, token)
+
+	// 新连接顶替旧连接（IsShare：复用同一 Token）
+	newConn := &mqttConn{deviceID: deviceID, token: token}
+	gw.registerConn(newConn, nil, nil)
+	gw.registerDeviceToken(deviceID, token)
+
+	// 旧连接收尾（LIFO：先注销 Token 再摘除登记）→ 不得误删新连接条目
+	gw.unregisterDeviceToken(oldConn)
+	gw.unregisterConn(oldConn)
+	assert.Equal(t, token, gw.deviceToken(deviceID), "旧连接不得误删新连接 Token")
+	assert.True(t, gw.IsConnected(deviceID), "新连接应仍在登记表")
+
+	// 新连接收尾 → 删除自己的 Token
+	gw.unregisterDeviceToken(newConn)
+	gw.unregisterConn(newConn)
+	assert.Equal(t, "", gw.deviceToken(deviceID), "当前连接关闭后应注销自身 Token")
+	assert.False(t, gw.IsConnected(deviceID))
+}
+
 func TestMqttGatewayController_PresenceCallbacks(t *testing.T) {
 	oldCfg := config.Cfg
 	t.Cleanup(func() { config.Cfg = oldCfg })
@@ -1169,4 +1199,48 @@ func TestMqttGatewayController_OnPublishTopicShapeWarn(t *testing.T) {
 
 	time.Sleep(300 * time.Millisecond)
 	assert.Equal(t, 0, writer.count(), "主题格式不对时不入库")
+}
+
+// TestMqttGatewayController_DeviceFrameTopicOwnership 设备连接只能操作自身 iot/{deviceId}/... 话题。
+func TestMqttGatewayController_DeviceFrameTopicOwnership(t *testing.T) {
+	g := &MqttGatewayController{}
+	conn := &mqttConn{deviceID: "abc123", acl: map[string]bool{}}
+
+	assert.True(t, g.deviceFrameAllowed(conn, buildSubscribePacket(4, "iot/abc123/cmd"), 4))
+	assert.True(t, g.deviceFrameAllowed(conn, buildSubscribePacket(4, "iot/abc123/config", "iot/abc123/#"), 4))
+	assert.False(t, g.deviceFrameAllowed(conn, buildSubscribePacket(4, "iot/other/cmd"), 4))
+	assert.False(t, g.deviceFrameAllowed(conn, buildSubscribePacket(4, "iot/#"), 4))
+	assert.False(t, g.deviceFrameAllowed(conn, buildSubscribePacket(4, "$SYS/#"), 4))
+}
+
+// buildPublishPacket 构造 QoS0 PUBLISH 帧（无 packet id / properties）。
+func buildPublishPacket(topic string, payload []byte) []byte {
+	body := encodeStr(topic)
+	body = append(body, payload...)
+	frame := []byte{0x30}
+	frame = append(frame, encodeRemaining(len(body))...)
+	return append(frame, body...)
+}
+
+// TestMqttGatewayController_UserFrameTopicOwnership 用户连接（浏览器投图）只能操作自己
+// 名下设备的 iot/{deviceId}/... 话题；回归：归属回调曾传 nil，导致 img/ctl、img/data、
+// img/reply 全被当成越权帧丢弃，设备收不到投图数据。
+func TestMqttGatewayController_UserFrameTopicOwnership(t *testing.T) {
+	gw, _, deviceID, _ := newPublishEnv(t)
+	dev, err := gw.deviceSvc.GetByDeviceID(context.Background(), deviceID)
+	require.NoError(t, err)
+
+	conn := &mqttConn{deviceID: "user:1", userID: dev.OwnerID, isUser: true, acl: map[string]bool{}}
+
+	assert.True(t, gw.userFrameAllowed(conn, buildSubscribePacket(4, "iot/"+deviceID+"/img/reply"), 4),
+		"回执订阅必须放行")
+	assert.True(t, gw.userFrameAllowed(conn, buildPublishPacket("iot/"+deviceID+"/img/ctl", []byte(`{"type":"img_start"}`)), 4),
+		"投图控制帧必须放行")
+	assert.True(t, gw.userFrameAllowed(conn, buildPublishPacket("iot/"+deviceID+"/img/data", []byte{0x7B, 0x00}), 4),
+		"投图二进制分片必须放行")
+
+	assert.False(t, gw.userFrameAllowed(conn, buildPublishPacket("iot/otherdev/img/ctl", nil), 4),
+		"他人设备话题必须拒绝")
+	assert.False(t, gw.userFrameAllowed(conn, buildSubscribePacket(4, "$SYS/#"), 4),
+		"非 iot/ 话题必须拒绝")
 }
