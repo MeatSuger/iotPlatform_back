@@ -147,6 +147,9 @@ func (ctl *DeviceConfigController) SaveConfig(c *gin.Context) {
 // @Router       /api/devices/{deviceId}/config/report [post]
 func (ctl *DeviceConfigController) ReportConfig(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
+	if !checkDeviceSelf(c, deviceID) {
+		return
+	}
 
 	var req entity.DeviceConfigReport
 	if err := c.ShouldBindJSON(&req); err != nil {

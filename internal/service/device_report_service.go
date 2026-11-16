@@ -168,16 +168,18 @@ func (s *DeviceReportService) flushPGUpdates() {
 func (s *DeviceReportService) ReportStatus(ctx context.Context, deviceID, token string, dto entity.DeviceStatusDTO) error {
 	deviceID = util.NormalizeDeviceID(deviceID)
 
-	// Token 校验（仅非 HTTP 入口需要，HTTP 入口由中间件完成）
-	if token != "" {
-		deviceMgr := middleware.GetDeviceManager()
-		tokenDeviceID, err := deviceMgr.GetLoginID(token)
-		if err != nil {
-			return ErrInvalidDeviceToken
-		}
-		if tokenDeviceID != deviceID {
-			return ErrDeviceTokenMismatch
-		}
+	// Token 校验（仅非 HTTP 入口需要，HTTP 入口由中间件完成）。
+	// 空 Token 一律拒绝：UDP 等入口若放行空 Token，任何人都能用设备 ID 写入数据。
+	if token == "" {
+		return ErrDeviceTokenNotFound
+	}
+	deviceMgr := middleware.GetDeviceManager()
+	tokenDeviceID, err := deviceMgr.GetLoginID(token)
+	if err != nil {
+		return ErrInvalidDeviceToken
+	}
+	if tokenDeviceID != deviceID {
+		return ErrDeviceTokenMismatch
 	}
 
 	return s.reportStatusFast(ctx, deviceID, dto)
@@ -326,16 +328,17 @@ func resolveReportTime(sensorTs, reportTs int64) time.Time {
 func (s *DeviceReportService) Heartbeat(ctx context.Context, deviceID, token string) error {
 	deviceID = util.NormalizeDeviceID(deviceID)
 
-	// Token 校验（仅非 HTTP 入口需要）
-	if token != "" {
-		deviceMgr := middleware.GetDeviceManager()
-		tokenDeviceID, err := deviceMgr.GetLoginID(token)
-		if err != nil {
-			return ErrInvalidDeviceToken
-		}
-		if tokenDeviceID != deviceID {
-			return ErrDeviceTokenMismatch
-		}
+	// Token 校验（仅非 HTTP 入口需要）。空 Token 一律拒绝，理由同 ReportStatus。
+	if token == "" {
+		return ErrDeviceTokenNotFound
+	}
+	deviceMgr := middleware.GetDeviceManager()
+	tokenDeviceID, err := deviceMgr.GetLoginID(token)
+	if err != nil {
+		return ErrInvalidDeviceToken
+	}
+	if tokenDeviceID != deviceID {
+		return ErrDeviceTokenMismatch
 	}
 
 	return s.heartbeatFast(ctx, deviceID)

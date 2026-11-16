@@ -83,6 +83,13 @@ func (Device) Fields() []ent.Field {
 		field.Uint("owner_id").
 			Default(1).
 			StructTag(`json:"ownerId"`),
+		// 设备引导密钥的 SHA-256（十六进制）。设备首次取 Token 时必须提供明文密钥，
+		// 仅设备 ID 不足以换取凭证；密钥在注册时生成并只返回一次。
+		field.String("secret_hash").
+			MaxLen(64).
+			Default("").
+			Optional().
+			StructTag(`json:"-"`),
 		// 变更2: 追加 Validate —— 与数据库 CHECK chk_device_status 保持一致
 		field.String("status").
 			MaxLen(50).

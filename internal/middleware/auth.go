@@ -216,49 +216,6 @@ func GetAuthType(c *gin.Context) string {
 	return ""
 }
 
-// DeviceIDAuthMiddleware 设备 ID 认证中间件（6位hex，无需额外Token）
-// 用于设备数据上报/心跳/命令拉取 — 设备只需携带自己的6位hex ID
-func DeviceIDAuthMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		deviceID := c.Param("deviceId")
-		if deviceID == "" {
-			common.FailWithMsg(c, common.CodeUnauthorized, "缺少设备ID")
-			c.Abort()
-			return
-		}
-
-		// 校验6位hex格式
-		deviceID = normalizeDeviceID(deviceID)
-		if !isValidDeviceID(deviceID) {
-			common.FailWithMsg(c, common.CodeBadRequest, "设备ID格式无效（需6位十六进制）")
-			c.Abort()
-			return
-		}
-
-		c.Set("deviceId", deviceID)
-		c.Next()
-	}
-}
-
-func normalizeDeviceID(id string) string {
-	if len(id) > 0 && len(id) <= 6 {
-		return id
-	}
-	return id
-}
-
-func isValidDeviceID(id string) bool {
-	if len(id) != 6 {
-		return false
-	}
-	for _, c := range id {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return true
-}
-
 // CheckRole 角色检查中间件（基于 sa-token-go 角色体系）
 // 登录时 UserService.Login 已通过 stputil.SetRoles 写入数据库中的 user.role，
 // 这里直接复用 sa-token-go 的 CheckRoleOr 校验（任一角色匹配即放行）

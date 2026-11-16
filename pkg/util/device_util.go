@@ -18,6 +18,9 @@ package util
 
 import (
 	"crypto/md5"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -36,6 +39,22 @@ func GenerateShortDeviceID() string {
 	id := uuid.New()
 	hash := md5.Sum([]byte(id.String()))
 	return fmt.Sprintf("%x", hash)[:6]
+}
+
+// GenerateDeviceSecret 生成设备引导密钥（32 字节随机数，十六进制）。
+// 密钥只在注册响应中返回一次，服务端仅保存 SHA-256。
+func GenerateDeviceSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// HashDeviceSecret 计算设备密钥的 SHA-256（十六进制），用于落库比对。
+func HashDeviceSecret(secret string) string {
+	h := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(h[:])
 }
 
 // MergeDeviceWithStatus 合并设备基本信息与运行时状态为 map

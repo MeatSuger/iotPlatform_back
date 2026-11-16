@@ -191,8 +191,9 @@ REST 接口仅使用 GET / POST 两个动词（嵌入式客户端兼容），更
 | 用户 | `Authorization` | Redis `Authorization:token:xxx` | 3 天 | 同一账号最多同时在线 5 端，每端独立 Token |
 | 设备 | `X-Device-Token` | Redis `X-Device-Token:token:xxx` | 永不过期 | 有效期内复用同一 Token，登出后再登录才轮换 |
 
-- 设备 Token 通过 `GET /api/devices/{deviceId}/token` 获取（保留 `/login` 兼容别名），使用设备 6 位 hex ID 认证（**无需用户登录**）。
-- 设备若 **30 天未上线**，其 Token 会被自动清理（**不删除设备**），设备重新登录即可获取新 Token。
+- 设备 Token 通过 `GET /api/devices/{deviceId}/token` 获取（保留 `/login` 兼容别名），必须携带注册时返回的一次性 `X-Device-Secret`（服务端只保存 SHA-256），**仅凭 6 位设备 ID 不能换取凭证**。
+- 注册设备时响应中的 `deviceSecret` **只返回一次**，需写入固件 `DEVICE_SECRET` 或安全保存；丢失后可调用 `POST /api/devices/{deviceId}/secret`（设备属主）重新生成，旧 Token 同时吊销。
+- 设备若 **30 天未上线**，其 Token 会被自动清理（**不删除设备**），设备重新登录即可获取新 Token；删除设备会立即吊销其 Token。
 - 认证 Cookie 统一为 `httpOnly` + `SameSite=Lax`，生产环境（`release`）自动启用 `secure`。
 
 ---

@@ -27,6 +27,7 @@ import (
 	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/middleware"
 	"iot-platform.local/internal/repository"
+	"iot-platform.local/pkg/util"
 )
 
 func TestDeviceRegisterRequest_Fields(t *testing.T) {
@@ -234,11 +235,19 @@ func TestDeviceService_Delete_Cascade(t *testing.T) {
 	d := seedDevice(t, repo, "abc123", owner, "ONLINE")
 	_ = d
 
+	token, err := middleware.GetDeviceManager().Login("abc123", "device")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, token)
+
 	// 先缓存设备状态（验证删除后缓存被清）
 	assert.NoError(t, svc.Delete(context.Background(), "abc123"))
 
 	// DB 已删除
-	_, err := repo.GetByDeviceID(context.Background(), "abc123")
+	_, err = repo.GetByDeviceID(context.Background(), "abc123")
+	assert.Error(t, err)
+
+	// 持久 Token 已吊销：删除设备后旧凭证不能再通过鉴权
+	_, err = middleware.GetDeviceManager().GetLoginID(token)
 	assert.Error(t, err)
 
 	t.Run("删除不存在设备报错", func(t *testing.T) {
@@ -251,21 +260,30 @@ func TestDeviceService_Delete_Cascade(t *testing.T) {
 func TestDeviceService_GetDeviceToken(t *testing.T) {
 	client, repo, svc := newDeviceCtx(t)
 	owner := newOwner(t, client)
+	const secret = "device-secret-for-test"
 	seedDevice(t, repo, "abc123", owner, "ONLINE")
+	// 更新密钥哈希（seedDevice 不负责业务密钥）
+	_, err := client.Device.UpdateOneID("abc123").SetSecretHash(util.HashDeviceSecret(secret)).Save(context.Background())
+	assert.NoError(t, err)
 
 	t.Run("成功", func(t *testing.T) {
-		token, err := svc.GetDeviceToken(context.Background(), "abc123", owner)
+		token, err := svc.GetDeviceToken(context.Background(), "abc123", secret)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, token)
 	})
 
-	t.Run("非 owner 无权", func(t *testing.T) {
-		_, err := svc.GetDeviceToken(context.Background(), "abc123", 888)
-		assert.ErrorContains(t, err, "无权获取该设备Token")
+	t.Run("错误密钥", func(t *testing.T) {
+		_, err := svc.GetDeviceToken(context.Background(), "abc123", "wrong-secret")
+		assert.ErrorContains(t, err, "设备密钥无效")
+	})
+
+	t.Run("空密钥", func(t *testing.T) {
+		_, err := svc.GetDeviceToken(context.Background(), "abc123", "")
+		assert.Error(t, err)
 	})
 
 	t.Run("设备不存在", func(t *testing.T) {
-		_, err := svc.GetDeviceToken(context.Background(), "ghost", owner)
+		_, err := svc.GetDeviceToken(context.Background(), "ghost", secret)
 		assert.Error(t, err)
 	})
 }
@@ -310,4 +328,23 @@ func TestDeviceService_CleanupInactiveDeviceTokens(t *testing.T) {
 	assert.Equal(t, 1, cleaned)
 	// token 已被注销
 	assert.False(t, deviceMgr.IsLogin("old001"))
+}
+
+func TestDeviceService_RotateSecret(t *testing.T) {
+	client, repo, svc := newDeviceCtx(t)
+	owner := newOwner(t, client)
+	seedDevice(t, repo, "abc123", owner, "ONLINE")
+
+	secret, err := svc.RotateSecret(context.Background(), "abc123", owner)
+	assert.NoError(t, err)
+	assert.Len(t, secret, 64)
+
+	// 新密钥可用
+	token, err := svc.GetDeviceToken(context.Background(), "abc123", secret)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, token)
+
+	// 非属主不可轮换
+	_, err = svc.RotateSecret(context.Background(), "abc123", 99999)
+	assert.ErrorContains(t, err, "无权操作该设备")
 }

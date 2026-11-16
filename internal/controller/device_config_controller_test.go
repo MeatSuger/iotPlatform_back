@@ -99,6 +99,7 @@ func doConfig(t *testing.T, ctl *DeviceConfigController, method, deviceID string
 	}
 	c.Params = gin.Params{{Key: "deviceId", Value: deviceID}}
 	c.Set("userId", ownerID)
+	c.Set("deviceId", deviceID) // 设备回执场景（ownerID=0）模拟中间件注入的鉴权设备
 
 	handler(c)
 	return w

@@ -54,7 +54,7 @@ func TestParsePayload_EmptyString(t *testing.T) {
 
 func TestAllControllerConstructors(t *testing.T) {
 	t.Run("DataController", func(t *testing.T) {
-		ctl := NewDataController(nil, nil)
+		ctl := NewDataController(nil, nil, nil)
 		assert.NotNil(t, ctl)
 	})
 	t.Run("DownlinkController", func(t *testing.T) {

@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"strings"
 	"time"
@@ -69,16 +70,25 @@ type DeviceUpdateParameters struct {
 }
 
 type DeviceRegisterResponse struct {
-	DeviceID    string `json:"deviceId"`
-	DeviceToken string `json:"deviceToken"`
+	DeviceID     string `json:"deviceId"`
+	DeviceToken  string `json:"deviceToken"`
+	DeviceSecret string `json:"deviceSecret"` // 仅注册时返回一次，用于设备首次取 Token
 }
 
 // Register 注册设备（Write-Through：写DB后同步预热缓存）
 func (s *DeviceService) Register(ctx context.Context, ownerID uint, req DeviceParameters) (*DeviceRegisterResponse, error) {
+	secret, err := util.GenerateDeviceSecret()
+	if err != nil {
+		return nil, fmt.Errorf("生成设备密钥失败: %w", err)
+	}
+	secretHash := util.HashDeviceSecret(secret)
+
 	var deviceID string
+	created := false
 	now := time.Now()
 
-	for {
+	const maxIDAttempts = 10
+	for attempt := 0; attempt < maxIDAttempts; attempt++ {
 		deviceID = util.GenerateShortDeviceID()
 		exist, err := s.repo.GetByDeviceID(ctx, deviceID)
 		if err != nil && !ent.IsNotFound(err) {
@@ -96,6 +106,7 @@ func (s *DeviceService) Register(ctx context.Context, ownerID uint, req DevicePa
 			IPAddress:       req.IPAddress,
 			MACAddress:      req.MacAddress,
 			Location:        req.Location,
+			SecretHash:      secretHash,
 			OwnerID:         ownerID,
 			Status:          "OFFLINE",
 			CreatedAt:       now,
@@ -107,7 +118,11 @@ func (s *DeviceService) Register(ctx context.Context, ownerID uint, req DevicePa
 			}
 			return nil, fmt.Errorf("创建设备失败: %w", err)
 		}
+		created = true
 		break
+	}
+	if !created {
+		return nil, fmt.Errorf("设备ID分配失败（空间不足），请重试")
 	}
 
 	deviceMgr := middleware.GetDeviceManager()
@@ -124,7 +139,7 @@ func (s *DeviceService) Register(ctx context.Context, ownerID uint, req DevicePa
 	// 失效用户设备列表缓存（新设备加入）
 	_ = s.cache.EvictDeviceListCache(ctx, ownerID)
 
-	return &DeviceRegisterResponse{DeviceID: deviceID, DeviceToken: token}, nil
+	return &DeviceRegisterResponse{DeviceID: deviceID, DeviceToken: token, DeviceSecret: secret}, nil
 }
 
 // Update 增量更新设备（Write-Through：写DB后同步预热缓存）
@@ -242,6 +257,14 @@ func (s *DeviceService) Delete(ctx context.Context, deviceID string) error {
 		return err
 	}
 
+	// 吊销设备引导出来的持久 Token（NeverExpire）：设备记录删除后，
+	// 30 天清理任务只扫描仍存在的设备，不主动注销会让旧凭证永久有效。
+	if mgr := middleware.GetDeviceManager(); mgr != nil {
+		if err := mgr.Logout(device.ID, "device"); err != nil {
+			zap.S().Warnf("[Device] 删除设备后注销 Token 失败 [device=%s]: %v", device.ID, err)
+		}
+	}
+
 	// 同步失效本实例所有相关缓存，并通过 Pub-Sub 通知其他实例失效其 L1
 	_ = s.cache.EvictDeviceCache(ctx, deviceID)
 	_ = s.cache.EvictSensorRecentCache(ctx, deviceID)
@@ -277,18 +300,53 @@ func (s *DeviceService) deleteCascades(ctx context.Context, deviceID string) {
 	}
 }
 
-func (s *DeviceService) GetDeviceToken(ctx context.Context, deviceID string, ownerID uint) (string, error) {
+// GetDeviceToken 用设备引导密钥换取设备 Token（设备首次引导/重装时调用）。
+// 仅凭设备 ID 不再能换取凭证：必须同时提供注册时下发、仅保存哈希的密钥。
+func (s *DeviceService) GetDeviceToken(ctx context.Context, deviceID, secret string) (string, error) {
+	deviceID = util.NormalizeDeviceID(deviceID)
+	device, err := s.repo.GetByDeviceID(ctx, deviceID)
+	if err != nil {
+		return "", fmt.Errorf("设备不存在: %w", err)
+	}
+	if device.SecretHash == "" || secret == "" {
+		return "", fmt.Errorf("设备缺少引导密钥，请重新注册/烧录")
+	}
+	if subtle.ConstantTimeCompare([]byte(util.HashDeviceSecret(secret)), []byte(device.SecretHash)) != 1 {
+		return "", fmt.Errorf("设备密钥无效")
+	}
+
+	deviceMgr := middleware.GetDeviceManager()
+	return deviceMgr.Login(deviceID, "device")
+}
+
+// RotateSecret 为已有设备重新生成引导密钥（仅设备属主）。返回明文一次，旧 Token 同时吊销。
+// 用途：旧设备/存量设备补发固件密钥，或怀疑密钥泄露时轮换。
+func (s *DeviceService) RotateSecret(ctx context.Context, deviceID string, ownerID uint) (string, error) {
 	deviceID = util.NormalizeDeviceID(deviceID)
 	device, err := s.repo.GetByDeviceID(ctx, deviceID)
 	if err != nil {
 		return "", fmt.Errorf("设备不存在: %w", err)
 	}
 	if ownerID > 0 && device.OwnerID != ownerID {
-		return "", fmt.Errorf("无权获取该设备Token")
+		return "", fmt.Errorf("无权操作该设备")
 	}
 
-	deviceMgr := middleware.GetDeviceManager()
-	return deviceMgr.Login(deviceID, "device")
+	secret, err := util.GenerateDeviceSecret()
+	if err != nil {
+		return "", fmt.Errorf("生成设备密钥失败: %w", err)
+	}
+	if err := s.repo.UpdateSecretHash(ctx, deviceID, util.HashDeviceSecret(secret)); err != nil {
+		return "", fmt.Errorf("保存设备密钥失败: %w", err)
+	}
+
+	// 密钥轮换后旧 Token 必须失效
+	if mgr := middleware.GetDeviceManager(); mgr != nil {
+		if err := mgr.Logout(deviceID, "device"); err != nil {
+			zap.S().Warnf("[Device] 轮换密钥后注销 Token 失败 [device=%s]: %v", deviceID, err)
+		}
+	}
+	_ = s.cache.EvictDeviceCache(ctx, deviceID)
+	return secret, nil
 }
 
 // DeviceTokenInactiveTTL 设备离线多久后清理其 Token（不删除设备）

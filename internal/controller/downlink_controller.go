@@ -92,6 +92,9 @@ func (ctl *DownlinkController) PostCmd(c *gin.Context) {
 // @Router       /api/devices/{deviceId}/commands [get]
 func (ctl *DownlinkController) GetCmd(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
+	if !checkDeviceSelf(c, deviceID) {
+		return
+	}
 
 	cmds, err := ctl.downlinkSvc.PollCmd(c.Request.Context(), deviceID)
 	if err != nil {

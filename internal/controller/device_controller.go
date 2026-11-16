@@ -226,11 +226,12 @@ func (ctl *DeviceController) UpdateDevice(c *gin.Context) {
 
 // GetDeviceToken 获取设备Token (GET /api/devices/{deviceId}/token 或 /api/devices/{deviceId}/login)
 // @Summary      获取设备Token
-// @Description  使用设备6位hex ID认证（路径参数），无需额外Token
+// @Description  必须携带注册时返回的 X-Device-Secret 头；仅设备 ID 不再能换取凭证
 // @Tags         devices
 // @Accept       json
 // @Produce      json
-// @Param        deviceId  path  string  true  "设备ID（6位hex）"
+// @Param        deviceId        path    string  true  "设备ID（6位hex）"
+// @Param        X-Device-Secret header  string  true  "设备引导密钥（注册时返回一次）"
 // @Success      200       {object}  common.ApiResponse
 // @Failure      400       {object}  common.ApiResponse
 // @Router       /api/devices/{deviceId}/token [get]
@@ -238,11 +239,11 @@ func (ctl *DeviceController) UpdateDevice(c *gin.Context) {
 // GetDeviceToken 获取设备Token (GET /api/devices/{deviceId}/token 或 /api/devices/{deviceId}/login)
 func (ctl *DeviceController) GetDeviceToken(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
-	ownerID := middleware.GetUserID(c)
+	secret := c.GetHeader("X-Device-Secret")
 
-	token, err := ctl.deviceSvc.GetDeviceToken(c.Request.Context(), deviceID, ownerID)
+	token, err := ctl.deviceSvc.GetDeviceToken(c.Request.Context(), deviceID, secret)
 	if err != nil {
-		common.FailWithMsg(c, common.CodeBadRequest, err.Error())
+		common.FailWithMsg(c, common.CodeUnauthorized, err.Error())
 		return
 	}
 
@@ -252,6 +253,36 @@ func (ctl *DeviceController) GetDeviceToken(c *gin.Context) {
 	common.Success(c, gin.H{
 		"deviceId":    deviceID,
 		"deviceToken": token,
+	})
+}
+
+// RotateSecret 重新生成设备引导密钥 (POST /api/devices/{deviceId}/secret)
+// @Summary      轮换设备引导密钥
+// @Description  仅设备属主；返回新密钥一次，旧设备 Token 同时吊销，设备需用新密钥重新取 Token
+// @Tags         devices
+// @Produce      json
+// @Param        deviceId  path  string  true  "设备ID"
+// @Success      200       {object}  common.ApiResponse
+// @Failure      403       {object}  common.ApiResponse
+// @Security     UserAuth
+// @Router       /api/devices/{deviceId}/secret [post]
+func (ctl *DeviceController) RotateSecret(c *gin.Context) {
+	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
+	ownerID := middleware.GetUserID(c)
+
+	if _, err := checkOwnership(c, ctl.deviceSvc, deviceID, ownerID, ""); err != nil {
+		return
+	}
+
+	secret, err := ctl.deviceSvc.RotateSecret(c.Request.Context(), deviceID, ownerID)
+	if err != nil {
+		common.FailWithMsg(c, common.CodeServerError, err.Error())
+		return
+	}
+
+	common.Success(c, gin.H{
+		"deviceId":     deviceID,
+		"deviceSecret": secret,
 	})
 }
 

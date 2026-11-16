@@ -44,6 +44,7 @@ func (r *DeviceRepo) Create(ctx context.Context, device *ent.Device) (*ent.Devic
 		SetIPAddress(device.IPAddress).
 		SetMACAddress(device.MACAddress).
 		SetLocation(device.Location).
+		SetSecretHash(device.SecretHash).
 		SetOwnerID(device.OwnerID).
 		SetStatus(device.Status).
 		SetCreatedAt(device.CreatedAt).
@@ -85,6 +86,13 @@ func (r *DeviceRepo) Update(ctx context.Context, deviceID string, fields DeviceU
 		SetNillableIPAddress(fields.IPAddress).
 		SetNillableMACAddress(fields.MACAddress).
 		SetNillableLocation(fields.Location).
+		Exec(ctx)
+}
+
+// UpdateSecretHash 更新设备引导密钥哈希（密钥轮换）
+func (r *DeviceRepo) UpdateSecretHash(ctx context.Context, deviceID, secretHash string) error {
+	return r.client.Device.UpdateOneID(deviceID).
+		SetSecretHash(secretHash).
 		Exec(ctx)
 }
 

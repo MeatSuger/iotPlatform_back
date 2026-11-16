@@ -18,10 +18,12 @@ package controller
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"iot-platform.local/internal/ent"
+	"iot-platform.local/internal/middleware"
 	"iot-platform.local/internal/service"
 	"iot-platform.local/pkg/common"
 )
@@ -42,4 +44,14 @@ func checkOwnership(c *gin.Context, deviceSvc *service.DeviceService, deviceID s
 		return nil, errors.New(forbiddenMsg)
 	}
 	return device, nil
+}
+
+// checkDeviceSelf 校验设备 Token 对应的设备与路径 deviceId 一致。
+// 设备令牌只能操作自身资源，防止 A 设备用合法 Token 读写 B 设备的数据/命令。
+func checkDeviceSelf(c *gin.Context, deviceID string) bool {
+	if strings.ToLower(middleware.GetDeviceID(c)) != deviceID {
+		common.FailWithMsg(c, common.CodeForbidden, "设备Token与路径设备不一致")
+		return false
+	}
+	return true
 }

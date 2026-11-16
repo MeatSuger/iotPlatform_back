@@ -139,7 +139,7 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 	corsCfg := cors.Config{
 		AllowOrigins:     config.Cfg.CORS.AllowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Device-Token", "X-Requested-With"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Device-Token", "X-Device-Secret", "X-Requested-With"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 	}
@@ -155,13 +155,12 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 	userAuth := middleware.AuthMiddleware()                                         // 用户 Sa-Token 认证
 	userOrDeviceAuth := middleware.UserOrDeviceAuthMiddleware()                     // 双认证：用户 Token 或设备 Token
 	deviceAuth := middleware.DeviceAuthMiddleware()                                 // 设备 Sa-Token 认证（数据上报/命令拉取）
-	deviceIdAuth := middleware.DeviceIDAuthMiddleware()                             // 设备 6位hex ID 认证（无需额外Token）
 	requireAdmin := middleware.CheckRole(service.RoleSuperAdmin, service.RoleAdmin) // 管理员角色校验（sa-token-go）
 
 	// 控制器
 	userCtl := controller.NewUserController(svcs.User)
 	deviceCtl := controller.NewDeviceController(svcs.Device, svcs.Report, svcs.Sensors, svcs.Actuators)
-	dataCtl := controller.NewDataController(svcs.Report, svcs.InfluxDB)
+	dataCtl := controller.NewDataController(svcs.Report, svcs.InfluxDB, svcs.Device)
 	downlinkCtl := controller.NewDownlinkController(svcs.Downlink, svcs.Device)
 	configCtl := controller.NewDeviceConfigController(svcs.Config, svcs.Device)
 	sensorCtl := controller.NewDeviceSensorController(svcs.Sensors, svcs.Device)
@@ -219,8 +218,9 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 		api.GET("/devices/:deviceId", userAuth, deviceCtl.GetDeviceData)
 		api.POST("/devices/:deviceId/update", userOrDeviceAuth, deviceCtl.UpdateDevice)
 		api.POST("/devices/:deviceId/delete", userAuth, deviceCtl.Delete)
-		api.GET("/devices/:deviceId/token", deviceIdAuth, deviceCtl.GetDeviceToken)
-		api.GET("/devices/:deviceId/login", deviceIdAuth, deviceCtl.GetDeviceToken) // 兼容别名
+		api.GET("/devices/:deviceId/token", deviceCtl.GetDeviceToken)           // 设备引导：需 X-Device-Secret
+		api.GET("/devices/:deviceId/login", deviceCtl.GetDeviceToken)           // 兼容别名
+		api.POST("/devices/:deviceId/secret", userAuth, deviceCtl.RotateSecret) // 属主轮换引导密钥
 
 		// ===== SensorData 子资源 =====
 		api.POST("/devices/:deviceId/sensorData", deviceAuth, dataCtl.ReportData)

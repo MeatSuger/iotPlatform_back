@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"iot-platform.local/internal/middleware"
 	entity "iot-platform.local/internal/model"
 	"iot-platform.local/internal/service"
 	"iot-platform.local/pkg/common"
@@ -31,13 +32,15 @@ import (
 type DataController struct {
 	deviceReportSvc *service.DeviceReportService
 	influxSvc       *service.InfluxDBService
+	deviceSvc       *service.DeviceService
 }
 
 // NewDataController 创建数据控制器
-func NewDataController(deviceReportSvc *service.DeviceReportService, influxSvc *service.InfluxDBService) *DataController {
+func NewDataController(deviceReportSvc *service.DeviceReportService, influxSvc *service.InfluxDBService, deviceSvc *service.DeviceService) *DataController {
 	return &DataController{
 		deviceReportSvc: deviceReportSvc,
 		influxSvc:       influxSvc,
+		deviceSvc:       deviceSvc,
 	}
 }
 
@@ -54,6 +57,9 @@ func NewDataController(deviceReportSvc *service.DeviceReportService, influxSvc *
 // @Router       /api/devices/{deviceId}/sensorData [post]
 func (ctl *DataController) ReportData(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
+	if !checkDeviceSelf(c, deviceID) {
+		return
+	}
 
 	var dto entity.DeviceStatusDTO
 	if err := c.ShouldBindJSON(&dto); err != nil {
@@ -88,6 +94,9 @@ func (ctl *DataController) ReportData(c *gin.Context) {
 // @Router       /api/devices/{deviceId}/ping [post]
 func (ctl *DataController) Heartbeat(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
+	if !checkDeviceSelf(c, deviceID) {
+		return
+	}
 
 	// 快速路径：跳过 Token 二次校验（中间件已校验）
 	if err := ctl.deviceReportSvc.HeartbeatFast(c.Request.Context(), deviceID); err != nil {
@@ -129,8 +138,17 @@ func (ctl *DataController) Heartbeat(c *gin.Context) {
 // @Router       /api/devices/{deviceId}/sensorData [get]
 func (ctl *DataController) QueryData(c *gin.Context) {
 	deviceID := util.NormalizeDeviceID(c.Param("deviceId"))
+	if _, err := checkOwnership(c, ctl.deviceSvc, deviceID, middleware.GetUserID(c), ""); err != nil {
+		return
+	}
 	limitStr := c.DefaultQuery("limit", "50")
 	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
 
 	// 降采样模式：默认原始点（聚合会丢失设备真实采样点，必须调用方显式要求）
 	mode, bucket, ok := service.ParseDownsampleMode(c.Query("downsample"))
@@ -142,6 +160,16 @@ func (ctl *DataController) QueryData(c *gin.Context) {
 
 	// 解析时间范围（默认最近 3 天）
 	start, end := parseTimeRange(c)
+	if !start.IsZero() && !end.IsZero() {
+		if end.Before(start) {
+			common.FailWithMsg(c, common.CodeBadRequest, "end 不能早于 start")
+			return
+		}
+		if end.Sub(start) > 31*24*time.Hour {
+			common.FailWithMsg(c, common.CodeBadRequest, "查询时间跨度不能超过 31 天")
+			return
+		}
+	}
 
 	records, err := ctl.influxSvc.QueryRecentDeviceSensors(c.Request.Context(), deviceID, limit, start, end, mode, bucket)
 	if err != nil {
