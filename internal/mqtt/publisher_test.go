@@ -21,6 +21,8 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -146,6 +148,32 @@ func parseTopic(frame []byte) string {
 	return string(frame[pos+2 : pos+2+tl])
 }
 
+// parseConnectClientID 提取 MQTT 3.1.1 CONNECT 帧里的 ClientID
+func parseConnectClientID(frame []byte) string {
+	if len(frame) < 2 || frame[0]&0xF0 != 0x10 {
+		return ""
+	}
+	pos := 1
+	for pos < len(frame) && frame[pos]&0x80 != 0 {
+		pos++
+	}
+	pos++ // remaining length 结束
+	if pos+2 > len(frame) {
+		return ""
+	}
+	pl := int(binary.BigEndian.Uint16(frame[pos : pos+2]))
+	pos += 2 + pl    // protocol name
+	pos += 1 + 1 + 2 // protocol level + flags + keepalive
+	if pos+2 > len(frame) {
+		return ""
+	}
+	tl := int(binary.BigEndian.Uint16(frame[pos : pos+2]))
+	if pos+2+tl > len(frame) {
+		return ""
+	}
+	return string(frame[pos+2 : pos+2+tl])
+}
+
 // waitFrame 轮询等待满足条件的帧（或超时）
 func (m *mockBroker) waitFrame(t *testing.T, timeout time.Duration, pred func([]byte) bool) []byte {
 	t.Helper()
@@ -193,6 +221,15 @@ func TestPublisher_Disconnected(t *testing.T) {
 	assert.ErrorContains(t, err, "未连接")
 }
 
+// TestDefaultClientID_UniquePerProcess 固定 ClientID 会让同一 Broker 上的多个
+// 平台实例（如生产容器 + 本地调试进程）互踢，导致 QoS1 发布超时。
+func TestDefaultClientID_UniquePerProcess(t *testing.T) {
+	id := defaultClientID()
+	assert.True(t, strings.HasPrefix(id, "iot-platform-pub-"), "ClientID 前缀应可识别: %s", id)
+	assert.Contains(t, id, strconv.Itoa(os.Getpid()), "ClientID 必须包含进程号")
+	assert.NotEqual(t, "iot-platform-pub", id, "不得复用固定 ClientID")
+}
+
 // TestPublisher_PublishConfigAndCommand 端到端：真实 paho 客户端 → mock broker
 // 验证 topic/QoS/retained 位与 payload 与下行主题约定一致
 func TestPublisher_PublishConfigAndCommand(t *testing.T) {
@@ -205,7 +242,9 @@ func TestPublisher_PublishConfigAndCommand(t *testing.T) {
 	p := NewPublisher()
 
 	// 等 CONNECT 帧到达 broker，且 paho 已完成 CONNACK 处理（避免 IsConnected 竞态）
-	mock.waitFrame(t, 5*time.Second, func(f []byte) bool { return len(f) > 0 && f[0]&0xF0 == 0x10 })
+	connectFrame := mock.waitFrame(t, 5*time.Second, func(f []byte) bool { return len(f) > 0 && f[0]&0xF0 == 0x10 })
+	assert.Equal(t, defaultClientID(), parseConnectClientID(connectFrame),
+		"CONNECT 必须携带进程级唯一 ClientID，避免同 Broker 多实例互踢")
 	require.Eventually(t, func() bool { return p.client.IsConnected() }, 5*time.Second, 10*time.Millisecond, "paho 未连上 mock broker")
 
 	// PublishConfig：retained + QoS1 → iot/{id}/config

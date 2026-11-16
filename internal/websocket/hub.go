@@ -123,9 +123,12 @@ func (h *Hub) Unregister(client *Client) {
 
 // SendToDevice 向指定设备实时推送消息
 func (h *Hub) SendToDevice(deviceID string, message []byte) {
+	// 持读锁发送：Unregister/Register 关闭 Send 前必须拿到写锁，
+	// 否则先取到 client 再发送会命中已关闭的 channel（panic）。
 	h.mu.RLock()
+	defer h.mu.RUnlock()
+
 	client, ok := h.deviceClients[deviceID]
-	h.mu.RUnlock()
 	if !ok {
 		return
 	}
@@ -138,10 +141,12 @@ func (h *Hub) SendToDevice(deviceID string, message []byte) {
 
 // SendToOwner 向指定 owner 的所有管理端连接推送消息
 func (h *Hub) SendToOwner(ownerID uint, message []byte) {
+	// 持读锁遍历：ownerClients 的 map 会被 RegisterUser/Unregister 修改，
+	// 释放锁后遍历会和写操作并发（fatal: concurrent map iteration and map write）。
 	h.mu.RLock()
-	clients := h.ownerClients[ownerID]
-	h.mu.RUnlock()
+	defer h.mu.RUnlock()
 
+	clients := h.ownerClients[ownerID]
 	for client := range clients {
 		select {
 		case client.Send <- message:

@@ -23,6 +23,7 @@ package mqtt
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	mqttpaho "github.com/eclipse/paho.mqtt.golang"
@@ -45,19 +46,38 @@ type Publisher struct {
 	client mqttpaho.Client
 }
 
+// defaultClientID 生成进程级唯一的 MQTT ClientID。
+//
+// 不能用固定值：Mosquitto 等 Broker 在收到相同 ClientID 的新连接时会踢掉旧连接。
+// 同一 Broker 上若有多个实例（生产容器 + 本地调试进程、滚动发布时的新旧进程），
+// 固定 ClientID 会让它们互相顶号 → 连接反复重建，期间 QoS1 PUBLISH 收不到
+// PUBACK，表现为「发布超时」后命令下行丢失。
+func defaultClientID() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
+	}
+	return fmt.Sprintf("iot-platform-pub-%s-%d", host, os.Getpid())
+}
+
 // NewPublisher 创建并启动下行发布器（异步连接，自动重连）。
 func NewPublisher() *Publisher {
 	// 快照 broker 地址：paho 的 OnConnect 回调在独立 goroutine 异步执行，
 	// 直接读全局 config.Cfg 会在并发修改配置时产生数据竞争（如测试/配置热加载）
 	brokerURL := config.Cfg.MQTT.BrokerURL
+	clientID := defaultClientID()
 	opts := mqttpaho.NewClientOptions().
 		AddBroker(brokerURL).
-		SetClientID("iot-platform-pub").
+		SetClientID(clientID).
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
 		SetConnectRetryInterval(5 * time.Second).
 		SetOnConnectHandler(func(c mqttpaho.Client) {
-			zap.S().Infof("[MQTT] 下行发布器已连接 %s", brokerURL)
+			zap.S().Infof("[MQTT] 下行发布器已连接 %s [clientID=%s]", brokerURL, clientID)
+		}).
+		SetConnectionLostHandler(func(c mqttpaho.Client, err error) {
+			// 连接丢失后 paho 会自动重连；此处显式记录，便于定位下行超时窗口
+			zap.S().Warnf("[MQTT] 下行发布器连接断开，等待自动重连 [clientID=%s]: %v", clientID, err)
 		})
 
 	client := mqttpaho.NewClient(opts)
