@@ -19,6 +19,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -253,14 +254,23 @@ func TestAckCmd_FullFlow(t *testing.T) {
 
 // capturePublisher 记录 MQTT 命令发布调用（实现 MqttPublisher，配置发布忽略）
 type capturePublisher struct {
+	mu       sync.Mutex
 	payloads [][]byte
 }
 
 func (c *capturePublisher) PublishConfig(_ string, _ entity.ConfigEnvelope) error { return nil }
 
 func (c *capturePublisher) PublishCommand(_ string, payload []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.payloads = append(c.payloads, append([]byte(nil), payload...))
 	return nil
+}
+
+func (c *capturePublisher) snapshot() [][]byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([][]byte(nil), c.payloads...)
 }
 
 func TestEnqueueCmd_PublishesMQTTForNonConfig(t *testing.T) {
@@ -277,9 +287,10 @@ func TestEnqueueCmd_PublishesMQTTForNonConfig(t *testing.T) {
 		Payload: []byte(`{"action":"servo1","value":{"angle":90}}`),
 	})
 	assert.NoError(t, err)
-	require.Len(t, pub.payloads, 1)
+	require.Eventually(t, func() bool { return len(pub.snapshot()) == 1 }, 2*time.Second, 10*time.Millisecond)
+	publishedBytes := pub.snapshot()[0]
 	var published DownlinkCmdResponse
-	assert.NoError(t, json.Unmarshal(pub.payloads[0], &published))
+	assert.NoError(t, json.Unmarshal(publishedBytes, &published))
 	assert.Equal(t, "control", published.Type)
 	assert.Contains(t, string(published.Payload), `"servo1"`)
 }
@@ -298,7 +309,7 @@ func TestEnqueueCmd_SkipsMQTTForConfig(t *testing.T) {
 		Payload: []byte(`{"version":1,"config":{}}`),
 	})
 	assert.NoError(t, err)
-	assert.Empty(t, pub.payloads)
+	assert.Empty(t, pub.snapshot())
 }
 
 func TestEnqueueCmd_PublisherFailureTolerated(t *testing.T) {

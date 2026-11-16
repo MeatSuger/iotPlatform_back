@@ -69,20 +69,44 @@ func (s *DeviceConfigService) Get(ctx context.Context, deviceID string) (*ent.De
 //
 // 下发失败时返回错误（配置已持久化，status=pending，设备可经 GET /config 兜底拉取）。
 func (s *DeviceConfigService) Save(ctx context.Context, deviceID string, config map[string]any) (*ent.DeviceConfig, error) {
-	payloadBytes, err := json.Marshal(config)
-	if err != nil {
-		return nil, fmt.Errorf("序列化配置失败: %w", err)
-	}
+	return s.save(ctx, deviceID, func(string) (map[string]any, error) { return config, nil })
+}
 
-	// 原子 Upsert：version 在数据库内递增，并发 Save/Apply 不会产生重复版本
-	if err := s.configRepo.Upsert(ctx, deviceID, string(payloadBytes)); err != nil {
+// ApplySection 原子合并一个顶层 key（sensors / actuators）到现有配置，
+// 避免两个并发 Apply 互相覆盖对方的 key。
+func (s *DeviceConfigService) ApplySection(ctx context.Context, deviceID, key string, items any) (*ent.DeviceConfig, error) {
+	return s.save(ctx, deviceID, func(current string) (map[string]any, error) {
+		payload := map[string]any{}
+		if current != "" {
+			if err := json.Unmarshal([]byte(current), &payload); err != nil {
+				return nil, fmt.Errorf("解析现有配置失败: %w", err)
+			}
+		}
+		payload[key] = items
+		return payload, nil
+	})
+}
+
+// save 执行「读取/合并 → 原子落库 → 下发」的公共流程。
+func (s *DeviceConfigService) save(ctx context.Context, deviceID string, build func(current string) (map[string]any, error)) (*ent.DeviceConfig, error) {
+	cfg, err := s.configRepo.MergePayload(ctx, deviceID, func(current string) (string, error) {
+		payload, err := build(current)
+		if err != nil {
+			return "", err
+		}
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return "", fmt.Errorf("序列化配置失败: %w", err)
+		}
+		return string(b), nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("保存配置失败: %w", err)
 	}
 
-	// 落库后读取最新版本（原子递增的最终值由数据库决定）
-	cfg, err := s.configRepo.GetByDeviceID(ctx, deviceID)
-	if err != nil {
-		return nil, err
+	var config map[string]any
+	if err := json.Unmarshal([]byte(cfg.Payload), &config); err != nil {
+		return nil, fmt.Errorf("解析已保存配置失败: %w", err)
 	}
 
 	// 复用下行命令队列下发：在线设备经 WS 实时推送，离线设备下次轮询 /commands 拉取

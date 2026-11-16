@@ -53,10 +53,32 @@ type DownlinkService struct {
 	rdb        *redis.Client
 	wsHub      *websocket.Hub
 	mqttPub    MqttPublisher
+	pubCh      chan pubJob
+}
+
+// pubJob 待发布的 MQTT 命令（单 worker 消费，保证命令顺序）
+type pubJob struct {
+	deviceID string
+	payload  []byte
 }
 
 func NewDownlinkService(msgRepo *repository.MessageLogRepo, deviceRepo *repository.DeviceRepo, rdb *redis.Client, wsHub *websocket.Hub, mqttPub MqttPublisher) *DownlinkService {
-	return &DownlinkService{msgRepo: msgRepo, deviceRepo: deviceRepo, rdb: rdb, wsHub: wsHub, mqttPub: mqttPub}
+	s := &DownlinkService{msgRepo: msgRepo, deviceRepo: deviceRepo, rdb: rdb, wsHub: wsHub, mqttPub: mqttPub}
+	if mqttPub != nil {
+		s.pubCh = make(chan pubJob, 256)
+		go s.publishWorker()
+	}
+	return s
+}
+
+// publishWorker 异步发布 MQTT 命令：不在 HTTP/WS 请求路径里等 5s QoS1 PUBACK。
+// 发布失败只告警；命令已落库+入 Redis 队列，设备可由 GET /commands 兜底拉取。
+func (s *DownlinkService) publishWorker() {
+	for job := range s.pubCh {
+		if err := s.mqttPub.PublishCommand(job.deviceID, job.payload); err != nil {
+			zap.S().Warnf("[Downlink] MQTT 命令发布失败 [device=%s]: %v", job.deviceID, err)
+		}
+	}
 }
 
 // DownlinkCmdRequest 下发命令请求
@@ -140,8 +162,10 @@ func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req D
 	// type=config 不在此发布：配置快照由 DeviceConfigService 经 retained 主题专管，
 	// 避免双通道重复投递；离线期间的命令后续经 HTTP GET /commands 兜底拉取。
 	if s.mqttPub != nil && cmd.Type != "config" {
-		if err := s.mqttPub.PublishCommand(deviceID, cmdJSON); err != nil {
-			zap.S().Warnf("[Downlink] MQTT 命令发布失败 [device=%s cmd=%d]: %v", deviceID, cmd.ID, err)
+		select {
+		case s.pubCh <- pubJob{deviceID: deviceID, payload: cmdJSON}:
+		default:
+			zap.S().Warnf("[Downlink] MQTT 发布队列已满，实时下行跳过 [device=%s cmd=%d]（HTTP 拉取兜底）", deviceID, cmd.ID)
 		}
 	}
 

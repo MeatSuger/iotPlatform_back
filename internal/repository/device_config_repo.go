@@ -85,6 +85,64 @@ func (r *DeviceConfigRepo) Upsert(ctx context.Context, deviceID string, payload 
 	return err
 }
 
+// MergePayload 乐观并发合并：读取当前 payload，经 mutate 生成新 payload，
+// 再以 version 为条件原子更新（version 变了说明有人先写，重读重试）。
+// 用于 sensors/actuators 这类「只改一个顶层 key」的更新，避免后写覆盖先写。
+func (r *DeviceConfigRepo) MergePayload(ctx context.Context, deviceID string, mutate func(current string) (string, error)) (*ent.DeviceConfig, error) {
+	const maxRetries = 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		cfg, err := r.GetByDeviceID(ctx, deviceID)
+		if err != nil && !ent.IsNotFound(err) {
+			return nil, err
+		}
+		current := ""
+		var version uint
+		if cfg != nil {
+			current = cfg.Payload
+			version = cfg.Version
+		}
+
+		payload, err := mutate(current)
+		if err != nil {
+			return nil, err
+		}
+
+		if cfg == nil {
+			created, err := r.client.DeviceConfig.Create().
+				SetDeviceID(deviceID).
+				SetPayload(payload).
+				SetVersion(1).
+				SetStatus("pending").
+				Save(ctx)
+			if err == nil {
+				return created, nil
+			}
+			if ent.IsConstraintError(err) {
+				continue // 并发创建：重读后走更新分支
+			}
+			return nil, err
+		}
+
+		n, err := r.client.DeviceConfig.Update().
+			Where(
+				entconfig.DeviceIDEQ(deviceID),
+				entconfig.VersionEQ(version),
+			).
+			SetPayload(payload).
+			SetStatus("pending").
+			AddVersion(1).
+			Save(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if n > 0 {
+			return r.GetByDeviceID(ctx, deviceID)
+		}
+		// 0 行命中：版本已被并发修改，重试
+	}
+	return nil, fmt.Errorf("配置并发更新冲突，请重试: %s", deviceID)
+}
+
 // UpdateReported 回写设备上报的实际配置与版本，并将下发状态置为已确认
 func (r *DeviceConfigRepo) UpdateReported(ctx context.Context, deviceID string, version uint, reported string) error {
 	return r.client.DeviceConfig.Update().
