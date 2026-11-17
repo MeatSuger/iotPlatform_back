@@ -30,23 +30,27 @@ var skipPaths = map[string]bool{
 	"/health": true,
 }
 
-// sensitiveQueryKeys 不允许落日志的查询参数（设备/用户 Token）。
+// sensitiveQueryKeys 不允许落日志的查询参数（设备/用户 Token、登录密码）。
 var sensitiveQueryKeys = map[string]bool{
 	"token":          true,
 	"access_token":   true,
 	"x-device-token": true,
 	"authorization":  true,
 	"devicetoken":    true,
+	"passwd":         true,
+	"password":       true,
 }
 
 // redactQuery 将敏感参数的原始值替换为 "***"，其余参数保持原样。
+// 无法解析时整体替换为 "***"：错误串里可能带着任何参数（含 Token/密码），
+// 原样落日志等于绕过了脱敏。
 func redactQuery(raw string) string {
 	if raw == "" {
 		return ""
 	}
 	values, err := url.ParseQuery(raw)
 	if err != nil {
-		return raw
+		return "***"
 	}
 	changed := false
 	for key, vals := range values {

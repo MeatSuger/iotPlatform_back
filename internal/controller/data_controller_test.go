@@ -90,7 +90,7 @@ func TestDataReport_FullFlow(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(200), resp["code"])
 		assert.Equal(t, "状态上报已接收", resp["message"])
 		assert.NotEmpty(t, resp["data"])
@@ -103,7 +103,7 @@ func TestDataReport_FullFlow(t *testing.T) {
 		r := gin.New()
 		r.POST("/data/:deviceId/Data", deviceAuth, func(c *gin.Context) {
 			var dto entity.DeviceStatusDTO
-			c.ShouldBindJSON(&dto)
+			assert.NoError(t, c.ShouldBindJSON(&dto))
 			if len(dto.Sensors) == 0 {
 				common.FailWithMsg(c, common.CodeBadRequest, "传感器数据不能为空")
 				return
@@ -121,7 +121,7 @@ func TestDataReport_FullFlow(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(400), resp["code"])
 		assert.Contains(t, resp["message"], "传感器数据不能为空")
 	})
@@ -141,7 +141,7 @@ func TestDataReport_FullFlow(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(401), resp["code"])
 		assert.Contains(t, resp["message"], "设备Token无效")
 	})
@@ -160,7 +160,7 @@ func TestDataReport_FullFlow(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(401), resp["code"])
 		assert.Contains(t, resp["message"], "缺少设备Token")
 	})
@@ -198,7 +198,7 @@ func TestHeartbeat_FullFlow(t *testing.T) {
 
 		assert.Equal(t, 200, w.Code)
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(200), resp["code"])
 	})
 
@@ -218,7 +218,7 @@ func TestHeartbeat_FullFlow(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(200), resp["code"])
 	})
 }
@@ -241,7 +241,7 @@ func TestInfluxDBPing(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(200), resp["code"])
 		assert.Equal(t, "true", resp["data"])
 	})
@@ -293,7 +293,7 @@ func TestSensorData_JSONValidation(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(400), resp["code"])
 	})
 }
@@ -322,7 +322,7 @@ func TestQueryData(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(200), resp["code"])
 	})
 
@@ -337,7 +337,7 @@ func TestQueryData(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(200), resp["code"])
 	})
 }
@@ -535,7 +535,7 @@ func TestMqttDataReport(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(200), resp["code"])
 		assert.Equal(t, "MQTT数据上报已接收", resp["message"])
 	})
@@ -556,7 +556,7 @@ func TestMqttDataReport(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(200), resp["code"])
 	})
 
@@ -576,7 +576,7 @@ func TestMqttDataReport(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(200), resp["code"])
 	})
 }
@@ -620,4 +620,58 @@ func TestDataReport_TimestampFallback(t *testing.T) {
 			assert.Equal(t, common.CodeSuccess, resp.Code)
 		})
 	}
+}
+
+// TestParseTimeRange 时间窗解析：未传 → 零值（走默认 3 天并命中缓存）；
+// 传了但格式非法 → 报错（不能静默退回默认窗口，否则调用方以为查的是自己的范围）。
+func TestParseTimeRange(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		name       string
+		query      string
+		wantStart  int64 // unix 秒，0 表示零值
+		wantEnd    int64
+		wantErr    bool
+		expectNote string
+	}{
+		{"未传参数", "", 0, 0, false, "默认最近 3 天"},
+		{"合法 RFC3339", "?start=2025-01-01T00:00:00Z&end=2025-01-02T00:00:00Z",
+			1735689600, 1735776000, false, ""},
+		{"带毫秒（前端 toISOString 的形态）", "?start=2025-01-01T00:00:00.000Z&end=2025-01-01T06:00:00.000Z",
+			1735689600, 1735711200, false, ""},
+		{"只传 start（end 交给服务端取 now）", "?start=2025-01-01T00:00:00Z", 1735689600, 0, false, ""},
+		{"start 非法", "?start=2025-13-99", 0, 0, true, ""},
+		{"end 非法", "?end=yesterday", 0, 0, true, ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := gin.New()
+			var gotStart, gotEnd time.Time
+			var gotErr error
+			r.GET("/t", func(c *gin.Context) {
+				gotStart, gotEnd, gotErr = parseTimeRange(c)
+				common.Success(c, nil)
+			})
+			req := httptest.NewRequest("GET", "/t"+tc.query, nil)
+			r.ServeHTTP(httptest.NewRecorder(), req)
+
+			if tc.wantErr {
+				assert.Error(t, gotErr, tc.expectNote)
+				return
+			}
+			assert.NoError(t, gotErr)
+			assert.Equal(t, tc.wantStart, unixOrZero(gotStart))
+			assert.Equal(t, tc.wantEnd, unixOrZero(gotEnd))
+		})
+	}
+}
+
+// unixOrZero 零值时间返回 0（Unix() 对零值会给出负数，不便做断言）
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }

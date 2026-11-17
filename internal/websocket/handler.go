@@ -189,10 +189,11 @@ func (h *WsHandler) readUserPump(client *Client) {
 	}()
 
 	client.Conn.SetReadLimit(maxMessageSize)
-	client.Conn.SetReadDeadline(time.Now().Add(pongWait))
+	if err := client.Conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		return
+	}
 	client.Conn.SetPongHandler(func(string) error {
-		client.Conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
+		return client.Conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
 	for {
@@ -345,10 +346,11 @@ func (h *WsHandler) readDevicePump(client *Client) {
 	}()
 
 	client.Conn.SetReadLimit(maxMessageSize)
-	client.Conn.SetReadDeadline(time.Now().Add(pongWait))
+	if err := client.Conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		return
+	}
 	client.Conn.SetPongHandler(func(string) error {
-		client.Conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
+		return client.Conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
 	for {
@@ -389,10 +391,12 @@ func (h *WsHandler) writePump(client *Client) {
 	for {
 		select {
 		case message, ok := <-client.Send:
-			client.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := client.Conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				return
+			}
 			if !ok {
-				// Hub关闭了channel
-				client.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				// Hub关闭了channel；连接即将关闭，CloseMessage 尽力发送即可
+				_ = client.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
@@ -400,13 +404,22 @@ func (h *WsHandler) writePump(client *Client) {
 			if err != nil {
 				return
 			}
-			w.Write(message)
+			if _, err := w.Write(message); err != nil {
+				_ = w.Close()
+				return
+			}
 
 			// 批量发送队列中的消息
 			n := len(client.Send)
 			for range n {
-				w.Write([]byte("\n"))
-				w.Write(<-client.Send)
+				if _, err := w.Write([]byte("\n")); err != nil {
+					_ = w.Close()
+					return
+				}
+				if _, err := w.Write(<-client.Send); err != nil {
+					_ = w.Close()
+					return
+				}
 			}
 
 			if err := w.Close(); err != nil {
@@ -414,7 +427,9 @@ func (h *WsHandler) writePump(client *Client) {
 			}
 
 		case <-ticker.C:
-			client.Conn.SetWriteDeadline(time.Now().Add(pingPeriod))
+			if err := client.Conn.SetWriteDeadline(time.Now().Add(pingPeriod)); err != nil {
+				return
+			}
 			if err := client.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}

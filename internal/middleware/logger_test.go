@@ -107,3 +107,29 @@ func TestRedactQuery_KeepsOtherParams(t *testing.T) {
 	raw := "limit=50&start=2026-01-01T00:00:00Z"
 	assert.Equal(t, raw, redactQuery(raw))
 }
+
+// TestRedactQuery_MasksPassword 登录接口支持 Query 传凭据，passwd/password 不得落日志。
+func TestRedactQuery_MasksPassword(t *testing.T) {
+	got := redactQuery("account=alice&passwd=Secret123&password=p%40ss")
+	assert.NotContains(t, got, "Secret123")
+	assert.NotContains(t, got, "p@ss")
+	assert.Contains(t, got, "account=alice")
+	assert.Contains(t, got, "%2A%2A%2A")
+}
+
+// TestRedactQuery_MalformedDoesNotLeak 解析失败时不得原样返回 query。
+func TestRedactQuery_MalformedDoesNotLeak(t *testing.T) {
+	cases := []string{
+		"token=abc.def;x=1", // 非法分号分隔
+		"token=%zz",         // 非法百分号转义
+		"passwd=Secret;bad",
+	}
+	for _, raw := range cases {
+		t.Run(raw, func(t *testing.T) {
+			got := redactQuery(raw)
+			assert.NotContains(t, got, "abc.def")
+			assert.NotContains(t, got, "Secret")
+			assert.NotContains(t, got, "%zz")
+		})
+	}
+}

@@ -17,6 +17,7 @@
 package controller
 
 import (
+	"fmt"
 	"strconv"
 	"time"
 
@@ -159,7 +160,11 @@ func (ctl *DataController) QueryData(c *gin.Context) {
 	}
 
 	// 解析时间范围（默认最近 3 天）
-	start, end := parseTimeRange(c)
+	start, end, err := parseTimeRange(c)
+	if err != nil {
+		common.FailWithMsg(c, common.CodeBadRequest, err.Error())
+		return
+	}
 	if !start.IsZero() && !end.IsZero() {
 		if end.Before(start) {
 			common.FailWithMsg(c, common.CodeBadRequest, "end 不能早于 start")
@@ -180,18 +185,23 @@ func (ctl *DataController) QueryData(c *gin.Context) {
 	common.Success(c, records)
 }
 
-// parseTimeRange 解析 URL 查询参数 start/end
-// 未传参数时返回零值（零值 → 服务端使用默认最近 3 天，可命中缓存）
-func parseTimeRange(c *gin.Context) (start, end time.Time) {
+// parseTimeRange 解析 URL 查询参数 start/end。
+// 未传参数时返回零值（零值 → 服务端使用默认最近 3 天，可命中缓存）；
+// 传了但解析不了时报错，不静默降级成"默认 3 天"（调用方会以为查的是自己的窗口）。
+func parseTimeRange(c *gin.Context) (start, end time.Time, err error) {
 	if s := c.Query("start"); s != "" {
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			start = t
+		t, perr := time.Parse(time.RFC3339, s)
+		if perr != nil {
+			return start, end, fmt.Errorf("start 时间格式无效，需 RFC3339（例 2025-01-01T00:00:00Z）")
 		}
+		start = t
 	}
 	if e := c.Query("end"); e != "" {
-		if t, err := time.Parse(time.RFC3339, e); err == nil {
-			end = t
+		t, perr := time.Parse(time.RFC3339, e)
+		if perr != nil {
+			return start, end, fmt.Errorf("end 时间格式无效，需 RFC3339（例 2025-01-01T00:00:00Z）")
 		}
+		end = t
 	}
-	return
+	return start, end, nil
 }

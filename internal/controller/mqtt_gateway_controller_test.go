@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"net/http/httptest"
 	"path/filepath"
@@ -1243,4 +1244,93 @@ func TestMqttGatewayController_UserFrameTopicOwnership(t *testing.T) {
 		"他人设备话题必须拒绝")
 	assert.False(t, gw.userFrameAllowed(conn, buildSubscribePacket(4, "$SYS/#"), 4),
 		"非 iot/ 话题必须拒绝")
+}
+
+// TestLogPublish_TruncatedQoS1FrameNoPanic 回归：QoS1 PUBLISH 帧缺少 packet id
+// （topic 之后直接结束）时 logPublish 曾越界 panic（泵 goroutine 无 recover → 进程退出）。
+func TestLogPublish_TruncatedQoS1FrameNoPanic(t *testing.T) {
+	g := &MqttGatewayController{}
+
+	body := encodeStr("iot/dev1/telemetry")
+	frame := []byte{0x32} // PUBLISH, QoS1
+	frame = append(frame, encodeRemaining(len(body))...)
+	frame = append(frame, body...)
+
+	require.NotPanics(t, func() {
+		g.logPublish(frame, "cid", 4, "dev1")
+	})
+}
+
+// TestParseConnectCredentials_ClientIDLengthOverflow 回归：clientID 长度字段
+// 伪造为 0xFFFF 时曾越界 panic；必须返回 ok=false 而不是崩溃。
+func TestParseConnectCredentials_ClientIDLengthOverflow(t *testing.T) {
+	pkt := buildConnectPacket(4, "dev-001", "", "")
+	// fixed header(2) + variable header(10) = clientID 长度字段起始位置
+	const cidLenPos = 12
+	require.Greater(t, len(pkt), cidLenPos+1)
+	binary.BigEndian.PutUint16(pkt[cidLenPos:cidLenPos+2], 0xffff)
+
+	require.NotPanics(t, func() {
+		_, _, _, _, _, ok := parseConnectCredentials(pkt)
+		assert.False(t, ok, "长度越界的 CONNECT 必须解析失败")
+	})
+}
+
+// TestIotFrameAllowed_DeniedNotCachedAndCacheBounded 回归：拒绝结果不得写入
+// conn.acl（随机 deviceId 会撑爆内存并放大 DB 查询），缓存总量必须有上限。
+func TestIotFrameAllowed_DeniedNotCachedAndCacheBounded(t *testing.T) {
+	g := &MqttGatewayController{}
+
+	t.Run("denied not cached", func(t *testing.T) {
+		conn := &mqttConn{acl: map[string]bool{}}
+		calls := 0
+		allowed := func(string) bool {
+			calls++
+			return false
+		}
+		for range 100 {
+			assert.False(t, g.iotFrameAllowed(conn, buildPublishPacket("iot/randombot/x", nil), 4, allowed))
+		}
+		assert.Empty(t, conn.acl, "拒绝结果不得进入缓存")
+		assert.Equal(t, 100, calls, "拒绝结果不得阻止后续重新判定")
+	})
+
+	t.Run("allowed cache bounded", func(t *testing.T) {
+		conn := &mqttConn{acl: map[string]bool{}}
+		allowed := func(string) bool { return true }
+		for i := range maxConnACLCacheEntries + 50 {
+			topic := fmt.Sprintf("iot/dev%d/x", i)
+			assert.True(t, g.iotFrameAllowed(conn, buildPublishPacket(topic, nil), 4, allowed))
+		}
+		assert.Len(t, conn.acl, maxConnACLCacheEntries, "归属缓存必须有上限")
+	})
+}
+
+// TestMqttGatewayController_RejectsOversizedConnect 回归：未鉴权连接声明超大
+// remaining length 或持续分片发送时，CONNECT 累积必须有上限并关闭连接。
+func TestMqttGatewayController_RejectsOversizedConnect(t *testing.T) {
+	oldCfg := config.Cfg
+	t.Cleanup(func() { config.Cfg = oldCfg })
+	config.Cfg = &config.Config{}
+
+	gin.SetMode(gin.TestMode)
+	gw := NewMqttGatewayController(nil, nil, nil, nil, nil)
+	e := gin.New()
+	e.GET("/api/ws/mqtt/broker", gw.HandleWebSocket)
+	ts := httptest.NewServer(e)
+	defer ts.Close()
+
+	wsURL := "ws" + ts.URL[len("http"):] + "/api/ws/mqtt/broker"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer ws.Close()
+
+	frame := []byte{0x10} // CONNECT
+	frame = append(frame, encodeRemaining(maxConnectPacketBytes+1)...)
+	frame = append(frame, make([]byte, 1024)...)
+	require.NoError(t, ws.WriteMessage(websocket.BinaryMessage, frame))
+
+	_ = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, err = ws.ReadMessage()
+	assert.Error(t, err, "超大 CONNECT 应被拒绝并关闭连接")
 }

@@ -65,13 +65,14 @@ import (
 //
 // 鉴权失败时回 MQTT 标准 CONNACK not authorized(0x05)，而不是 HTTP 拒绝。
 type MqttGatewayController struct {
-	brokerAddr  string
-	dialTimeout time.Duration
-	msgRepo     *repository.MessageLogRepo
-	reportSvc   *service.DeviceReportService // 设备数据上报服务（onPublish 入库用）
-	configSvc   *service.DeviceConfigService // 设备配置服务（config/report 回执用）
-	deviceSvc   *service.DeviceService       // 设备服务（订阅上线 / 断连离线状态更新用）
-	cache       *cache.RedisCache            // MQTT 消息历史缓存（可为 nil）
+	brokerAddr     string
+	dialTimeout    time.Duration
+	msgRepo        *repository.MessageLogRepo
+	reportSvc      *service.DeviceReportService // 设备数据上报服务（onPublish 入库用）
+	configSvc      *service.DeviceConfigService // 设备配置服务（config/report 回执用）
+	configReportCh chan configReportJob         // 配置回执有界队列（固定 worker 消费）
+	deviceSvc      *service.DeviceService       // 设备服务（订阅上线 / 断连离线状态更新用）
+	cache          *cache.RedisCache            // MQTT 消息历史缓存（可为 nil）
 
 	// 设备Token注册表：框架鉴权通过后记录 deviceID → token，
 	// 供 onPublish 上报时使用（与 HTTP 上报共用 Sa-Token 体系）。
@@ -128,6 +129,21 @@ type mqttConn struct {
 // connectReadTimeout 等待设备拼出完整 CONNECT 包的最长时限（防无效连接占住协程）
 const connectReadTimeout = 30 * time.Second
 
+// maxConnectPacketBytes CONNECT 阶段允许累积的最大字节数。
+// 未鉴权连接可声明超大 remaining length 并持续发送；没有上限时 connectBytes
+// 会在鉴权前无界增长，多连接即可打爆内存。CONNECT 包正常远小于 64KiB。
+const maxConnectPacketBytes = 64 << 10
+
+// maxConnACLCacheEntries 每连接话题归属缓存上限。
+// 只缓存允许结果（随机 deviceId 不会进入），上限用于兜底合法但超大的设备集合。
+const maxConnACLCacheEntries = 256
+
+// 配置回执消费：固定单 worker + 有界队列，避免每条消息起 goroutine 在 DB 变慢时堆积。
+const (
+	configReportChSize  = 128
+	configReportTimeout = 10 * time.Second
+)
+
 // NewMqttGatewayController 创建 MQTT 桥接网关控制器
 // reportSvc 可为 nil（此时 onPublish 只记日志不入库）；cache 可为 nil（不记录消息历史）；
 // configSvc 可为 nil（此时 iot/{id}/config/report 回执不处理）；
@@ -160,11 +176,17 @@ type reportJob struct {
 	dto      entity.DeviceStatusDTO
 }
 
+// configReportJob 一条待入库的配置回执（由 handleConfigReport 生产，configReportWorker 消费）
+type configReportJob struct {
+	deviceID string
+	report   entity.DeviceConfigReport
+}
+
 // startWriters 启动有限的落库 worker；队列满时消息日志丢弃并告警，遥测回压不静默丢。
 func (g *MqttGatewayController) startWriters() {
 	if g.msgRepo != nil {
 		g.logCh = make(chan *ent.MessageLog, 1024)
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			go func() {
 				for m := range g.logCh {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -178,9 +200,30 @@ func (g *MqttGatewayController) startWriters() {
 	}
 	if g.reportSvc != nil {
 		g.ingestCh = make(chan reportJob, 1024)
-		for i := 0; i < 4; i++ {
+		for range 4 {
 			go g.reportWorker()
 		}
+	}
+	if g.configSvc != nil {
+		g.configReportCh = make(chan configReportJob, configReportChSize)
+		go g.configReportWorker()
+	}
+}
+
+// configReportWorker 固定 worker 消费配置回执：每条消息起 goroutine 会在 DB 变慢时
+// 无界堆积（goroutine + 连接），这里与遥测入库一样用有界队列约束并发。
+// 队列满时丢弃并告警：设备会周期性重发 config/report，丢弃不回压帧转发。
+func (g *MqttGatewayController) configReportWorker() {
+	for job := range g.configReportCh {
+		ctx, cancel := context.WithTimeout(context.Background(), configReportTimeout)
+		err := g.configSvc.Report(ctx, job.deviceID, job.report)
+		cancel()
+		if err != nil {
+			zap.S().Warnf("[MQTT网关] 配置回执入库失败 [device=%s version=%d]: %v",
+				job.deviceID, job.report.Version, err)
+			continue
+		}
+		zap.S().Debugf("[MQTT网关] 配置回执已记录 [device=%s version=%d]", job.deviceID, job.report.Version)
 	}
 }
 
@@ -351,14 +394,11 @@ func (c *mqttConn) close() {
 //   - 结果夹在 [15s, 30min]，防设备端病态 keepalive 值
 func (g *MqttGatewayController) computeIdleTimeout(keepAlive uint16) time.Duration {
 	if keepAlive > 0 {
-		t := time.Duration(keepAlive) * 1500 * time.Millisecond // = keepalive × 1.5
-		if t < 15*time.Second {
-			t = 15 * time.Second
-		}
-		if t > 30*time.Minute {
-			t = 30 * time.Minute
-		}
-		return t
+		// keepalive × 1.5，夹在 [15s, 30min]
+		return min(
+			max(time.Duration(keepAlive)*1500*time.Millisecond, 15*time.Second),
+			30*time.Minute,
+		)
 	}
 	if g.idleTimeout > 0 {
 		return g.idleTimeout
@@ -398,9 +438,21 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 			continue
 		}
 		connectBytes = append(connectBytes, data...)
-		if total, ok := mqttPacketTotalLength(connectBytes); ok && len(connectBytes) >= total {
-			connectBytes = connectBytes[:total]
-			break
+		if total, ok := mqttPacketTotalLength(connectBytes); ok {
+			// 声明长度本身超限：不等到收满再判断，直接拒绝。
+			if total > maxConnectPacketBytes {
+				zap.S().Warnf("[MQTT网关] CONNECT 声明长度 %d 超过上限 %d，拒绝连接", total, maxConnectPacketBytes)
+				return
+			}
+			if len(connectBytes) >= total {
+				connectBytes = connectBytes[:total]
+				break
+			}
+		}
+		// 包头不完整（或分片持续到达）时也要限制累积量，否则未鉴权连接可无界占内存。
+		if len(connectBytes) > maxConnectPacketBytes {
+			zap.S().Warnf("[MQTT网关] CONNECT 累积 %d 字节超过上限 %d，拒绝连接", len(connectBytes), maxConnectPacketBytes)
+			return
 		}
 	}
 	_ = ws.SetReadDeadline(time.Time{})
@@ -527,13 +579,22 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 	// 超过 1.5×keepalive 无任何帧 → 判定设备失联，强制关闭双端 →
 	// unregisterConn 立即置 OFFLINE（不等离线同步器周期扫描）。
 	go func() {
-		defer func() { done <- struct{}{} }()
+		// 帧解析作用于不可信输入：任何遗漏的边界检查都不应以 panic 杀死整个进程
+		// （gin Recovery 只覆盖 HTTP handler goroutine，覆盖不到这里）。
+		defer func() {
+			if r := recover(); r != nil {
+				zap.S().Errorf("[MQTT网关] ws→tcp 泵 panic，关闭连接 [device=%s]: %v", conn.deviceID, r)
+				conn.close()
+			}
+			done <- struct{}{}
+		}()
 		var buf []byte
 		for {
 			_ = ws.SetReadDeadline(time.Now().Add(conn.timeout))
 			mt, data, err := ws.ReadMessage()
 			if err != nil {
-				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				var ne net.Error
+				if errors.As(err, &ne) && ne.Timeout() {
 					zap.S().Warnf("[MQTT网关] 设备 %s 空闲超时（%.0fs 无任何 MQTT 帧），强制下线",
 						conn.deviceID, conn.timeout.Seconds())
 				}
@@ -626,6 +687,12 @@ func (g *MqttGatewayController) logPublish(frame []byte, clientID string, protoc
 	pos += topicLen
 
 	if qos > 0 {
+		// QoS>0 的 PUBLISH 在 topic 之后还有 2 字节 packet id。
+		// 畸形帧可能在这里截断；不检查会 slice out of range（该解析运行在
+		// 泵 goroutine，panic 会直接打崩进程）。
+		if pos+2 > len(frame) {
+			return
+		}
 		pos += 2
 	}
 
@@ -810,14 +877,13 @@ func (g *MqttGatewayController) handleConfigReport(connDeviceID, deviceID string
 		return
 	}
 
-	// 异步入库（不阻塞帧转发），与 HTTP 回执共用 DeviceConfigService.Report（status=acked）
-	go func() {
-		if err := g.configSvc.Report(context.Background(), deviceID, rep); err != nil {
-			zap.S().Warnf("[MQTT网关] 配置回执入库失败 [device=%s version=%d]: %v", deviceID, rep.Version, err)
-			return
-		}
-		zap.S().Debugf("[MQTT网关] 配置回执已记录 [device=%s version=%d]", deviceID, rep.Version)
-	}()
+	// 异步入有界队列（不阻塞帧转发），由 configReportWorker 串行入库；
+	// 与 HTTP 回执共用 DeviceConfigService.Report（status=acked）。
+	select {
+	case g.configReportCh <- configReportJob{deviceID: deviceID, report: rep}:
+	default:
+		zap.S().Warnf("[MQTT网关] 配置回执队列已满，丢弃 [device=%s version=%d]", deviceID, rep.Version)
+	}
 }
 
 // onSubscribe 拦截设备 SUBSCRIBE 帧：设备订阅自身配置/命令主题（如 iot/{deviceId}/config）
@@ -991,7 +1057,11 @@ func (g *MqttGatewayController) iotFrameAllowed(conn *mqttConn, frame []byte, pr
 		allowedNow, hit := conn.acl[deviceID]
 		if !hit {
 			allowedNow = allowed(deviceID)
-			conn.acl[deviceID] = allowedNow
+			// 只缓存允许结果：拒绝结果（尤其随机伪 deviceId）缓存下来毫无价值，
+			// 却让攻击者用随机话题把 conn.acl 撑成无界内存，并反复触发 DB 查询。
+			if allowedNow && conn.acl != nil && len(conn.acl) < maxConnACLCacheEntries {
+				conn.acl[deviceID] = true
+			}
 		}
 		if !allowedNow {
 			return false
@@ -1056,7 +1126,7 @@ func buildConnackReject(protocolLevel byte) []byte {
 // 从 buf[start] 开始，返回 (value, nextPos, ok)；最多 4 字节，越界/超长返回 ok=false。
 func mqttVarint(buf []byte, start int) (int, int, bool) {
 	value, mul, pos := 0, 1, start
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		if pos >= len(buf) {
 			return 0, pos, false
 		}
@@ -1121,6 +1191,10 @@ func parseConnectCredentials(packet []byte) (clientID, username, password string
 		return "", "", "", 0, 0, false
 	}
 	cidLen := int(binary.BigEndian.Uint16(packet[pos : pos+2]))
+	// clientID 长度字段由对端控制：必须校验它落在包内，否则伪造 0xFFFF 即越界 panic。
+	if pos+2+cidLen > len(packet) {
+		return "", "", "", 0, 0, false
+	}
 	clientID = string(packet[pos+2 : pos+2+cidLen])
 	pos += 2 + cidLen
 
@@ -1199,7 +1273,7 @@ func (fr *mqttFrameReader) ReadFrame() ([]byte, error) {
 	header := []byte{first}
 	multiplier := 1
 	remaining := 0
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		b, err := fr.r.ReadByte()
 		if err != nil {
 			return nil, err
