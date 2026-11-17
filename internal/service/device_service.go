@@ -88,7 +88,7 @@ func (s *DeviceService) Register(ctx context.Context, ownerID uint, req DevicePa
 	now := time.Now()
 
 	const maxIDAttempts = 10
-	for attempt := 0; attempt < maxIDAttempts; attempt++ {
+	for range maxIDAttempts {
 		deviceID = util.GenerateShortDeviceID()
 		exist, err := s.repo.GetByDeviceID(ctx, deviceID)
 		if err != nil && !ent.IsNotFound(err) {
@@ -238,7 +238,37 @@ func (s *DeviceService) ListByOwnerID(ctx context.Context, ownerID uint) ([]*ent
 	if err != nil {
 		return nil, err
 	}
+	s.overlayRuntimeStatus(ctx, devices)
 	return devices, nil
+}
+
+// overlayRuntimeStatus 用 Redis 状态 Hash 覆盖列表里的运行时字段。
+//
+// 列表缓存存的是 PostgreSQL 快照（上报路径防抖 5s 才落库，列表缓存又是 2 分钟），
+// 不覆盖的话设备上下线要在列表页最长滞后 2 分钟才变色；Hash 才是运行时状态的权威来源。
+func (s *DeviceService) overlayRuntimeStatus(ctx context.Context, devices []*ent.Device) {
+	if len(devices) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(devices))
+	for _, d := range devices {
+		ids = append(ids, d.ID)
+	}
+	statuses, err := s.cache.GetCachedDeviceStatusBatch(ctx, ids)
+	if err != nil {
+		zap.L().Warn("[Device] 批量读取设备状态缓存失败，列表状态以 PG 为准", zap.Error(err))
+		return
+	}
+	for _, d := range devices {
+		entry, ok := statuses[d.ID]
+		if !ok || entry.Status == "" {
+			continue
+		}
+		d.Status = entry.Status
+		if entry.LastActiveTime > 0 {
+			d.LastActiveTime = time.UnixMilli(entry.LastActiveTime)
+		}
+	}
 }
 
 // Delete 删除设备（Write-Invalidate：删DB后同步失效所有相关缓存）

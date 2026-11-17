@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +67,9 @@ const (
 	PrefixActuatorDefs = "cache:def_actuator:" // 执行器定义列表（物模型）
 
 	PrefixSensorHistory = "cache:sensor_history:" // 传感器历史曲线（时序查询，Cache-Aside）
+
+	// CmdQueuePrefix 下行命令队列（由 DownlinkService 读写，删设备时需清理）
+	CmdQueuePrefix = "cmd:queue:"
 )
 
 // ============================================================
@@ -92,6 +96,29 @@ const (
 	// 却能把 InfluxDB 查询量降 1~2 个数量级（30s → 120s 再降 4 倍）。
 	TTLSensorHistory      = 120 * time.Second // L2（3 天趋势图对 2 分钟延迟无感知）
 	TTLSensorHistoryLocal = 15 * time.Second  // L1（须 < L2）
+
+	// TTLDeviceStatusLocal 设备状态 L1 TTL。状态是上下线抖动最敏感的数据，
+	// 取 5s 让跨实例的短暂不一致（状态写不广播失效）停在秒级。
+	TTLDeviceStatusLocal = 5 * time.Second
+
+	// sensorHistoryKeyBucket 历史查询缓存键的时间粒度。
+	// 用 API 原始时间戳（秒）做键会让"滚动窗口"（每次请求 start/end 都变）
+	// 命中率为 0——而滚动窗口正是历史曲线的典型用法。按分钟取整后同一分钟
+	// 内的窗口共用一份缓存，代价是最多落后 1 个桶（叠加 L2 TTL 后仍无感知）。
+	sensorHistoryKeyBucket = time.Minute
+
+	// staleLocalTTL 进程内"上一次成功值"的保留时长。Redis 故障时用它顶上，
+	// 避免每次缓存 miss 都回源 PostgreSQL / InfluxDB（打穿下游）。
+	// 与 L1 同量级（60s）：兜底值无法接收跨实例失效通知，保留太久会让删除/更新
+	// 在 Redis 故障期间对其他实例不可见（曾设 30 分钟，会把可见性放大到分钟级）。
+	staleLocalTTL = 60 * time.Second
+
+	// loaderTimeout singleflight 内 loader 的超时上限。
+	// loader 用的是剥离取消信号的 ctx（首个请求取消不应连累其他等待者），
+	// 因此必须自带超时，否则一次挂死的回源会永久占住该 key。
+	// 不得短于最慢后端自己的超时：历史查询走 InfluxDB，其 QueryTimeout 默认 2 分钟，
+	// 取短了会把"慢但能出"的重查询变成 500。
+	loaderTimeout = 2 * time.Minute
 )
 
 // ============================================================
@@ -200,19 +227,25 @@ func (c *RedisCache) GetOrLoad(ctx context.Context, key string, dest any, redisT
 		if localTTL > 0 {
 			c.local.setBytes(key, rawData, localTTL)
 		}
+		c.local.setStale(key, rawData)
 		return nil
 	}
 
-	// Redis 连接错误：降级到 loader（容错设计，Redis 挂不阻塞业务）
-	if err != redis.Nil {
-		zap.L().Warn("[RedisCache] L2 读取失败，降级到 loader",
+	if !errors.Is(err, redis.Nil) {
+		// Redis 故障（连接/超时）：先用进程内"上一次成功值"兜底。
+		// 直接降级到 loader 会让 Redis 挂掉的瞬间所有缓存 miss 都回源，
+		// 把 PostgreSQL / InfluxDB 一起打挂——这正是缓存要防的事。
+		zap.L().Warn("[RedisCache] L2 读取失败，尝试进程内兜底值",
 			zap.String("key", key), zap.Error(err))
-	}
-
-	// 2.5 检查 L2 负缓存（防穿透：redis.Nil 时优先查负缓存）
-	if err == redis.Nil {
-		negKey := negCacheKey(key)
-		negExists, negErr := c.client.Exists(ctx, negKey).Result()
+		if data, ok := c.local.getStale(key); ok {
+			if uerr := json.Unmarshal(data, dest); uerr == nil {
+				return nil
+			}
+		}
+		zap.L().Warn("[RedisCache] 无兜底值，降级到 loader", zap.String("key", key))
+	} else {
+		// 2.5 检查 L2 负缓存（防穿透：redis.Nil 时优先查负缓存）
+		negExists, negErr := c.client.Exists(ctx, negCacheKey(key)).Result()
 		if negErr == nil && negExists > 0 {
 			// L2 负缓存命中
 			if localTTL > 0 {
@@ -224,18 +257,26 @@ func (c *RedisCache) GetOrLoad(ctx context.Context, key string, dest any, redisT
 
 	// 3. singleflight 防击穿：并发 miss 只触发一次 loader
 	v, err, _ := c.sg.Do(key, func() (any, error) {
+		// loader 跑在剥离了取消信号的 ctx 上：首个请求被客户端取消（如前端切页）
+		// 时，同一 key 的其他等待者不应一起失败；超时由 loaderTimeout 自行兜底。
+		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), loaderTimeout)
+		defer cancel()
+
 		// Double-check L2（可能其他 goroutine 已加载）
-		data, getErr := c.client.Get(ctx, key).Bytes()
+		data, getErr := c.client.Get(loadCtx, key).Bytes()
 		if getErr == nil {
 			return data, nil // 返回原始 bytes，外层负责 unmarshal
 		}
 
 		// 调用 loader 从 DB 加载
-		result, loadErr := loader(ctx)
+		result, loadErr := loader(loadCtx)
 		if loadErr != nil {
 			// 负缓存：将"不存在"的结果缓存到 L1 + L2
 			if errors.Is(loadErr, redis.Nil) || isNotFoundErr(loadErr) {
-				c.client.Set(ctx, negCacheKey(key), "1", jitterTTL(TTLNegCache))
+				c.client.Set(loadCtx, negCacheKey(key), "1", jitterTTL(TTLNegCache))
+				// 清除旧值（Delete 会连带清除 stale 兜底副本）：否则下一次 Redis
+				// 故障时 stale 分支会把已删除的数据重新端上来。
+				c.local.Delete(key)
 				if localTTL > 0 {
 					c.local.setNeg(key, minDuration(localTTL, TTLNegCache))
 				}
@@ -248,7 +289,7 @@ func (c *RedisCache) GetOrLoad(ctx context.Context, key string, dest any, redisT
 		if marshalErr != nil {
 			return nil, fmt.Errorf("序列化加载结果失败: %w", marshalErr)
 		}
-		c.client.Set(ctx, key, marshalData, jitterTTL(redisTTL))
+		c.client.Set(loadCtx, key, marshalData, jitterTTL(redisTTL))
 
 		return marshalData, nil // 返回原始 bytes
 	})
@@ -272,6 +313,7 @@ func (c *RedisCache) GetOrLoad(ctx context.Context, key string, dest any, redisT
 	if localTTL > 0 {
 		c.local.setBytes(key, resultBytes, localTTL)
 	}
+	c.local.setStale(key, resultBytes)
 
 	return nil
 }
@@ -305,12 +347,14 @@ func (c *RedisCache) CacheDevice(ctx context.Context, deviceID string, device an
 	return c.PublishInvalidate(ctx, key)
 }
 
-// evictKey 失效缓存键：按需清除本实例 L1、删除 L2、广播跨实例失效
+// evictKey 失效缓存键：按需清除本实例 L1、删除 L2（含负缓存）、广播跨实例失效
 func (c *RedisCache) evictKey(ctx context.Context, key string, evictLocal bool) error {
 	if evictLocal {
 		c.local.Delete(key)
 	}
-	if err := c.Delete(ctx, key); err != nil {
+	// 一并清除负缓存：只删数据键时，紧接着的读取会命中上一次的"不存在"标记，
+	// 在 TTLNegCache 内持续返回 404
+	if err := c.Delete(ctx, key, negCacheKey(key)); err != nil {
 		return err
 	}
 	return c.PublishInvalidate(ctx, key)
@@ -327,14 +371,22 @@ func (c *RedisCache) EvictDeviceCache(ctx context.Context, deviceID string) erro
 
 // CacheDeviceStatus 更新设备运行时状态（Write-Through）到 L2 Redis Hash
 // （status + lastActiveTime，避免完整 Device JSON 序列化）
+// lastActiveTime 传 0 表示"未知"，此时不覆盖已存的值（见 GetDeviceStatus 的 >0 判断）。
 func (c *RedisCache) CacheDeviceStatus(ctx context.Context, deviceID string, status string, lastActiveTime int64) error {
 	key := PrefixDeviceStatus + deviceID
-	// 写穿透：先失效 L1 读回填缓存（GetCachedDeviceStatus 会填充 5s TTL 的 L1）
-	// 否则写后 5s 内读取仍会命中旧状态，导致上线/离线切换被吞掉
+	// 写穿透：先失效 L1 读回填缓存（GetCachedDeviceStatus 会填充 TTLDeviceStatusLocal 的 L1）
+	// 否则写后几秒内读取仍会命中旧状态，导致上线/离线切换被吞掉
 	c.local.Delete(key)
 	pipe := c.client.Pipeline()
-	pipe.HSet(ctx, key, "status", status, "lastActiveTime", lastActiveTime)
+	if lastActiveTime > 0 {
+		pipe.HSet(ctx, key, "status", status, "lastActiveTime", lastActiveTime)
+	} else {
+		// 契约：0 表示"未知"，只更新状态，不覆盖已存的 lastActiveTime。
+		pipe.HSet(ctx, key, "status", status)
+	}
 	pipe.Expire(ctx, key, jitterTTL(TTLDeviceStatus))
+	// 跨实例失效：其他实例的 L1 也应立即失效，否则多实例下状态最长脏一个 L1 TTL
+	pipe.Publish(ctx, invalidationChannel, key)
 	_, err := pipe.Exec(ctx)
 	return err
 }
@@ -345,7 +397,7 @@ func (c *RedisCache) GetCachedDeviceStatus(ctx context.Context, deviceID string)
 
 	// L1
 	if data, found, _ := c.local.getBytes(key); found {
-		var entry deviceStatusEntry
+		var entry DeviceStatusEntry
 		if json.Unmarshal(data, &entry) == nil {
 			return entry.Status, entry.LastActiveTime, nil
 		}
@@ -356,30 +408,82 @@ func (c *RedisCache) GetCachedDeviceStatus(ctx context.Context, deviceID string)
 	if err != nil {
 		return "", 0, err
 	}
-	if results[0] != nil {
-		status = results[0].(string)
-	}
-	if results[1] != nil {
-		switch v := results[1].(type) {
-		case string:
-			fmt.Sscanf(v, "%d", &lastActiveTime)
-		case int64:
-			lastActiveTime = v
-		}
+	if len(results) >= 2 {
+		status = hashString(results[0])
+		lastActiveTime = HashInt64(results[1])
 	}
 
 	// 回填 L1（存储 JSON bytes）
 	if status != "" {
-		entryBytes, _ := json.Marshal(deviceStatusEntry{Status: status, LastActiveTime: lastActiveTime})
-		c.local.setBytes(key, entryBytes, 5*time.Second)
+		entryBytes, _ := json.Marshal(DeviceStatusEntry{Status: status, LastActiveTime: lastActiveTime})
+		c.local.setBytes(key, entryBytes, TTLDeviceStatusLocal)
 	}
 
 	return
 }
 
-type deviceStatusEntry struct {
+// GetCachedDeviceStatusBatch 批量读取设备运行时状态（1 次 pipeline 往返）。
+//
+// 列表接口专用：列表缓存存的是 PostgreSQL 快照（上报路径防抖 5s + 列表缓存 2min），
+// 不叠加 Hash 覆盖的话，设备上下线要在列表页最长滞后 2 分钟才变色。
+// 返回的 map 只包含 Hash 里确实存在的设备，调用方据此逐个覆盖。
+func (c *RedisCache) GetCachedDeviceStatusBatch(ctx context.Context, deviceIDs []string) (map[string]DeviceStatusEntry, error) {
+	out := make(map[string]DeviceStatusEntry, len(deviceIDs))
+	if len(deviceIDs) == 0 {
+		return out, nil
+	}
+
+	pipe := c.client.Pipeline()
+	cmds := make([]*redis.SliceCmd, len(deviceIDs))
+	for i, id := range deviceIDs {
+		cmds[i] = pipe.HMGet(ctx, PrefixDeviceStatus+id, "status", "lastActiveTime")
+	}
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return out, err
+	}
+
+	for i, cmd := range cmds {
+		vals, err := cmd.Result()
+		if err != nil || len(vals) < 2 {
+			continue
+		}
+		entry := DeviceStatusEntry{Status: hashString(vals[0]), LastActiveTime: HashInt64(vals[1])}
+		if entry.Status != "" {
+			out[deviceIDs[i]] = entry
+		}
+	}
+	return out, nil
+}
+
+// DeviceStatusEntry 设备运行时状态快照（Redis Hash 形态）
+type DeviceStatusEntry struct {
 	Status         string `json:"status"`
 	LastActiveTime int64  `json:"lastActiveTime"`
+}
+
+// hashString 读取 Hash 字段的字符串值（类型异常时返回空串，不 panic）
+func hashString(v any) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case []byte:
+		return string(val)
+	default:
+		return ""
+	}
+}
+
+// HashInt64 读取 Hash 字段的整数值（HSet 写入的 int64 读回为 string）
+func HashInt64(v any) int64 {
+	switch val := v.(type) {
+	case string:
+		n, _ := strconv.ParseInt(val, 10, 64)
+		return n
+	case int64:
+		return val
+	default:
+		return 0
+	}
 }
 
 // EvictDeviceStatusCache 清除设备状态缓存
@@ -434,7 +538,12 @@ func (c *RedisCache) GetCachedSensorHistoryWithLoader(
 	key := fmt.Sprintf("%s%s:%d", PrefixSensorHistory, deviceID, limit)
 	if isDefaultRange {
 		key += ":default"
+	} else if end.Sub(start) >= sensorHistoryKeyBucket {
+		// 宽窗口按桶取整：秒级时间戳会让滚动窗口（每次请求 start/end 都变）
+		// 与"只传 start"的请求命中率恒为 0，历史查询就会全部压到 InfluxDB。
+		key += fmt.Sprintf(":%d:%d", start.Truncate(sensorHistoryKeyBucket).Unix(), end.Truncate(sensorHistoryKeyBucket).Unix())
 	} else {
+		// 窄窗口（<1 个桶）两端会落到同一分钟，取整会让不同窗口互相串数据，必须精确
 		key += fmt.Sprintf(":%d:%d", start.Unix(), end.Unix())
 	}
 	if variant != "" {
@@ -472,24 +581,27 @@ func (c *RedisCache) EvictActuatorDefsCache(ctx context.Context, deviceID string
 }
 
 // EvictDeviceAllCaches 设备删除时清理该设备的所有关联缓存
-// 包括: 下行命令队列、MQTT 消息历史（精确键）
+// 包括: 物模型定义（传感器/执行器）、下行命令队列、MQTT 消息历史（精确键）
+//
+// 注意：SensorHistory 的键带 limit/时间窗后缀（一设备多键），DEL 删不了，
+// 靠 TTL（120s）自愈；设备主体已删，归属校验会先拦住读取。
 func (c *RedisCache) EvictDeviceAllCaches(ctx context.Context, deviceID string) error {
 	var errs []error
 
-	// 1. 下行命令队列
-	if err := c.Delete(ctx, "cmd:queue:"+deviceID); err != nil {
-		errs = append(errs, fmt.Errorf("命令队列: %w", err))
+	// 1. 物模型定义（有 L1 副本，需 evictKey 走跨实例广播）。
+	// 不清理的话，已删设备的 sensors/actuators 与其详情页物模型会继续可读最长 30 分钟。
+	for _, key := range []string{PrefixSensorDefs + deviceID, PrefixActuatorDefs + deviceID} {
+		if err := c.evictKey(ctx, key, true); err != nil {
+			errs = append(errs, fmt.Errorf("物模型定义(%s): %w", key, err))
+		}
 	}
 
-	// 2. MQTT 消息历史
-	if err := c.Delete(ctx, PrefixMQTTMessage+deviceID); err != nil {
-		errs = append(errs, fmt.Errorf("MQTT消息: %w", err))
+	// 2. 仅 L2 的键：下行命令队列 + MQTT 消息历史（一次 DEL 完成）
+	if err := c.Delete(ctx, CmdQueuePrefix+deviceID, PrefixMQTTMessage+deviceID); err != nil {
+		errs = append(errs, fmt.Errorf("命令队列/MQTT消息: %w", err))
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("清理设备缓存: %v", errs)
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // ============================================================
@@ -502,6 +614,14 @@ const BufferDeviceReportsKey = "buffer:device_reports"
 // BufferQueueMaxLen 缓冲队列长度上限（防 InfluxDB 故障时无限增长耗尽内存）
 const BufferQueueMaxLen = 20000
 
+// bufferPushSrc 缓冲队列原子入队：LPUSH + LTRIM。
+// 拆成两条命令时，LTrim 失败会让 List 无限增长（与 MQTT 历史同一个坑）。
+const bufferPushSrc = `
+	redis.call('LPUSH', KEYS[1], ARGV[1])
+	redis.call('LTRIM', KEYS[1], 0, tonumber(ARGV[2]))
+	return 1
+`
+
 // FastReportWrite 一次 Pipeline 完成：更新设备状态 Hash + 缓存传感器数据 + 推入缓冲队列
 // 将多次 Redis 往返合并为 1 次
 // FastReportWrite 上报热路径的一次性 Pipeline 写入。
@@ -510,29 +630,36 @@ const BufferQueueMaxLen = 20000
 // 避免在本函数内重复 json.Marshal —— 上报是最热路径，每次省一次反射序列化。
 func (c *RedisCache) FastReportWrite(ctx context.Context, deviceID string, status string, lastActiveTime int64, sensorJSON []byte, bufferData []byte) error {
 	// 写穿透：先失效 L1 读回填缓存（与 CacheDeviceStatus 一致），
-	// 否则上报置 ONLINE 后 5s 内 GetCachedDeviceStatus 仍读到旧状态
-	c.local.Delete(PrefixDeviceStatus + deviceID)
+	// 否则上报置 ONLINE 后几秒内 GetCachedDeviceStatus 仍读到旧状态
+	statusKey := PrefixDeviceStatus + deviceID
+	c.local.Delete(statusKey)
 
 	pipe := c.client.Pipeline()
 
 	// 1. 更新设备状态 Hash
-	statusKey := PrefixDeviceStatus + deviceID
 	pipe.HSet(ctx, statusKey, "status", status, "lastActiveTime", lastActiveTime)
 	pipe.Expire(ctx, statusKey, jitterTTL(TTLDeviceStatus))
+	// 跨实例失效（同一个 pipeline，不额外增加往返）
+	pipe.Publish(ctx, invalidationChannel, statusKey)
 
-	// 2. 缓存传感器最新数据
+	// 2. 缓存传感器最新数据。空数据（[]/null）不写：
+	// 否则一条不带传感器的状态上报会把上一次的"最新快照"抹成空，设备页数据凭空消失。
 	sensorKey := PrefixSensorRecent + deviceID + ":latest"
-	if len(sensorJSON) == 0 {
-		sensorJSON = []byte("[]")
+	if hasSensorData(sensorJSON) {
+		pipe.Set(ctx, sensorKey, sensorJSON, jitterTTL(TTLSensorRecent))
 	}
-	pipe.Set(ctx, sensorKey, sensorJSON, jitterTTL(TTLSensorRecent))
 
-	// 3. 推入缓冲队列（带 LTrim 上限，防内存耗尽；保留头部最新数据）
-	pipe.LPush(ctx, BufferDeviceReportsKey, bufferData)
-	pipe.LTrim(ctx, BufferDeviceReportsKey, 0, BufferQueueMaxLen-1)
+	// 3. 推入缓冲队列（Lua 原子 LPUSH + LTRIM，防部分失败导致 List 无限增长）
+	pipe.Eval(ctx, bufferPushSrc, []string{BufferDeviceReportsKey}, bufferData, BufferQueueMaxLen-1)
 
 	_, err := pipe.Exec(ctx)
 	return err
+}
+
+// hasSensorData 判断序列化后的传感器快照是否为"有数据"（非 null、非空数组）
+func hasSensorData(sensorJSON []byte) bool {
+	s := strings.TrimSpace(string(sensorJSON))
+	return s != "" && s != "null" && s != "[]"
 }
 
 // ============================================================
@@ -632,6 +759,9 @@ func (c *RedisCache) SubscribeInvalidate(ctx context.Context) {
 
 const localCacheShards = 64
 
+// staleKeyPrefix 进程内兜底副本的键前缀（与业务键共用 LocalCache，不占 Redis 空间）
+const staleKeyPrefix = "stale|"
+
 type localCacheEntry struct {
 	data      []byte    // JSON 原始字节
 	expiresAt time.Time // 过期时间
@@ -656,7 +786,7 @@ func NewLocalCache(defaultTTL time.Duration) *LocalCache {
 		maxSize: 10000 / localCacheShards, // 每个分片的上限
 		stopCh:  make(chan struct{}),
 	}
-	for i := 0; i < localCacheShards; i++ {
+	for i := range localCacheShards {
 		lc.shards[i] = &localCacheShard{
 			items: make(map[string]localCacheEntry),
 		}
@@ -682,10 +812,7 @@ func (lc *LocalCache) getShard(key string) *localCacheShard {
 }
 
 func (lc *LocalCache) cleanupLoop(ttl time.Duration) {
-	interval := ttl
-	if interval < 30*time.Second {
-		interval = 30 * time.Second
-	}
+	interval := max(ttl, 30*time.Second)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -724,26 +851,56 @@ func (lc *LocalCache) getBytes(key string) ([]byte, bool, bool) {
 
 // setBytes 使用指定 TTL 设置原始字节
 func (lc *LocalCache) setBytes(key string, data []byte, ttl time.Duration) {
-	shard := lc.getShard(key)
-	shard.mu.Lock()
-	shard.items[key] = localCacheEntry{
-		data:      data,
-		expiresAt: time.Now().Add(ttl),
-		isNeg:     false,
-	}
-	shard.mu.Unlock()
+	lc.put(key, localCacheEntry{data: data, expiresAt: time.Now().Add(ttl)})
 }
 
 // setNeg 设置负缓存标记
 func (lc *LocalCache) setNeg(key string, ttl time.Duration) {
+	lc.put(key, localCacheEntry{expiresAt: time.Now().Add(ttl), isNeg: true})
+}
+
+// setStale 记录"上一次成功值"，仅在 Redis 故障时用（见 GetOrLoad）
+func (lc *LocalCache) setStale(key string, data []byte) {
+	lc.put(staleKeyPrefix+key, localCacheEntry{data: data, expiresAt: time.Now().Add(staleLocalTTL)})
+}
+
+// getStale 读取"上一次成功值"（不受 L1 短 TTL 限制）
+func (lc *LocalCache) getStale(key string) ([]byte, bool) {
+	data, found, isNeg := lc.getBytes(staleKeyPrefix + key)
+	return data, found && !isNeg
+}
+
+// put 写入分片并执行上限淘汰（所有写入路径共用，否则 maxSize 形同虚设）
+func (lc *LocalCache) put(key string, entry localCacheEntry) {
 	shard := lc.getShard(key)
 	shard.mu.Lock()
-	shard.items[key] = localCacheEntry{
-		data:      nil,
-		expiresAt: time.Now().Add(ttl),
-		isNeg:     true,
+	// 顺手清理过期项，避免只能等清理协程
+	if len(shard.items) >= lc.maxSize {
+		lc.evictLocked(shard, time.Now())
 	}
+	shard.items[key] = entry
 	shard.mu.Unlock()
+}
+
+// evictLocked 先删过期项，再随机淘汰一成（Go map 迭代顺序）；调用方持锁
+func (lc *LocalCache) evictLocked(shard *localCacheShard, now time.Time) {
+	for k, v := range shard.items {
+		if now.After(v.expiresAt) {
+			delete(shard.items, k)
+		}
+	}
+	if len(shard.items) < lc.maxSize {
+		return
+	}
+	evict := max(lc.maxSize/10, 1)
+	count := 0
+	for k := range shard.items {
+		delete(shard.items, k)
+		count++
+		if count >= evict {
+			break
+		}
+	}
 }
 
 // ---- 公共方法（保持 any 接口兼容外部直接调用者） ----
@@ -771,34 +928,19 @@ func (lc *LocalCache) Get(key string) (any, bool) {
 
 // Set 使用默认 TTL 设置
 func (lc *LocalCache) Set(key string, value any) {
-	shard := lc.getShard(key)
-	shard.mu.Lock()
-	// 简单随机淘汰（Go map 迭代顺序）
-	if len(shard.items) >= lc.maxSize {
-		count := 0
-		for k := range shard.items {
-			delete(shard.items, k)
-			count++
-			if count >= lc.maxSize/10 {
-				break
-			}
-		}
-	}
 	data, _ := json.Marshal(value)
-	shard.items[key] = localCacheEntry{
-		data:      data,
-		expiresAt: time.Now().Add(10 * time.Second),
-		isNeg:     false,
-	}
-	shard.mu.Unlock()
+	lc.put(key, localCacheEntry{data: data, expiresAt: time.Now().Add(10 * time.Second)})
 }
 
-// Delete 删除条目
+// Delete 删除条目（连同 Redis 故障兜底副本）
 func (lc *LocalCache) Delete(key string) {
-	shard := lc.getShard(key)
-	shard.mu.Lock()
-	delete(shard.items, key)
-	shard.mu.Unlock()
+	// 两个 key 可能落在不同分片，逐个持锁
+	for _, k := range [2]string{key, staleKeyPrefix + key} {
+		shard := lc.getShard(k)
+		shard.mu.Lock()
+		delete(shard.items, k)
+		shard.mu.Unlock()
+	}
 }
 
 // ============================================================
@@ -846,8 +988,8 @@ func toBytes(v any) ([]byte, error) {
 // 例: cache:device:abc -> cache:neg:device:abc
 func negCacheKey(key string) string {
 	const cachePrefix = "cache:"
-	if strings.HasPrefix(key, cachePrefix) {
-		return PrefixNegCache + strings.TrimPrefix(key, cachePrefix)
+	if after, ok := strings.CutPrefix(key, cachePrefix); ok {
+		return PrefixNegCache + after
 	}
 	return PrefixNegCache + key
 }

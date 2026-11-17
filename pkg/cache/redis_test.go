@@ -18,6 +18,7 @@ package cache
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRedisCacheConstants(t *testing.T) {
@@ -69,7 +71,7 @@ func TestJitterTTL_Range(t *testing.T) {
 	base := 100 * time.Second
 	min := base * 3 / 4 // 75s
 	max := base * 5 / 4 // 125s
-	for i := 0; i < 500; i++ {
+	for range 500 {
 		result := jitterTTL(base)
 		assert.GreaterOrEqual(t, result, min, "jitterTTL too small: %v", result)
 		assert.Less(t, result, max, "jitterTTL too large: %v", result)
@@ -126,7 +128,7 @@ func TestLocalCache_PublicAPI_Compat(t *testing.T) {
 	val2, ok2 := lc.Get("key2")
 	assert.True(t, ok2)
 	// 公共 API 行为：struct → JSON → map
-	m, ok3 := val2.(map[string]interface{})
+	m, ok3 := val2.(map[string]any)
 	assert.True(t, ok3)
 	assert.Equal(t, "test", m["name"])
 }
@@ -281,13 +283,11 @@ func TestRedisCache_GetOrLoad_Singleflight(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	results := make(chan error, 20)
-	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 20 {
+		wg.Go(func() {
 			var out string
 			results <- c.GetOrLoad(ctx, "hot", &out, time.Minute, 0, loader)
-		}()
+		})
 	}
 	wg.Wait()
 	close(results)
@@ -402,7 +402,7 @@ func TestRedisCache_MQTTLuaPush(t *testing.T) {
 	assert.Equal(t, int64(1), n)
 
 	// 超长列表仍被裁剪（上限 500）
-	for i := 0; i < 600; i++ {
+	for i := range 600 {
 		assert.NoError(t, c.LPushMQTTMessage(ctx, "dev1", map[string]any{"i": i}))
 	}
 	n2, err := c.client.LLen(ctx, PrefixMQTTMessage+"dev1").Result()
@@ -476,4 +476,263 @@ func TestRedisCache_DefsCacheRoundtrip(t *testing.T) {
 	var acts2 []string
 	assert.NoError(t, c.GetCachedActuatorDefsWithLoader(ctx, deviceID, &acts2, actLoader))
 	assert.Equal(t, []string{"servo1"}, acts2)
+}
+
+// ---- 缓存缺陷回归测试 ----
+
+// TestRedisCache_SensorHistoryKeyBucket 历史查询按分钟取整入键：
+// 滚动窗口（每次 start/end 都变）必须命中缓存，否则历史接口必定打穿 InfluxDB。
+func TestRedisCache_SensorHistoryKeyBucket(t *testing.T) {
+	_, c, _ := newCacheWithMini(t)
+	ctx := context.Background()
+
+	loadCount := 0
+	loader := func(ctx context.Context) (any, error) {
+		loadCount++
+		return []int{1}, nil
+	}
+	start := time.Unix(1700000000, 0)
+	end := time.Unix(1700003600, 0)
+
+	var out []int
+	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start, end, false, "raw", &out, loader))
+	// 1 秒后的滚动窗口（同一分钟内）→ 命中同一份缓存
+	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start.Add(time.Second), end.Add(time.Second), false, "raw", &out, loader))
+	assert.Equal(t, 1, loadCount)
+
+	// 不同时间窗仍是不同键
+	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start.Add(-time.Hour), end, false, "raw", &out, loader))
+	assert.Equal(t, 2, loadCount)
+
+	// 降采样变体不能与原始点共用缓存
+	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start, end, false, "1h", &out, loader))
+	assert.Equal(t, 3, loadCount)
+
+	// 窄窗口（<1 个桶）必须精确入键：两端取整都会落到同一分钟，
+	// 取整会让两个不同的 30 秒窗口互相串数据（返回窗口外的点）
+	narrowStart := time.Unix(1700010005, 0)
+	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, narrowStart, narrowStart.Add(30*time.Second), false, "raw", &out, loader))
+	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, narrowStart.Add(15*time.Second), narrowStart.Add(45*time.Second), false, "raw", &out, loader))
+	assert.Equal(t, 5, loadCount)
+}
+
+// TestHashInt64 Hash 字段数字解析（HSet 写入的 int64 读回为 string）
+func TestHashInt64(t *testing.T) {
+	tests := []struct {
+		name string
+		val  any
+		want int64
+	}{
+		{"string 数字", "123456", 123456},
+		{"string 负数", "-5", -5},
+		{"string 非数字", "abc", 0},
+		{"string 空", "", 0},
+		{"int64", int64(42), 42},
+		{"float64 不支持", float64(1.5), 0},
+		{"nil", nil, 0},
+		{"uint64 不支持", uint64(7), 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, HashInt64(tt.val))
+		})
+	}
+}
+
+// TestRedisCache_GetOrLoad_StaleFallbackOnRedisDown Redis 故障时用进程内兜底值，
+// 不再回源（否则 Redis 挂掉会把 PostgreSQL / InfluxDB 一起打穿）。
+func TestRedisCache_GetOrLoad_StaleFallbackOnRedisDown(t *testing.T) {
+	rdb := redis.NewClient(&redis.Options{
+		Addr:         "127.0.0.1:1", // 必然连不上
+		DialTimeout:  20 * time.Millisecond,
+		ReadTimeout:  20 * time.Millisecond,
+		WriteTimeout: 20 * time.Millisecond,
+		MaxRetries:   -1,
+	})
+	t.Cleanup(func() { _ = rdb.Close() })
+	c := NewRedisCache(rdb)
+	ctx := context.Background()
+
+	loadCount := 0
+	loader := func(ctx context.Context) (any, error) {
+		loadCount++
+		return "db-value", nil
+	}
+
+	var out string
+	assert.NoError(t, c.GetOrLoad(ctx, "k", &out, time.Minute, time.Millisecond, loader))
+	assert.Equal(t, "db-value", out)
+	assert.Equal(t, 1, loadCount)
+
+	time.Sleep(20 * time.Millisecond) // 让 L1 过期，只剩兜底副本
+
+	var out2 string
+	assert.NoError(t, c.GetOrLoad(ctx, "k", &out2, time.Minute, time.Millisecond, loader))
+	assert.Equal(t, "db-value", out2)
+	assert.Equal(t, 1, loadCount, "Redis 故障时应使用兜底值，不回源")
+}
+
+// TestRedisCache_EvictKey_ClearsNegativeCache 写路径失效必须连带清除负缓存，
+// 否则紧接的读取会命中上一次的"不存在"，在 TTLNegCache 内持续 404。
+func TestRedisCache_EvictKey_ClearsNegativeCache(t *testing.T) {
+	_, c, _ := newCacheWithMini(t)
+	ctx := context.Background()
+
+	var out map[string]string
+	err := c.GetOrLoad(ctx, PrefixDevice+"ghost", &out, time.Minute, 0, func(ctx context.Context) (any, error) {
+		return nil, redis.Nil
+	})
+	assert.ErrorIs(t, err, redis.Nil)
+	assert.Equal(t, int64(1), c.client.Exists(ctx, negCacheKey(PrefixDevice+"ghost")).Val())
+
+	assert.NoError(t, c.EvictDeviceCache(ctx, "ghost"))
+	assert.Equal(t, int64(0), c.client.Exists(ctx, negCacheKey(PrefixDevice+"ghost")).Val())
+}
+
+// TestRedisCache_CacheDeviceStatus_PublishesInvalidate 状态写入必须广播跨实例失效
+func TestRedisCache_CacheDeviceStatus_PublishesInvalidate(t *testing.T) {
+	_, c, _ := newCacheWithMini(t)
+	ctx := context.Background()
+
+	sub := c.client.Subscribe(ctx, invalidationChannel)
+	defer func() { _ = sub.Close() }()
+	// 必须等 SUBSCRIBE 被服务端确认再发布：PUBLISH 是发射后不管的，
+	// 早发的消息会直接丢掉（固定 sleep 在慢机器上会偶发失败）
+	if _, err := sub.Receive(ctx); err != nil {
+		t.Fatalf("订阅建立失败: %v", err)
+	}
+	ch := sub.Channel()
+
+	assert.NoError(t, c.CacheDeviceStatus(ctx, "d-pub", "OFFLINE", 0))
+	select {
+	case msg := <-ch:
+		assert.Equal(t, PrefixDeviceStatus+"d-pub", msg.Payload)
+	case <-time.After(time.Second):
+		t.Fatal("未收到跨实例失效通知")
+	}
+}
+
+// TestRedisCache_EvictDeviceAllCaches_ClearsDefs 删设备要连带清掉物模型定义缓存
+func TestRedisCache_EvictDeviceAllCaches_ClearsDefs(t *testing.T) {
+	_, c, _ := newCacheWithMini(t)
+	ctx := context.Background()
+
+	c.client.Set(ctx, PrefixSensorDefs+"d1", "[]", time.Minute)
+	c.client.Set(ctx, PrefixActuatorDefs+"d1", "[]", time.Minute)
+
+	assert.NoError(t, c.EvictDeviceAllCaches(ctx, "d1"))
+	assert.Equal(t, int64(0), c.client.Exists(ctx, PrefixSensorDefs+"d1").Val())
+	assert.Equal(t, int64(0), c.client.Exists(ctx, PrefixActuatorDefs+"d1").Val())
+}
+
+// TestRedisCache_FastReportWrite_KeepsSensorSnapshotWhenEmpty
+// 不带传感器的状态上报不应把上一次的"最新快照"抹成空
+func TestRedisCache_FastReportWrite_KeepsSensorSnapshotWhenEmpty(t *testing.T) {
+	_, c, _ := newCacheWithMini(t)
+	ctx := context.Background()
+
+	assert.NoError(t, c.FastReportWrite(ctx, "d1", "ONLINE", 1, []byte(`[{"name":"t","value":1}]`), []byte(`{}`)))
+	var sensors []map[string]any
+	assert.NoError(t, c.GetCachedSensorRecent(ctx, "d1", &sensors))
+	assert.Len(t, sensors, 1)
+
+	assert.NoError(t, c.FastReportWrite(ctx, "d1", "ONLINE", 2, []byte(`[]`), []byte(`{}`)))
+	assert.NoError(t, c.GetCachedSensorRecent(ctx, "d1", &sensors))
+	assert.Len(t, sensors, 1)
+}
+
+// TestRedisCache_GetCachedDeviceStatusBatch 批量状态读取（列表页状态覆盖用）
+func TestRedisCache_GetCachedDeviceStatusBatch(t *testing.T) {
+	_, c, _ := newCacheWithMini(t)
+	ctx := context.Background()
+
+	assert.NoError(t, c.CacheDeviceStatus(ctx, "d1", "ONLINE", 1700000000000))
+	assert.NoError(t, c.CacheDeviceStatus(ctx, "d2", "OFFLINE", 0))
+
+	got, err := c.GetCachedDeviceStatusBatch(ctx, []string{"d1", "d2", "missing"})
+	assert.NoError(t, err)
+	assert.Len(t, got, 2)
+	assert.Equal(t, "ONLINE", got["d1"].Status)
+	assert.Equal(t, int64(1700000000000), got["d1"].LastActiveTime)
+	assert.Equal(t, "OFFLINE", got["d2"].Status)
+	assert.NotContains(t, got, "missing")
+}
+
+// TestLocalCache_SizeCap L1 上限对所有写入路径生效（含负缓存/兜底副本）
+func TestLocalCache_SizeCap(t *testing.T) {
+	lc := NewLocalCache(time.Second)
+	defer lc.Close()
+
+	for i := range 5000 {
+		key := "k" + strconv.Itoa(i)
+		lc.setBytes(key, []byte(`1`), time.Minute)
+		lc.setNeg("neg"+strconv.Itoa(i), time.Minute)
+	}
+
+	total := 0
+	for _, shard := range lc.shards {
+		shard.mu.RLock()
+		total += len(shard.items)
+		shard.mu.RUnlock()
+	}
+	assert.LessOrEqual(t, total, localCacheShards*lc.maxSize)
+}
+
+// TestRedisCache_CacheDeviceStatus_ZeroKeepsLastActive 回归：文档承诺
+// lastActiveTime=0 表示"未知"、不覆盖已存值；实现曾无条件 HSet 0。
+func TestRedisCache_CacheDeviceStatus_ZeroKeepsLastActive(t *testing.T) {
+	_, c, _ := newCacheWithMini(t)
+	ctx := context.Background()
+
+	require.NoError(t, c.CacheDeviceStatus(ctx, "dev-zero", "ONLINE", 1700000000000))
+	require.NoError(t, c.CacheDeviceStatus(ctx, "dev-zero", "OFFLINE", 0))
+
+	status, lastActive, err := c.GetCachedDeviceStatus(ctx, "dev-zero")
+	require.NoError(t, err)
+	assert.Equal(t, "OFFLINE", status)
+	assert.Equal(t, int64(1700000000000), lastActive, "lastActiveTime=0 不应覆盖已存值")
+}
+
+// TestRedisCache_GetOrLoad_NotFoundClearsStale 回归：loader 返回 not-found 时
+// 必须清除进程内 stale 兜底副本，否则 Redis 故障期间会把已删除数据重新端上来。
+func TestRedisCache_GetOrLoad_NotFoundClearsStale(t *testing.T) {
+	mr, c, _ := newCacheWithMini(t)
+	ctx := context.Background()
+	key := "stale-not-found"
+
+	loadCount := 0
+	var out string
+	require.NoError(t, c.GetOrLoad(ctx, key, &out, time.Minute, 0, func(context.Context) (any, error) {
+		loadCount++
+		return "old-value", nil
+	}))
+	require.Equal(t, "old-value", out)
+
+	// 模拟 L2 过期，再让 loader 返回 not-found（清除 stale）
+	require.NoError(t, c.client.Del(ctx, key).Err())
+	err := c.GetOrLoad(ctx, key, &out, time.Minute, 0, func(context.Context) (any, error) {
+		loadCount++
+		return nil, redis.Nil
+	})
+	require.ErrorIs(t, err, redis.Nil)
+
+	// Redis 故障：stale 已清 → 必须回源，而不是返回 old-value
+	mr.Close()
+	// 换成必然连不上的客户端，避免 go-redis 重试退避拖慢测试
+	dead := redis.NewClient(&redis.Options{
+		Addr:         "127.0.0.1:1",
+		DialTimeout:  20 * time.Millisecond,
+		ReadTimeout:  20 * time.Millisecond,
+		WriteTimeout: 20 * time.Millisecond,
+		MaxRetries:   -1,
+	})
+	t.Cleanup(func() { _ = dead.Close() })
+	c.client = dead
+	var fresh string
+	require.NoError(t, c.GetOrLoad(ctx, key, &fresh, time.Minute, 0, func(context.Context) (any, error) {
+		loadCount++
+		return "fresh-value", nil
+	}))
+	assert.Equal(t, "fresh-value", fresh, "not-found 后不得再返回 stale 旧值")
+	assert.Equal(t, 3, loadCount, "Redis 故障且无 stale 时应调用 loader")
 }

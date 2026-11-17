@@ -116,8 +116,6 @@ func newDeviceCtx(t *testing.T) (*ent.Client, *repository.DeviceRepo, *DeviceSer
 	return client, repo, NewDeviceService(repo, rcache, nil, nil)
 }
 
-func strPtr(s string) *string { return &s }
-
 func TestDeviceService_Register(t *testing.T) {
 	client, repo, svc := newDeviceCtx(t)
 	_ = repo
@@ -169,12 +167,12 @@ func TestDeviceService_Update(t *testing.T) {
 
 	t.Run("非 owner 无权操作", func(t *testing.T) {
 		other := newOwner(t, client)
-		_, err := svc.Update(context.Background(), "abc123", other, DeviceUpdateParameters{Location: strPtr("x")})
+		_, err := svc.Update(context.Background(), "abc123", other, DeviceUpdateParameters{Location: new("x")})
 		assert.ErrorContains(t, err, "无权操作该设备")
 	})
 
 	t.Run("设备不存在", func(t *testing.T) {
-		_, err := svc.Update(context.Background(), "nope99", owner, DeviceUpdateParameters{Location: strPtr("x")})
+		_, err := svc.Update(context.Background(), "nope99", owner, DeviceUpdateParameters{Location: new("x")})
 		assert.Error(t, err)
 	})
 
@@ -347,4 +345,33 @@ func TestDeviceService_RotateSecret(t *testing.T) {
 	// 非属主不可轮换
 	_, err = svc.RotateSecret(context.Background(), "abc123", 99999)
 	assert.ErrorContains(t, err, "无权操作该设备")
+}
+
+// TestDeviceService_ListByOwnerID_OverlaysRuntimeStatus 列表必须用 Redis 状态 Hash 覆盖
+// PostgreSQL 快照：否则设备上下线在列表页要滞后到列表缓存过期（2 分钟）才变色。
+func TestDeviceService_ListByOwnerID_OverlaysRuntimeStatus(t *testing.T) {
+	client := newTestEnt(t)
+	repo := repository.NewDeviceRepo(client)
+	_, rcache := newTestRedisCache(t)
+	svc := NewDeviceService(repo, rcache, nil, nil)
+	ctx := context.Background()
+
+	owner := newOwner(t, client)
+	seedDevice(t, repo, "d-ovr", owner, "ONLINE")
+
+	// 先装填列表缓存（PG 快照 = ONLINE）
+	devices, err := svc.ListByOwnerID(ctx, owner)
+	assert.NoError(t, err)
+	assert.Len(t, devices, 1)
+	assert.Equal(t, "ONLINE", devices[0].Status)
+
+	// PG 尚未落库（上报路径防抖 5s），Redis 已判离线
+	activeMs := time.Now().Add(-time.Hour).UnixMilli()
+	assert.NoError(t, rcache.CacheDeviceStatus(ctx, "d-ovr", "OFFLINE", activeMs))
+
+	devices2, err := svc.ListByOwnerID(ctx, owner)
+	assert.NoError(t, err)
+	assert.Len(t, devices2, 1)
+	assert.Equal(t, "OFFLINE", devices2[0].Status)
+	assert.Equal(t, activeMs, devices2[0].LastActiveTime.UnixMilli())
 }
