@@ -19,6 +19,7 @@ package controller
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -92,7 +93,9 @@ func newJSONReq(method, path string, body any, headers map[string]string) *http.
 
 func parseResp(w *httptest.ResponseRecorder) testResp {
 	var r testResp
-	json.Unmarshal(w.Body.Bytes(), &r)
+	if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil {
+		panic(fmt.Sprintf("parseResp: 响应不是合法 JSON: %v; body=%s", err, w.Body.String()))
+	}
 	return r
 }
 
@@ -340,7 +343,7 @@ func TestApiResponse_Format(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest("GET", "/test", nil))
 		var resp testResp
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, common.CodeSuccess, resp.Code)
 		assert.Equal(t, "success", resp.Message)
 		assert.NotNil(t, resp.Data)
@@ -354,7 +357,7 @@ func TestApiResponse_Format(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest("GET", "/test", nil))
 		var resp testResp
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, common.CodeBadRequest, resp.Code)
 		assert.Equal(t, "参数错误", resp.Message)
 	})
@@ -365,7 +368,7 @@ func TestApiResponse_Format(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest("GET", "/test", nil))
 		var resp testResp
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, common.CodeUnauthorized, resp.Code)
 		assert.NotEmpty(t, resp.Message)
 	})

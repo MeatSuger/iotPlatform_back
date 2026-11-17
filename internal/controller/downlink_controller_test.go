@@ -46,7 +46,7 @@ func TestDownlink_PostCmd(t *testing.T) {
 			assert.Equal(t, "dev-001", deviceID)
 
 			var req map[string]string
-			c.ShouldBindJSON(&req)
+			assert.NoError(t, c.ShouldBindJSON(&req))
 
 			common.SuccessWithMsg(c, "命令已下发", gin.H{
 				"id":      1,
@@ -72,7 +72,7 @@ func TestDownlink_PostCmd(t *testing.T) {
 
 		// 无 TokenInterceptor 时 userAuth 读不到 token 会返回 401，此处仅断言响应码存在（路由可达）
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.True(t, resp["code"] != nil)
 	})
 
@@ -89,7 +89,7 @@ func TestDownlink_PostCmd(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(401), resp["code"])
 	})
 }
@@ -118,7 +118,7 @@ func TestDownlink_GetCmd(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(200), resp["code"])
 	})
 
@@ -134,7 +134,7 @@ func TestDownlink_GetCmd(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		var resp map[string]any
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, float64(401), resp["code"])
 	})
 }

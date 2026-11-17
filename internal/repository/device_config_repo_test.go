@@ -40,7 +40,8 @@ func TestDeviceConfigRepo_CRUD(t *testing.T) {
 
 	owner, err := userRepo.Create(context.Background(), makeUser("owner"))
 	assert.NoError(t, err)
-	deviceRepo.Create(context.Background(), makeDevice("dev1", owner.ID))
+	_, err = deviceRepo.Create(context.Background(), makeDevice("dev1", owner.ID))
+	assert.NoError(t, err)
 
 	// 不存在 → NotFoundError
 	_, err = repo.GetByDeviceID(context.Background(), "dev1")
@@ -82,7 +83,8 @@ func TestDeviceConfigRepo_UpdatedAt(t *testing.T) {
 	repo := NewDeviceConfigRepo(client)
 
 	owner, _ := userRepo.Create(context.Background(), makeUser("owner"))
-	deviceRepo.Create(context.Background(), makeDevice("dev1", owner.ID))
+	_, err := deviceRepo.Create(context.Background(), makeDevice("dev1", owner.ID))
+	assert.NoError(t, err)
 
 	assert.NoError(t, repo.Upsert(context.Background(), "dev1", `{}`))
 	got, _ := repo.GetByDeviceID(context.Background(), "dev1")

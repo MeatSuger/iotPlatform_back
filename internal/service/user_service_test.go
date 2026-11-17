@@ -160,11 +160,10 @@ func TestRegister(t *testing.T) {
 }
 
 func TestLogin(t *testing.T) {
-	_, _, svc := newUserCtx(t)
 	// Login 不使用缓存，直接用共享仓库构造 svc
 	client := newTestEnt(t)
 	repo := repository.NewUserRepo(client)
-	svc = NewUserService(repo, nil)
+	svc := NewUserService(repo, nil)
 
 	t.Run("登录成功", func(t *testing.T) {
 		seedUser(t, repo, "alice")
@@ -244,7 +243,7 @@ func TestNormalizeLoginDevice(t *testing.T) {
 
 	// 超过 50 字符截断
 	long := ""
-	for i := 0; i < 60; i++ {
+	for range 60 {
 		long += "a"
 	}
 	assert.Len(t, normalizeLoginDevice(long), 50)

@@ -146,8 +146,8 @@ func TestDeviceDetail_ThingModelAggregation(t *testing.T) {
 	w := doDetail(t, "dev1", ownerID, env.ctl.GetDeviceData)
 
 	var resp struct {
-		Code int                    `json:"code"`
-		Data map[string]interface{} `json:"data"`
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
 	}
 	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, 200, resp.Code)
@@ -157,27 +157,27 @@ func TestDeviceDetail_ThingModelAggregation(t *testing.T) {
 	assert.Equal(t, "ONLINE", resp.Data["status"])
 
 	// 传感器物模型数组（顶层）
-	sensors, ok := resp.Data["sensors"].([]interface{})
+	sensors, ok := resp.Data["sensors"].([]any)
 	assert.True(t, ok, "data.sensors 应为物模型数组")
 	assert.Len(t, sensors, 2)
 
-	first := sensors[0].(map[string]interface{})
+	first := sensors[0].(map[string]any)
 	assert.Equal(t, "temperature", first["id"])
 	assert.Equal(t, "°C", first["unit"]) // 定义字段平铺
-	latest := first["latest"].(map[string]interface{})
+	latest := first["latest"].(map[string]any)
 	assert.Equal(t, 25.5, latest["value"])
 	assert.NotNil(t, latest["timestamp"])
 
-	second := sensors[1].(map[string]interface{})
+	second := sensors[1].(map[string]any)
 	assert.Equal(t, "humidity", second["id"])
-	latest2 := second["latest"].(map[string]interface{})
+	latest2 := second["latest"].(map[string]any)
 	assert.Equal(t, 60.0, latest2["value"]) // 中文名兜底命中
 
 	// 执行器物模型数组（顶层）
-	actuators, ok := resp.Data["actuators"].([]interface{})
+	actuators, ok := resp.Data["actuators"].([]any)
 	assert.True(t, ok, "data.actuators 应为物模型数组")
 	assert.Len(t, actuators, 1)
-	act := actuators[0].(map[string]interface{})
+	act := actuators[0].(map[string]any)
 	assert.Equal(t, "led1", act["id"])
 	assert.Equal(t, "led", act["driver"])
 }
@@ -196,20 +196,20 @@ func TestDeviceDetail_NoTelemetry(t *testing.T) {
 	w := doDetail(t, "dev1", ownerID, env.ctl.GetDeviceData)
 
 	var resp struct {
-		Code int                    `json:"code"`
-		Data map[string]interface{} `json:"data"`
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
 	}
 	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, 200, resp.Code)
 
-	sensors := resp.Data["sensors"].([]interface{})
+	sensors := resp.Data["sensors"].([]any)
 	assert.Len(t, sensors, 1)
-	s := sensors[0].(map[string]interface{})
+	s := sensors[0].(map[string]any)
 	assert.Equal(t, "switch_1", s["id"])
 	assert.Nil(t, s["latest"])
 
 	// 无执行器定义 → 空数组（非 null）
-	assert.Equal(t, []interface{}{}, resp.Data["actuators"])
+	assert.Equal(t, []any{}, resp.Data["actuators"])
 }
 
 // TestDeviceDetail_NoThingModel 设备没有任何物模型定义：sensors/actuators 均为空数组
@@ -220,13 +220,13 @@ func TestDeviceDetail_NoThingModel(t *testing.T) {
 	w := doDetail(t, "dev1", ownerID, env.ctl.GetDeviceData)
 
 	var resp struct {
-		Code int                    `json:"code"`
-		Data map[string]interface{} `json:"data"`
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
 	}
 	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, 200, resp.Code)
-	assert.Equal(t, []interface{}{}, resp.Data["sensors"])
-	assert.Equal(t, []interface{}{}, resp.Data["actuators"])
+	assert.Equal(t, []any{}, resp.Data["sensors"])
+	assert.Equal(t, []any{}, resp.Data["actuators"])
 }
 
 // TestDeviceDetail_Forbidden 非属主访问详情 → 403

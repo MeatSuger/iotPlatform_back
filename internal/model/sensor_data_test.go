@@ -115,8 +115,8 @@ func TestDeviceStatusDTO_UnmarshalJSON_NoTimestamp(t *testing.T) {
 // TestSensorDataPayload_TagsMatch 防止 sensorDataPayload 与 SensorData 字段/标签脱节：
 // 反序列化载体漏掉字段会静默丢数据，漏掉 binding 标签会让 HTTP 上报校验失效。
 func TestSensorDataPayload_TagsMatch(t *testing.T) {
-	src := reflect.TypeOf(SensorData{})
-	dst := reflect.TypeOf(sensorDataPayload{})
+	src := reflect.TypeFor[SensorData]()
+	dst := reflect.TypeFor[sensorDataPayload]()
 
 	assert.Equal(t, src.NumField(), dst.NumField(), "字段数量不一致")
 	for i := 0; i < src.NumField(); i++ {

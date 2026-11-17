@@ -235,7 +235,8 @@ func TestMessageLogRepo_FullFlow(t *testing.T) {
 	repo := NewMessageLogRepo(client)
 
 	owner, _ := userRepo.Create(context.Background(), makeUser("owner"))
-	deviceRepo.Create(context.Background(), makeDevice("dev1", owner.ID))
+	_, err := deviceRepo.Create(context.Background(), makeDevice("dev1", owner.ID))
+	assert.NoError(t, err)
 
 	// 下行命令
 	cmd, err := repo.Create(context.Background(), &ent.MessageLog{
@@ -286,7 +287,8 @@ func TestDeviceThingRepo_CRUD(t *testing.T) {
 	repo := NewDeviceThingRepo(client)
 
 	owner, _ := userRepo.Create(context.Background(), makeUser("owner"))
-	deviceRepo.Create(context.Background(), makeDevice("dev1", owner.ID))
+	_, err := deviceRepo.Create(context.Background(), makeDevice("dev1", owner.ID))
+	assert.NoError(t, err)
 
 	ctx := context.Background()
 	created, err := repo.Create(ctx, &ent.DeviceThing{

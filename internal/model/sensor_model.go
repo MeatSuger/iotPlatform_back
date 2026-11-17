@@ -19,6 +19,7 @@ package entity
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 
 	"iot-platform.local/pkg/common"
@@ -96,9 +97,7 @@ func (s SensorSpecs) MarshalJSON() ([]byte, error) {
 	if s.Thresholds != nil {
 		m["thresholds"] = s.Thresholds
 	}
-	for k, v := range s.Extra {
-		m[k] = v
-	}
+	maps.Copy(m, s.Extra)
 	return json.Marshal(m)
 }
 
@@ -173,9 +172,7 @@ func (s SpecsThresholds) MarshalJSON() ([]byte, error) {
 	if s.Max != nil {
 		m["max"] = *s.Max
 	}
-	for k, v := range s.Extra {
-		m[k] = v
-	}
+	maps.Copy(m, s.Extra)
 	return json.Marshal(m)
 }
 

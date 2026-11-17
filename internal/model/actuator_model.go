@@ -140,10 +140,8 @@ func ValidateActuatorID(id string) error {
 
 // ValidateDriver 校验驱动名取值
 func ValidateDriver(driver string) error {
-	for _, d := range ActuatorDrivers {
-		if driver == d {
-			return nil
-		}
+	if slices.Contains(ActuatorDrivers, driver) {
+		return nil
 	}
 	return fmt.Errorf("无效的驱动名: %s（可选 led/servo/speaker）", driver)
 }

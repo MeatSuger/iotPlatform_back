@@ -102,12 +102,12 @@ func TestSensorSpecs_StrongTyping(t *testing.T) {
 // TestSensorSpecs_ExtrasFlatMarshal 扩展键（原 attrs 能力）平铺进 specs，往返无损。
 func TestSensorSpecs_ExtrasFlatMarshal(t *testing.T) {
 	specs := SensorSpecs{
-		Min:  fp(-40),
-		Max:  fp(125),
-		Step: fp(0.1),
+		Min:  new(-40.0),
+		Max:  new(125.0),
+		Step: new(0.1),
 		Thresholds: &SpecsThresholds{
-			Min:   fp(0),
-			Max:   fp(100),
+			Min:   new(0.0),
+			Max:   new(100.0),
 			Extra: map[string]any{"alarm": true},
 		},
 		Extra: map[string]any{"gpio": 4, "driver": "dht22"},
@@ -151,12 +151,12 @@ func TestSensorSpecs_Validate(t *testing.T) {
 	low, high := 0.0, 100.0
 	assert.NoError(t, (&SensorSpecs{Min: &low, Max: &high}).Validate())
 	assert.Error(t, (&SensorSpecs{Min: &high, Max: &low}).Validate()) // min > max
-	assert.Error(t, (&SensorSpecs{Step: fp(-1)}).Validate())
-	assert.Error(t, (&SensorSpecs{MaxLen: ip(0)}).Validate())
+	assert.Error(t, (&SensorSpecs{Step: new(-1.0)}).Validate())
+	assert.Error(t, (&SensorSpecs{MaxLen: new(0)}).Validate())
 	assert.Error(t, (&SensorSpecs{
 		Min:        &low,
 		Max:        &high,
-		Thresholds: &SpecsThresholds{Min: fp(120)}, // 阈值下限超出量程
+		Thresholds: &SpecsThresholds{Min: new(120.0)}, // 阈值下限超出量程
 	}).Validate())
 }
 
@@ -190,7 +190,3 @@ func TestSensorUpdateRequest_ReportIntervalNull(t *testing.T) {
 	err = (SensorUpdateRequest{ReportInterval: &negRaw}).Validate()
 	assert.Error(t, err)
 }
-
-// fp / ip 指针构造助手
-func fp(v float64) *float64 { return &v }
-func ip(v int) *int         { return &v }

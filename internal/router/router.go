@@ -75,9 +75,7 @@ func healthCheck(probes *HealthProbe) gin.HandlerFunc {
 				if fn == nil {
 					return
 				}
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					err := fn(ctx)
 					mu.Lock()
 					defer mu.Unlock()
@@ -88,7 +86,7 @@ func healthCheck(probes *HealthProbe) gin.HandlerFunc {
 					} else {
 						deps[name] = "ok"
 					}
-				}()
+				})
 			}
 
 			check("postgresql", probes.PostgreSQL)

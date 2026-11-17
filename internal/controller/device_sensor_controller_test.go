@@ -135,20 +135,16 @@ func validCreateBody(id string) entity.SensorCreateRequest {
 		DataType: "float",
 		Unit:     "°C",
 		Specs: &entity.SensorSpecs{
-			Min:  fptr(-40),
-			Max:  fptr(125),
-			Step: fptr(0.1),
+			Min:  new(-40.0),
+			Max:  new(125.0),
+			Step: new(0.1),
 			Thresholds: &entity.SpecsThresholds{
-				Min: fptr(0), Max: fptr(100), Extra: map[string]any{"alarm": true},
+				Min: new(0.0), Max: new(100.0), Extra: map[string]any{"alarm": true},
 			},
 		},
-		ReportInterval: iptr(60),
+		ReportInterval: new(60),
 	}
 }
-
-// fptr / iptr 指针构造助手（模拟 JSON 请求绑定后的指针字段）
-func fptr(v float64) *float64 { return &v }
-func iptr(v int) *int         { return &v }
 
 func TestSensorController_CreateGetList(t *testing.T) {
 	env := newSensorTestEnv(t)

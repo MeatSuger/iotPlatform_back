@@ -49,7 +49,7 @@ func TestSuccess(t *testing.T) {
 
 	assert.Equal(t, 200, w.Code)
 	var resp ApiResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, CodeSuccess, resp.Code)
 	assert.Equal(t, "success", resp.Message)
 	assert.NotNil(t, resp.Data)
@@ -60,7 +60,7 @@ func TestSuccessWithMsg(t *testing.T) {
 	SuccessWithMsg(c, "操作成功", gin.H{"id": 1})
 
 	var resp ApiResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, CodeSuccess, resp.Code)
 	assert.Equal(t, "操作成功", resp.Message)
 }
@@ -70,7 +70,7 @@ func TestFail(t *testing.T) {
 	Fail(c, CodeBadRequest)
 
 	var resp ApiResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, CodeBadRequest, resp.Code)
 	assert.NotEmpty(t, resp.Message)
 	assert.Nil(t, resp.Data)
@@ -81,7 +81,7 @@ func TestFailWithMsg(t *testing.T) {
 	FailWithMsg(c, CodeForbidden, "无权限访问")
 
 	var resp ApiResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, CodeForbidden, resp.Code)
 	assert.Equal(t, "无权限访问", resp.Message)
 }

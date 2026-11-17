@@ -50,7 +50,7 @@ func TestDeviceList(t *testing.T) {
 		Code int              `json:"code"`
 		Data []map[string]any `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, 200, resp.Code)
 	assert.Len(t, resp.Data, 2)
 	assert.Equal(t, "ESP32-01", resp.Data[0]["deviceName"])
@@ -81,7 +81,7 @@ func TestDeviceDetail(t *testing.T) {
 		Code int            `json:"code"`
 		Data map[string]any `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, 200, resp.Code)
 	assert.Equal(t, "ESP32-01", resp.Data["deviceName"])
 	assert.NotNil(t, resp.Data["sensors"])
@@ -102,7 +102,7 @@ func TestDeviceDelete(t *testing.T) {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, 200, resp.Code)
 	assert.Equal(t, "删除成功", resp.Message)
 }
@@ -129,7 +129,7 @@ func TestUserProfile(t *testing.T) {
 		Code int            `json:"code"`
 		Data map[string]any `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, 200, resp.Code)
 	assert.Equal(t, "管理员", resp.Data["name"])
 }
@@ -154,7 +154,7 @@ func TestUserPage(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest("GET", "/user/page?pageNum=0&pageSize=5&name=admin", nil))
 
 	var resp map[string]any
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, float64(200), resp["code"])
 }
 
@@ -171,7 +171,7 @@ func TestUserDelete(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest("POST", "/user/delete?id=2", nil))
 
 	var resp map[string]any
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, float64(200), resp["code"])
 	assert.Equal(t, "删除成功", resp["message"])
 }
@@ -219,7 +219,7 @@ func TestDownlinkCmdTypes(t *testing.T) {
 			r.ServeHTTP(w, req)
 
 			var resp map[string]any
-			json.Unmarshal(w.Body.Bytes(), &resp)
+			assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 			assert.Equal(t, float64(200), resp["code"])
 			assert.Equal(t, "命令已下发", resp["message"])
 		})
@@ -249,7 +249,7 @@ func TestDevicePollCmd(t *testing.T) {
 		Code int              `json:"code"`
 		Data []map[string]any `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, 200, resp.Code)
 	assert.Len(t, resp.Data, 2)
 	assert.Equal(t, float64(1), resp.Data[0]["id"])
@@ -319,7 +319,7 @@ func TestMqttClientStatus_JSON(t *testing.T) {
 	assert.NoError(t, err)
 
 	var parsed map[string]any
-	json.Unmarshal(b, &parsed)
+	assert.NoError(t, json.Unmarshal(b, &parsed))
 	assert.True(t, parsed["connected"].(bool))
 	assert.Equal(t, "tcp://mqtt:1883", parsed["brokerURL"])
 }
@@ -341,7 +341,7 @@ func TestDownlinkFullFlow(t *testing.T) {
 	r1 := gin.New()
 	r1.POST("/device/:deviceId/cmd", func(c *gin.Context) {
 		var req map[string]json.RawMessage
-		c.ShouldBindJSON(&req)
+		assert.NoError(t, c.ShouldBindJSON(&req))
 		cmd := map[string]any{
 			"id":       len(cmdQueue) + 1,
 			"deviceId": c.Param("deviceId"),
@@ -371,7 +371,7 @@ func TestDownlinkFullFlow(t *testing.T) {
 	var resp struct {
 		Data []map[string]any `json:"data"`
 	}
-	json.Unmarshal(w2.Body.Bytes(), &resp)
+	assert.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
 	assert.Len(t, resp.Data, 1)
 	// json.RawMessage 保留原始 JSON 字符串（含引号）
 	assert.Contains(t, resp.Data[0]["type"].(string), "control")

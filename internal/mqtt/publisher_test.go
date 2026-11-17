@@ -69,7 +69,7 @@ func (m *mockBroker) serve() {
 		// remaining length（可变字节整数）——同时收集长度字节，保证记录的是完整帧
 		rl, mult := 0, 1
 		rlBytes := []byte{}
-		for i := 0; i < 4; i++ {
+		for range 4 {
 			b, err := br.ReadByte()
 			if err != nil {
 				return

@@ -90,7 +90,7 @@ func (r *DeviceConfigRepo) Upsert(ctx context.Context, deviceID string, payload 
 // 用于 sensors/actuators 这类「只改一个顶层 key」的更新，避免后写覆盖先写。
 func (r *DeviceConfigRepo) MergePayload(ctx context.Context, deviceID string, mutate func(current string) (string, error)) (*ent.DeviceConfig, error) {
 	const maxRetries = 3
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for range maxRetries {
 		cfg, err := r.GetByDeviceID(ctx, deviceID)
 		if err != nil && !ent.IsNotFound(err) {
 			return nil, err

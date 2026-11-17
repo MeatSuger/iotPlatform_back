@@ -1,27 +1,29 @@
-# golangci-lint 配置
-# https://golangci-lint.run/usage/configuration/
-
-run:
-  timeout: 3m
-
-  # 跳过生成的 Ent 代码
-  skip-dirs:
-    - internal/ent
-
+# golangci-lint v2 配置（由 golangci-lint migrate 从 v1 迁移）。
+# v2 默认 linter 集合 standard = errcheck / govet / ineffassign / staticcheck / unused，
+# 与迁移前的显式 enable 列表一致。
+version: "2"
 linters:
-  enable:
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-
-issues:
-  exclude-dirs:
-    - internal/ent
-
-  # 排除规则
-  exclude:
-    # Ent 生成的 scanWithInterceptors 显式类型参数
-    - "unnecessary type arguments"
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Ent 生成的 scanWithInterceptors 显式类型参数
+      - path: (.+)\.go$
+        text: unnecessary type arguments
+    paths:
+      # 跳过生成的 Ent 代码
+      - internal/ent
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

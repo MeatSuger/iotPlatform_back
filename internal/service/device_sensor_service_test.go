@@ -44,22 +44,18 @@ func validSensorReq(id string) entity.SensorCreateRequest {
 		DataType: "float",
 		Unit:     "°C",
 		Specs: &entity.SensorSpecs{
-			Min:  fp(-40),
-			Max:  fp(125),
-			Step: fp(0.1),
+			Min:  new(-40.0),
+			Max:  new(125.0),
+			Step: new(0.1),
 			Thresholds: &entity.SpecsThresholds{
-				Min:   fp(0),
-				Max:   fp(100),
+				Min:   new(0.0),
+				Max:   new(100.0),
 				Extra: map[string]any{"alarm": true},
 			},
 		},
-		ReportInterval: ip(60),
+		ReportInterval: new(60),
 	}
 }
-
-// fp / ip 指针构造助手（模拟 JSON 请求绑定后的指针字段）
-func fp(v float64) *float64 { return &v }
-func ip(v int) *int         { return &v }
 
 func TestDeviceSensorService_CreateAndGet(t *testing.T) {
 	svc, _, deviceRepo, client := buildSensorSvc(t)
@@ -112,10 +108,10 @@ func TestDeviceSensorService_CreateValidation(t *testing.T) {
 	seedThingModelDevice(t, client, deviceRepo)
 
 	cases := []entity.SensorCreateRequest{
-		{ID: "9lead", Name: "x", Type: "t"},                         // 非法标识符：数字开头
-		{ID: "bad-id", Name: "x", Type: "t"},                        // 非法标识符：连字符
-		{ID: "ok_id", Name: "n", Type: "t", DataType: "unknown"},    // 非法数据类型
-		{ID: "ok_id", Name: "n", Type: "t", ReportInterval: ip(-1)}, // 非法上报周期
+		{ID: "9lead", Name: "x", Type: "t"},                          // 非法标识符：数字开头
+		{ID: "bad-id", Name: "x", Type: "t"},                         // 非法标识符：连字符
+		{ID: "ok_id", Name: "n", Type: "t", DataType: "unknown"},     // 非法数据类型
+		{ID: "ok_id", Name: "n", Type: "t", ReportInterval: new(-1)}, // 非法上报周期
 	}
 	for _, req := range cases {
 		_, err := svc.Create(context.Background(), "dev1", req)
