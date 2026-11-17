@@ -235,6 +235,39 @@ func TestPollCmd_RedisError(t *testing.T) {
 	assert.ErrorContains(t, err, "轮询命令失败")
 }
 
+// TestPollCmd_MarkSentFailureRequeues 回归：命令已被 Lua 弹出后 MarkSent 失败，
+// 必须把命令放回队列并恢复 TTL，否则设备永远收不到、message_log 永久 pending。
+func TestPollCmd_MarkSentFailureRequeues(t *testing.T) {
+	svc, _, client := buildDownlinkSvc(t)
+	seedCmdDevice(t, client, "dev1")
+
+	cmd, err := svc.EnqueueCmd(context.Background(), "dev1", DownlinkCmdRequest{
+		Type:    "reboot",
+		Payload: []byte(`{"p":1}`),
+	})
+	require.NoError(t, err)
+
+	// 关闭 PG → MarkSent 必然失败；Redis 仍正常，回滚应成功
+	require.NoError(t, client.Close())
+
+	_, err = svc.PollCmd(context.Background(), "dev1")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "标记命令为已发送失败")
+
+	queueKey := cmdQueuePrefix + "dev1"
+	vals, err := svc.rdb.LRange(context.Background(), queueKey, 0, -1).Result()
+	require.NoError(t, err)
+	require.Len(t, vals, 1, "标记失败时命令必须回到 Redis 队列")
+
+	var resp DownlinkCmdResponse
+	require.NoError(t, json.Unmarshal([]byte(vals[0]), &resp))
+	assert.Equal(t, cmd.ID, resp.ID, "回滚的命令不得丢失或重复")
+
+	ttl, err := svc.rdb.TTL(context.Background(), queueKey).Result()
+	require.NoError(t, err)
+	assert.Greater(t, ttl, time.Duration(0), "回滚后队列键必须仍有 TTL")
+}
+
 func TestAckCmd_FullFlow(t *testing.T) {
 	svc, _, client := buildDownlinkSvc(t)
 	seedCmdDevice(t, client, "dev1")

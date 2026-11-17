@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -221,14 +222,16 @@ func TestFlushReports(t *testing.T) {
 	// 空批次直接返回
 	assert.NoError(t, svc.FlushReports(context.Background(), nil))
 
-	// 正常批次：时间戳回退到 report.Timestamp
+	// 正常批次：时间戳回退到 report.Timestamp。
+	// 写入失败必须上抛（DeviceDataBuffer 靠这个 error 决定重新入队）；
+	// 早期版本这里调 WriteSensorsAsync 恒返回 nil，于是在 InfluxDB 故障时
+	// 每批 200 条上报被静默丢弃。
 	err := svc.FlushReports(context.Background(), []BufferedReport{{
 		DeviceID:  "dev1",
 		Timestamp: time.Now().UnixMilli(),
 		Sensors:   []SensorDataDTO{{Name: "t", Type: "number", Value: 1.0, Timestamp: 0}},
 	}})
-	assert.NoError(t, err)
-	time.Sleep(20 * time.Millisecond) // 等待异步 WriteSensors 结束（nil client 报错后退出）
+	assert.ErrorContains(t, err, "客户端未连接")
 }
 
 // TestReportStatusFast_ValueValidation 上报值按物模型 dataType 校验：
@@ -336,4 +339,71 @@ func TestResolveReportTime(t *testing.T) {
 				"应回退为服务端当前时间 (input=%v)", pair)
 		}
 	})
+}
+
+// TestFlushPGUpdates_NoConcurrentFlush 回归：flush 未完成时不得再并发进入另一个
+// flush（PG 变慢时每次上报都叠加一个 flush → goroutine 与连接无界增长）。
+func TestFlushPGUpdates_NoConcurrentFlush(t *testing.T) {
+	svc := &DeviceReportService{pgUpdatePending: map[string]time.Time{"dev1": time.Now()}}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var inFlight, calls atomic.Int32
+	svc.updateLastActive = func(ctx context.Context, _, _ string) error {
+		calls.Add(1)
+		if n := inFlight.Add(1); n > 1 {
+			t.Errorf("flush 并发执行：inFlight=%d", n)
+		}
+		defer inFlight.Add(-1)
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	firstDone := make(chan struct{})
+	go func() {
+		svc.flushPGUpdates()
+		close(firstDone)
+	}()
+	<-started
+
+	// 第一次 flush 期间又有设备上报（进入新 pending）
+	svc.pgUpdateMu.Lock()
+	svc.pgUpdatePending["dev2"] = time.Now()
+	svc.pgUpdateMu.Unlock()
+
+	secondDone := make(chan struct{})
+	go func() {
+		svc.flushPGUpdates()
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("第二次 flush 未立即返回")
+	}
+	assert.Equal(t, int32(1), calls.Load(), "第二次 flush 不应执行更新")
+
+	close(release)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("第一次 flush 未结束")
+	}
+
+	svc.pgUpdateMu.Lock()
+	assert.Contains(t, svc.pgUpdatePending, "dev2", "flush 期间的上报必须保留")
+	if svc.pgUpdateTimer != nil {
+		svc.pgUpdateTimer.Stop()
+	}
+	svc.pgUpdateMu.Unlock()
+	assert.False(t, svc.pgFlushing)
 }

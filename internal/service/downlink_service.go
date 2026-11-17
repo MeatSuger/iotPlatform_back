@@ -19,6 +19,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -28,14 +29,26 @@ import (
 	"iot-platform.local/internal/ent"
 	"iot-platform.local/internal/repository"
 	"iot-platform.local/internal/websocket"
+	"iot-platform.local/pkg/cache"
 	"iot-platform.local/pkg/common"
 )
 
 const (
-	cmdQueuePrefix = "cmd:queue:"
-	cmdQueueMaxLen = 200
-	cmdQueueTTL    = 7 * 24 * time.Hour // 队列键 TTL，防废弃设备永久残留
+	cmdQueuePrefix    = cache.CmdQueuePrefix
+	cmdQueueMaxLen    = 200
+	cmdQueueTTL       = 7 * 24 * time.Hour // 队列键 TTL，防废弃设备永久残留
+	cmdRequeueTimeout = 5 * time.Second    // 标记失败后回滚队列的独立超时
 )
+
+// enqueueCmdLua 原子入队：RPUSH + LTRIM + EXPIRE。
+// 拆成三条命令时，LTrim/Expire 失败会让接口报错但命令已在队列（调用方重试 → 重复下发），
+// 或队列键失去 TTL 永久残留。
+var enqueueCmdLua = redis.NewScript(`
+	redis.call('RPUSH', KEYS[1], ARGV[1])
+	redis.call('LTRIM', KEYS[1], -tonumber(ARGV[2]), -1)
+	redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+	return 1
+`)
 
 // pollCmdLua 原子取出并删除队列全部命令（LRange + Del 非原子 → 并发 Poll 竞态修复）
 var pollCmdLua = redis.NewScript(`
@@ -44,6 +57,19 @@ var pollCmdLua = redis.NewScript(`
 		redis.call('DEL', KEYS[1])
 	end
 	return vals
+`)
+
+// requeueCmdLua 回滚 PollCmd：命令已从队列弹出但 MarkSent 失败时，按原顺序放回，
+// 并恢复长度上限与 TTL。参数：ARGV[1]=条数，ARGV[2..n+1]=命令 JSON，
+// ARGV[n+2]=最大长度，ARGV[n+3]=TTL 秒。
+var requeueCmdLua = redis.NewScript(`
+	local n = tonumber(ARGV[1])
+	for i = 2, n + 1 do
+		redis.call('RPUSH', KEYS[1], ARGV[i])
+	end
+	redis.call('LTRIM', KEYS[1], -tonumber(ARGV[n + 2]), -1)
+	redis.call('EXPIRE', KEYS[1], tonumber(ARGV[n + 3]))
+	return n
 `)
 
 // DownlinkService 下放服务
@@ -131,14 +157,10 @@ func (s *DownlinkService) EnqueueCmd(ctx context.Context, deviceID string, req D
 	// 注意: LTrim 只保留最近 cmdQueueMaxLen 条，慢轮询设备离线期间
 	// 积累的旧命令会被裁剪（DB 中仍为 pending）。如需不丢命令应改用
 	// Stream consumer group 或 Set + 确认机制。
-	if err := s.rdb.RPush(ctx, queueKey, string(cmdJSON)).Err(); err != nil {
+	if err := enqueueCmdLua.Run(ctx, s.rdb, []string{queueKey},
+		string(cmdJSON), cmdQueueMaxLen, int64(cmdQueueTTL.Seconds()),
+	).Err(); err != nil {
 		return nil, fmt.Errorf("命令入队失败: %w", err)
-	}
-	if err := s.rdb.LTrim(ctx, queueKey, -cmdQueueMaxLen, -1).Err(); err != nil {
-		return nil, fmt.Errorf("命令队列裁剪失败: %w", err)
-	}
-	if err := s.rdb.Expire(ctx, queueKey, cmdQueueTTL).Err(); err != nil {
-		return nil, fmt.Errorf("命令队列 TTL 设置失败: %w", err)
 	}
 
 	// WebSocket 实时推送
@@ -187,7 +209,8 @@ func (s *DownlinkService) PollCmd(ctx context.Context, deviceID string) ([]Downl
 	}
 
 	cmds := make([]DownlinkCmdResponse, 0, len(vals))
-	var ids []uint
+	ids := make([]uint, 0, len(vals))
+	raws := make([]string, 0, len(vals))
 	for _, v := range vals {
 		raw, ok := v.(string)
 		if !ok {
@@ -197,14 +220,41 @@ func (s *DownlinkService) PollCmd(ctx context.Context, deviceID string) ([]Downl
 		if err := json.Unmarshal([]byte(raw), &cmd); err == nil {
 			cmds = append(cmds, cmd)
 			ids = append(ids, cmd.ID)
+			raws = append(raws, raw)
 		}
 	}
 	if len(ids) > 0 {
 		if err := s.msgRepo.MarkSent(ctx, ids); err != nil {
-			return nil, err
+			// 命令已经被 Lua 从队列取出；标记失败若直接把错误抛给设备，队列已空、
+			// 这批命令永远不会再投递（message_log 永久 pending）。必须先回滚队列。
+			if requeueErr := s.requeueCommands(ctx, queueKey, raws); requeueErr != nil {
+				return nil, errors.Join(
+					fmt.Errorf("标记命令为已发送失败: %w", err),
+					fmt.Errorf("回滚命令队列失败: %w", requeueErr),
+				)
+			}
+			return nil, fmt.Errorf("标记命令为已发送失败: %w", err)
 		}
 	}
 	return cmds, nil
+}
+
+// requeueCommands 把 PollCmd 已弹出但未能标记为 sent 的命令按原顺序放回队列。
+// 使用剥离取消信号的 ctx：调用方请求可能已取消，但回滚仍必须执行。
+func (s *DownlinkService) requeueCommands(ctx context.Context, queueKey string, raws []string) error {
+	if len(raws) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(raws)+3)
+	args = append(args, len(raws))
+	for _, raw := range raws {
+		args = append(args, raw)
+	}
+	args = append(args, cmdQueueMaxLen, int64(cmdQueueTTL.Seconds()))
+
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cmdRequeueTimeout)
+	defer cancel()
+	return requeueCmdLua.Run(rctx, s.rdb, []string{queueKey}, args...).Err()
 }
 
 // AckCmd 设备确认命令（标记为已送达）

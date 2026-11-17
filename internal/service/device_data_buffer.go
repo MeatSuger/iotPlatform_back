@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -126,6 +127,10 @@ func (b *DeviceDataBuffer) worker() {
 }
 
 // drain 从 Redis 中批量取出数据并写入持久层
+//
+// shortcut: RPOP 出队后到写入成功之间的崩溃会丢这一批（≤batchSize 条），
+// 无损方案需改为 Stream consumer group 或「processing 队列 + 确认」；
+// 当前靠 FlushReports 同步返回错误 + requeue 把正常故障路径兜住。
 func (b *DeviceDataBuffer) drain(ctx context.Context) {
 	for {
 		count := b.batchSize
@@ -184,7 +189,7 @@ func (b *DeviceDataBuffer) rpopCount(ctx context.Context, key string, count int)
 // rpopFallback Redis < 6.2 降级方案：循环 RPOP
 func (b *DeviceDataBuffer) rpopFallback(ctx context.Context, key string, count int) ([]string, error) {
 	var results []string
-	for i := 0; i < count; i++ {
+	for range count {
 		val, err := b.rdb.RPop(ctx, key).Result()
 		if err != nil {
 			if errors.Is(err, redis.Nil) {
@@ -203,8 +208,8 @@ func (b *DeviceDataBuffer) rpopFallback(ctx context.Context, key string, count i
 // requeue 失败重试：推回队列左侧（头部，给其他消息机会，避免紧循环）
 // 带 LTrim 上限保护：InfluxDB 持续故障时队列不会无限增长耗尽内存
 func (b *DeviceDataBuffer) requeue(ctx context.Context, reports []BufferedReport) {
-	for i := len(reports) - 1; i >= 0; i-- {
-		data, _ := json.Marshal(reports[i])
+	for _, report := range slices.Backward(reports) {
+		data, _ := json.Marshal(report)
 		b.rdb.LPush(ctx, b.bufferKey, data) // 推回左侧头部，防止立即被 RPOP 取出
 	}
 	// 裁剪到上限（保留头部最新数据）

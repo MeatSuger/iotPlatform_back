@@ -40,7 +40,14 @@ type InfluxDBService struct {
 	client   *influxdb3.Client
 	database string
 	cache    *cache.RedisCache // 历史查询缓存（可为 nil，自动降级直查）
+
+	// writeSem 异步写入的并发令牌（容量 inflightWrites）。
+	// InfluxDB 变慢时由调用方阻塞形成背压，避免每次上报 spawn 一个 goroutine 把连接池和 InfluxDB 一起打满。
+	writeSem chan struct{}
 }
+
+// inflightWrites 异步写入的最大并发数
+const inflightWrites = 8
 
 // InfluxDBConfig 暴露 ClientConfig 的常用调优参数
 type InfluxDBConfig struct {
@@ -95,13 +102,14 @@ func NewInfluxDBService(cfg InfluxDBConfig, redisCache *cache.RedisCache) *Influ
 	client, err := influxdb3.New(config)
 	if err != nil {
 		zap.L().Error("[InfluxDB] 创建客户端失败", zap.Error(err))
-		return &InfluxDBService{database: cfg.Database, cache: redisCache}
+		return &InfluxDBService{database: cfg.Database, cache: redisCache, writeSem: make(chan struct{}, inflightWrites)}
 	}
 
 	svc := &InfluxDBService{
 		client:   client,
 		database: cfg.Database,
 		cache:    redisCache,
+		writeSem: make(chan struct{}, inflightWrites),
 	}
 
 	return svc
@@ -152,15 +160,28 @@ func (s *InfluxDBService) WriteSensors(ctx context.Context, data []SensorData) e
 	return nil
 }
 
-// WriteSensorsAsync 异步写入传感器数据
+// WriteSensorsAsync 异步写入传感器数据（并发受 writeSem 限制）。
+//
+// 仅用于降级路径（Redis 不可用时的同步兜底）；主力写入路径必须走 WriteSensors，
+// 以便把写入失败反馈给调用方，而不是交给日志。
 func (s *InfluxDBService) WriteSensorsAsync(data []SensorData) {
-	go func() {
+	write := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-
 		if err := s.WriteSensors(ctx, data); err != nil {
 			zap.S().Warnf("[InfluxDB] 异步写入失败: %v", err)
 		}
+	}
+
+	if s.writeSem == nil { // 未经构造函数创建（测试/降级构造）：同步写，行为一致且不堆 goroutine
+		write()
+		return
+	}
+
+	s.writeSem <- struct{}{} // 满则阻塞调用方，形成背压
+	go func() {
+		defer func() { <-s.writeSem }()
+		write()
 	}()
 }
 
@@ -430,8 +451,7 @@ func (s *InfluxDBService) handleWriteError(err error) error {
 	}
 
 	// 检查是否为 PartialWriteError（部分写入失败，v3 write_lp endpoint）
-	var partialErr *influxdb3.PartialWriteError
-	if errors.As(err, &partialErr) {
+	if partialErr, ok := errors.AsType[*influxdb3.PartialWriteError](err); ok {
 		zap.L().Warn("[InfluxDB] 部分写入失败",
 			zap.Int("failedLines", len(partialErr.LineErrors)),
 			zap.String("message", partialErr.Message),
@@ -447,8 +467,7 @@ func (s *InfluxDBService) handleWriteError(err error) error {
 	}
 
 	// 检查是否为 ServerError
-	var svErr *influxdb3.ServerError
-	if errors.As(err, &svErr) {
+	if svErr, ok := errors.AsType[*influxdb3.ServerError](err); ok {
 		zap.L().Error("[InfluxDB] 服务端错误",
 			zap.Int("statusCode", svErr.StatusCode),
 			zap.String("code", svErr.Code),

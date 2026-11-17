@@ -18,7 +18,6 @@ package service
 
 import (
 	"context"
-	"strconv"
 	"sync"
 	"time"
 
@@ -160,6 +159,13 @@ func (s *DeviceOfflineSyncer) syncOnce() {
 		if err != nil {
 			continue // 单设备读取失败跳过，不影响其他设备
 		}
+		// Redis 里已有的最后活跃时间：置 OFFLINE 时必须原样保留。
+		// 写成 nowMs 会让详情接口（以 Hash 为准）把"检测到离线的时刻"当成设备最后活跃时间，
+		// 而 PG 那边恰恰是被刻意保留真实值的。
+		prevActiveMs := int64(0)
+		if len(vals) >= 2 {
+			prevActiveMs = cache.HashInt64(vals[1])
+		}
 
 		offline := false
 		switch {
@@ -170,8 +176,7 @@ func (s *DeviceOfflineSyncer) syncOnce() {
 			// Redis 已标记 OFFLINE，PG 滞后 → 同步 PG
 			offline = true
 		default:
-			lastActiveMs := parseInt64(vals[1])
-			if lastActiveMs <= 0 || nowMs-lastActiveMs > thresholdMs {
+			if prevActiveMs <= 0 || nowMs-prevActiveMs > thresholdMs {
 				offline = true
 			}
 		}
@@ -179,8 +184,8 @@ func (s *DeviceOfflineSyncer) syncOnce() {
 			continue
 		}
 
-		// 3.1 先将 Redis 置为 OFFLINE（缓存为准）
-		if err := s.cache.CacheDeviceStatus(ctx, deviceID, "OFFLINE", nowMs); err != nil {
+		// 3.1 先将 Redis 置为 OFFLINE（缓存为准），保留原 lastActiveTime（0 = 未知）
+		if err := s.cache.CacheDeviceStatus(ctx, deviceID, "OFFLINE", prevActiveMs); err != nil {
 			zap.L().Warn("[OfflineSyncer] Redis置离线失败",
 				zap.String("deviceID", deviceID), zap.Error(err))
 		}
@@ -200,18 +205,5 @@ func (s *DeviceOfflineSyncer) syncOnce() {
 
 	if marked > 0 {
 		zap.L().Info("[OfflineSyncer] 离线设备已同步到PostgreSQL", zap.Int("count", marked))
-	}
-}
-
-// parseInt64 解析 Redis Hash 字段值（HSet 写入的 int64 读回为 string）
-func parseInt64(v any) int64 {
-	switch val := v.(type) {
-	case string:
-		n, _ := strconv.ParseInt(val, 10, 64)
-		return n
-	case int64:
-		return val
-	default:
-		return 0
 	}
 }

@@ -54,28 +54,6 @@ func TestDeviceOfflineSyncer_Setters(t *testing.T) {
 	svc.onOffline("x") // 不应 panic
 }
 
-func TestParseInt64(t *testing.T) {
-	tests := []struct {
-		name string
-		val  any
-		want int64
-	}{
-		{"string 数字", "123456", 123456},
-		{"string 负数", "-5", -5},
-		{"string 非数字", "abc", 0},
-		{"string 空", "", 0},
-		{"int64", int64(42), 42},
-		{"float64 不支持", float64(1.5), 0},
-		{"nil", nil, 0},
-		{"uint64 不支持", uint64(7), 0},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, parseInt64(tt.val))
-		})
-	}
-}
-
 // buildSyncer 构造「真实 sqlite 仓库 + miniredis 缓存」的同步器；
 // interval/threshold 调大避免 ticker 干扰 syncOnce 单轮测试。
 func buildSyncer(t *testing.T) (*DeviceOfflineSyncer, *ent.Client, *miniredisSrv) {
@@ -237,4 +215,20 @@ func TestDeviceOfflineSyncer_StartStop(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("二次 Stop 阻塞")
 	}
+}
+
+// TestSyncOnce_KeepsLastActiveTime 置 OFFLINE 时必须保留原有的 lastActiveTime：
+// 详情接口以 Redis Hash 为准，写成"检测到离线的时刻"会把设备最后活跃时间往后推。
+func TestSyncOnce_KeepsLastActiveTime(t *testing.T) {
+	svc, client, mr := buildSyncer(t)
+	seedOnline(t, client, "d9")
+	staleMs := time.Now().Add(-3 * time.Hour).UnixMilli()
+	mr.HSet(cache.PrefixDeviceStatus+"d9", "status", "ONLINE",
+		"lastActiveTime", strconv.FormatInt(staleMs, 10))
+
+	svc.syncOnce()
+
+	assert.Equal(t, "OFFLINE", pgStatus(t, client, "d9"))
+	assert.Equal(t, "OFFLINE", mr.HGet(cache.PrefixDeviceStatus+"d9", "status"))
+	assert.Equal(t, strconv.FormatInt(staleMs, 10), mr.HGet(cache.PrefixDeviceStatus+"d9", "lastActiveTime"))
 }

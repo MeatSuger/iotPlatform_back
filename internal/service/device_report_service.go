@@ -48,12 +48,17 @@ type DeviceReportService struct {
 	localCache *cache.LocalCache
 
 	// PostgreSQL 批量更新（debounced，避免每个请求 spawn goroutine）
-	pgUpdateMu      sync.Mutex
-	pgUpdatePending map[string]time.Time // deviceID → 最新活跃时间
-	pgUpdateTimer   *time.Timer
+	pgUpdateMu       sync.Mutex
+	pgUpdatePending  map[string]time.Time // deviceID → 最新活跃时间
+	pgUpdateTimer    *time.Timer
+	pgFlushing       bool                                        // 是否有 flush 正在执行（防止并发 flush 叠加）
+	updateLastActive func(context.Context, string, string) error // 可注入，生产指向 deviceRepo.UpdateLastActive
 }
 
-const pgDebounceInterval = 5 * time.Second // PostgreSQL 活跃时间更新防抖间隔
+const (
+	pgDebounceInterval = 5 * time.Second  // PostgreSQL 活跃时间更新防抖间隔
+	pgFlushTimeout     = 30 * time.Second // 单次批量更新总超时（PG 不可用时不无限挂住）
+)
 
 func NewDeviceReportService(
 	deviceRepo *repository.DeviceRepo,
@@ -68,6 +73,9 @@ func NewDeviceReportService(
 		deviceSvc:       deviceSvc,
 		localCache:      cache.NewLocalCache(5 * time.Second), // L1 5s TTL，覆盖高频上报
 		pgUpdatePending: make(map[string]time.Time),
+	}
+	if deviceRepo != nil {
+		svc.updateLastActive = deviceRepo.UpdateLastActive
 	}
 	return svc
 }
@@ -135,33 +143,51 @@ func (s *DeviceReportService) validateSensorValues(ctx context.Context, deviceID
 
 // schedulePGUpdate 防抖批量更新 PostgreSQL 设备活跃时间（合并 5s 窗口内多次上报为一次批量更新）
 func (s *DeviceReportService) schedulePGUpdate(deviceID string) {
-	now := time.Now()
-
 	s.pgUpdateMu.Lock()
-	s.pgUpdatePending[deviceID] = now
+	defer s.pgUpdateMu.Unlock()
 
-	if s.pgUpdateTimer == nil {
-		s.pgUpdateTimer = time.AfterFunc(pgDebounceInterval, func() {
-			s.flushPGUpdates()
-		})
+	s.pgUpdatePending[deviceID] = time.Now()
+
+	// 已有 flush 在执行时不再排新定时器：否则 PG 变慢期间每次上报都会叠加一个
+	// 并发 flush，goroutine 与连接等待无上限增长。flush 结束时统一补排。
+	if s.pgUpdateTimer == nil && !s.pgFlushing {
+		s.pgUpdateTimer = time.AfterFunc(pgDebounceInterval, s.flushPGUpdates)
 	}
-	s.pgUpdateMu.Unlock()
 }
 
-// flushPGUpdates 批量执行 PostgreSQL 活跃时间更新
+// flushPGUpdates 批量执行 PostgreSQL 活跃时间更新。
+// 同一时刻只允许一个 flush；带总超时，PG 故障时不会无限挂住。
 func (s *DeviceReportService) flushPGUpdates() {
 	s.pgUpdateMu.Lock()
+	if s.pgFlushing {
+		s.pgUpdateMu.Unlock()
+		return
+	}
 	pending := s.pgUpdatePending
 	s.pgUpdatePending = make(map[string]time.Time)
 	s.pgUpdateTimer = nil
+	s.pgFlushing = true
 	s.pgUpdateMu.Unlock()
 
-	ctx := context.Background()
-	for deviceID := range pending {
-		if err := s.deviceRepo.UpdateLastActive(ctx, deviceID, "ONLINE"); err != nil {
-			zap.S().Warnf("[DeviceReport] 批量更新活跃时间失败 [device=%s]: %v", deviceID, err)
+	ctx, cancel := context.WithTimeout(context.Background(), pgFlushTimeout)
+	defer cancel()
+
+	update := s.updateLastActive
+	if update != nil {
+		for deviceID := range pending {
+			if err := update(ctx, deviceID, "ONLINE"); err != nil {
+				zap.S().Warnf("[DeviceReport] 批量更新活跃时间失败 [device=%s]: %v", deviceID, err)
+			}
 		}
 	}
+
+	s.pgUpdateMu.Lock()
+	s.pgFlushing = false
+	// flush 期间新到的上报攒在新 pending 里：补排下一轮，不能丢。
+	if s.pgUpdateTimer == nil && len(s.pgUpdatePending) > 0 {
+		s.pgUpdateTimer = time.AfterFunc(pgDebounceInterval, s.flushPGUpdates)
+	}
+	s.pgUpdateMu.Unlock()
 }
 
 // ReportStatus 设备上报传感器数据（带 Token 校验，供非 HTTP 入口调用）
@@ -243,15 +269,17 @@ func (s *DeviceReportService) reportStatusFast(ctx context.Context, deviceID str
 	if s.buffer != nil {
 		if err := s.cache.FastReportWrite(ctx, deviceID, "ONLINE", nowMs, sensorsJSON, bufferData); err != nil {
 			zap.S().Warnf("[DeviceReport] 快速写入失败 [device=%s]: %v", deviceID, err)
-			// 降级：逐条写入
-			s.cache.CacheDeviceStatus(ctx, deviceID, "ONLINE", nowMs)
-			s.cache.CacheSensorRecent(ctx, deviceID, dto.Sensors)
+			// 降级：逐条写入。缓存是尽力而为（PG/InfluxDB 才是落库路径），
+			// 失败不能让上报返回错误。
+			_ = s.cache.CacheDeviceStatus(ctx, deviceID, "ONLINE", nowMs)
+			_ = s.cache.CacheSensorRecent(ctx, deviceID, dto.Sensors)
 			s.writeSensorsSync(deviceID, dto)
 		}
 	} else {
-		// 无缓冲器：逐条更新状态与传感器缓存，并同步写 InfluxDB
-		s.cache.CacheDeviceStatus(ctx, deviceID, "ONLINE", nowMs)
-		s.cache.CacheSensorRecent(ctx, deviceID, dto.Sensors)
+		// 无缓冲器：逐条更新状态与传感器缓存，并同步写 InfluxDB。
+		// 缓存写同样是尽力而为，失败不影响上报成功。
+		_ = s.cache.CacheDeviceStatus(ctx, deviceID, "ONLINE", nowMs)
+		_ = s.cache.CacheSensorRecent(ctx, deviceID, dto.Sensors)
 		s.writeSensorsSync(deviceID, dto)
 	}
 
@@ -286,7 +314,12 @@ func (s *DeviceReportService) writeSensorsSync(deviceID string, dto entity.Devic
 // ============================================================
 
 // FlushReports 批量写入传感器数据到 InfluxDB
-func (s *DeviceReportService) FlushReports(_ context.Context, reports []BufferedReport) error {
+//
+// 必须同步返回写入结果：DeviceDataBuffer 靠这个 error 决定是否把整批数据重新入队。
+// 早期版本这里调用 WriteSensorsAsync（fire-and-forget 后立即 return nil），
+// 导致 drain 的"写入失败重新入队"永远不会触发——InfluxDB 故障时数据已被 RPOP 出队，
+// 每批 200 条上报就这样静默丢弃。
+func (s *DeviceReportService) FlushReports(ctx context.Context, reports []BufferedReport) error {
 	if len(reports) == 0 {
 		return nil
 	}
@@ -305,8 +338,8 @@ func (s *DeviceReportService) FlushReports(_ context.Context, reports []Buffered
 		}
 	}
 
-	s.influxSvc.WriteSensorsAsync(allData)
-	return nil
+	// 同步写：失败要让调用方（drain）看到并重新入队，不能异步后静默报成功
+	return s.influxSvc.WriteSensors(ctx, allData)
 }
 
 // resolveReportTime 决定数据点写入时间：传感器时间戳 → report 时间戳 → 服务端当前时间。
