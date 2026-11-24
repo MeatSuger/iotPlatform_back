@@ -87,13 +87,13 @@ type MqttGatewayController struct {
 	ingestCh chan reportJob
 
 	// —— 在线/离线状态机 ——
-	// conns 登记所有活跃的 MQTT 桥接连接（deviceID → 连接生命周期状态）：
-	//   - IsConnected 供离线同步器误判保护（连接存活 ≠ 离线，即使长时间未上报）
-	//   - 连接关闭 → 立即置 OFFLINE（Redis+PG），不等离线同步器周期扫描
-	//   - 同设备新连接顶替旧连接（与原生 WS Hub.Register 语义一致）
+	// conns 登记所有活跃的 MQTT 桥接连接：deviceID → clientID → 连接生命周期状态。
+	// 为什么多一层 clientID：同一设备可能同时有多条连接（设备自身 ESP32_xxx + 浏览器投图
+	// iot-web-xxx）。仅按 deviceID 顶号会把正在工作的设备踢下线，投图因 QoS0 无人收而丢；
+	// 顶号只应发生在「同一 clientID 真重连」时，离线也只应在该设备最后一条连接关闭时判定。
 	idleTimeout time.Duration // 空闲看护阈值兜底（配置 idle-timeout-sec；设备 CONNECT keepalive 自适配优先）
 	connMu      sync.RWMutex
-	conns       map[string]*mqttConn                // deviceID(lower) → 活跃连接
+	conns       map[string]map[string]*mqttConn     // deviceID(lower) → clientID → 活跃连接
 	onOnline    func(deviceID string, ownerID uint) // 可选：设备上线通知（owner 管理端 WS 推送）
 	onOffline   func(deviceID string, ownerID uint) // 可选：设备离线通知（owner 管理端 WS 推送）
 }
@@ -105,6 +105,7 @@ type MqttGatewayController struct {
 // 连接关闭或空闲超时（设备失联）→ 立即离线。
 type mqttConn struct {
 	deviceID string
+	clientID string        // MQTT CONNECT 携带的客户端标识（同设备多连接的区分键）
 	token    string        // 本连接 CONNECT 鉴权使用的设备 Token（用户连接为空）
 	ownerID  uint          // 设备归属用户（上线/下线推送用）
 	timeout  time.Duration // 空闲看护阈值（keepalive×1.5 提炼，无任何帧即判失联）
@@ -161,7 +162,7 @@ func NewMqttGatewayController(msgRepo *repository.MessageLogRepo, reportSvc *ser
 		cache:        cache,
 		deviceTokens: make(map[string]string),
 		idleTimeout:  time.Duration(config.Cfg.MqttGateway.IdleTimeoutSec) * time.Second,
-		conns:        make(map[string]*mqttConn),
+		conns:        make(map[string]map[string]*mqttConn),
 	}
 	g.startWriters()
 	return g
@@ -276,7 +277,11 @@ func (g *MqttGatewayController) unregisterDeviceToken(conn *mqttConn) {
 		return
 	}
 	g.connMu.RLock()
-	isCurrent := g.conns[conn.deviceID] == conn
+	isCurrent := false
+	if m := g.conns[conn.deviceID]; m != nil {
+		cur, ok := m[conn.clientID]
+		isCurrent = ok && cur == conn
+	}
 	g.connMu.RUnlock()
 	if !isCurrent {
 		return
@@ -308,9 +313,9 @@ func (g *MqttGatewayController) SetPresenceCallbacks(onOnline, onOffline func(de
 // （该设备的上报/心跳由本网关的 SUBSCRIBE 上线 + 空闲超时看护负责，双保险）。
 func (g *MqttGatewayController) IsConnected(deviceID string) bool {
 	g.connMu.RLock()
-	defer g.connMu.RUnlock()
-	_, ok := g.conns[strings.ToLower(deviceID)]
-	return ok
+	m, ok := g.conns[strings.ToLower(deviceID)]
+	g.connMu.RUnlock()
+	return ok && len(m) > 0
 }
 
 // registerConn 登记设备连接（在线判定）。同设备新连接到来时踢下线旧连接
@@ -320,34 +325,55 @@ func (g *MqttGatewayController) registerConn(conn *mqttConn, ws *websocket.Conn,
 	conn.tcp = tcp
 
 	g.connMu.Lock()
-	if old, ok := g.conns[conn.deviceID]; ok && old != conn {
-		zap.S().Infof("[MQTT网关] 设备 %s 重新连接，踢下线旧连接", conn.deviceID)
+	m := g.conns[conn.deviceID]
+	if m == nil {
+		m = make(map[string]*mqttConn, 1)
+		g.conns[conn.deviceID] = m
+	}
+	// 只有同一 clientID 重复接入才是「真重连」，才踢旧连接；
+	// 不同 clientID（浏览器投图等）与设备连接共存。
+	if old, ok := m[conn.clientID]; ok && old != conn {
+		zap.S().Infof("[MQTT网关] 设备 %s 同一客户端 %s 重新连接，踢下线旧连接", conn.deviceID, conn.clientID)
 		old.close()
 	}
-	g.conns[conn.deviceID] = conn
-	n := len(g.conns)
+	m[conn.clientID] = conn
+	n := len(m)
 	g.connMu.Unlock()
 
-	zap.S().Infof("[MQTT网关] 设备 %s 桥接登记, 当前活跃连接: %d", conn.deviceID, n)
+	zap.S().Infof("[MQTT网关] 设备 %s 桥接登记（client=%s），该设备活跃连接: %d", conn.deviceID, conn.clientID, n)
 }
 
-// unregisterConn 连接收尾：从登记表移除；若该连接已订阅上线，
+// unregisterConn 连接收尾：从登记表移除；若该连接已订阅上线且是该设备最后一条连接，
 // 立即置 OFFLINE（Redis+PG）并通知 owner 管理端（不再依赖离线同步器周期扫描）。
 //
-// 被新连接顶替（reconnect）的旧连接由 registerConn 提前踢下线，
-// 此处通过「登记表仍指向本连接」判断静默跳过状态修改，避免误把新连接置为离线。
+// 两种“跳过离线”的情形：
+//   - 被同一 clientID 的新连接顶替：登记表已不指向本连接，状态由新连接负责；
+//   - 该设备还有其它存活连接（如浏览器投图）：设备并未离线。
 func (g *MqttGatewayController) unregisterConn(conn *mqttConn) {
 	conn.unregisterOnce.Do(func() {
 		g.connMu.Lock()
-		isCurrent := g.conns[conn.deviceID] == conn // 登记表仍指向本连接？（未被新连接顶替）
-		if isCurrent {
-			delete(g.conns, conn.deviceID)
+		isCurrent := false
+		if m := g.conns[conn.deviceID]; m != nil {
+			if cur, ok := m[conn.clientID]; ok && cur == conn {
+				delete(m, conn.clientID)
+				isCurrent = true
+				if len(m) == 0 {
+					delete(g.conns, conn.deviceID)
+				}
+			}
 		}
+		siblingsLeft := len(g.conns[conn.deviceID]) > 0
 		g.connMu.Unlock()
 
 		// 已被新连接顶替（reconnect）：本连接踢下线收尾，状态由新连接负责，静默跳过
 		if !isCurrent {
 			zap.S().Infof("[MQTT网关] 设备 %s 旧连接收尾（已被新连接顶替，跳过离线修改）", conn.deviceID)
+			return
+		}
+
+		// 同设备还有其它连接存活 → 设备仍在线
+		if siblingsLeft {
+			zap.S().Infof("[MQTT网关] 设备 %s 连接结束（同设备仍有其它连接，跳过离线修改）", conn.deviceID)
 			return
 		}
 
@@ -547,6 +573,7 @@ func (g *MqttGatewayController) HandleWebSocket(c *gin.Context) {
 	// 5.6 连接生命周期状态：登记 + 上线/下线判定
 	conn := &mqttConn{
 		deviceID: deviceID,
+		clientID: clientID,
 		token:    token,
 		timeout:  g.computeIdleTimeout(keepAlive),
 		isUser:   isUser,
@@ -815,6 +842,18 @@ func (g *MqttGatewayController) onPublish(topic string, payload []byte, connDevi
 			zap.S().Debugf("[MQTT网关] PUBLISH payload 解析失败 [device=%s topic=%s]: %v", deviceID, topic, err)
 		}
 		return
+	}
+	// 面板信息复用 telemetry 通道：只记录，不进传感器入库；允许没有 sensors。
+	if dto.Panel != nil {
+		if dto.Panel.Chip == "" || dto.Panel.Width <= 0 || dto.Panel.Height <= 0 {
+			zap.S().Warnf("[MQTT网关] 面板信息非法 [device=%s]: %+v", deviceID, *dto.Panel)
+		} else {
+			zap.S().Infof("[MQTT网关] 面板信息 [device=%s chip=%s %dx%d]",
+				deviceID, dto.Panel.Chip, dto.Panel.Width, dto.Panel.Height)
+		}
+		if len(dto.Sensors) == 0 {
+			return
+		}
 	}
 	if len(dto.Sensors) == 0 {
 		if telemetryTopic(topic) {

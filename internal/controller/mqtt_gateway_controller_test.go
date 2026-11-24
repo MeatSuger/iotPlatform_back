@@ -810,13 +810,13 @@ func TestMqttGatewayController_DisconnectWithoutSubscribeNoOffline(t *testing.T)
 func TestMqttGatewayController_ReconnectNewConnWins(t *testing.T) {
 	gw, rcache, deviceID := newSubscribeEnv(t)
 
-	// 旧连接已订阅上线并登记
-	oldConn := &mqttConn{deviceID: deviceID}
+	// 旧连接已订阅上线并登记（同一 clientID = 真正的重连）
+	oldConn := &mqttConn{deviceID: deviceID, clientID: "ESP32_ab12cd"}
 	gw.onSubscribe(buildSubscribePacket(4, "iot/"+deviceID+"/config"), 4, oldConn)
 	gw.registerConn(oldConn, nil, nil)
 
 	// 新连接到来顶替旧连接（踢下线）
-	newConn := &mqttConn{deviceID: deviceID}
+	newConn := &mqttConn{deviceID: deviceID, clientID: "ESP32_ab12cd"}
 	gw.onSubscribe(buildSubscribePacket(4, "iot/"+deviceID+"/config"), 4, newConn)
 	gw.registerConn(newConn, nil, nil)
 	assert.True(t, gw.IsConnected(deviceID))
@@ -844,12 +844,12 @@ func TestMqttGatewayController_ReconnectKeepsNewToken(t *testing.T) {
 	const token = "same-token"
 
 	// 旧连接建立并登记 Token
-	oldConn := &mqttConn{deviceID: deviceID, token: token}
+	oldConn := &mqttConn{deviceID: deviceID, clientID: "ESP32_tok001", token: token}
 	gw.registerConn(oldConn, nil, nil)
 	gw.registerDeviceToken(deviceID, token)
 
-	// 新连接顶替旧连接（IsShare：复用同一 Token）
-	newConn := &mqttConn{deviceID: deviceID, token: token}
+	// 新连接顶替旧连接（IsShare：复用同一 Token，同一 clientID）
+	newConn := &mqttConn{deviceID: deviceID, clientID: "ESP32_tok001", token: token}
 	gw.registerConn(newConn, nil, nil)
 	gw.registerDeviceToken(deviceID, token)
 
@@ -864,6 +864,38 @@ func TestMqttGatewayController_ReconnectKeepsNewToken(t *testing.T) {
 	gw.unregisterConn(newConn)
 	assert.Equal(t, "", gw.deviceToken(deviceID), "当前连接关闭后应注销自身 Token")
 	assert.False(t, gw.IsConnected(deviceID))
+}
+
+// TestMqttGatewayController_DifferentClientIDCoexist 回归：同一设备的多条连接
+// （设备自身 ESP32_xxx + 浏览器投图 iot-web-xxx）clientID 不同，必须共存互不顶号。
+// 按 deviceID 顶号会把正在工作的设备踢下线，投的图因 QoS0 无人收而丢，设备侧只能
+// 看到一个莫名的 WSS EOF。
+func TestMqttGatewayController_DifferentClientIDCoexist(t *testing.T) {
+	gw, rcache, deviceID := newSubscribeEnv(t)
+
+	// 设备连接：订阅自身主题 → ONLINE
+	devConn := &mqttConn{deviceID: deviceID, clientID: "ESP32_ab12cd"}
+	gw.onSubscribe(buildSubscribePacket(4, "iot/"+deviceID+"/cmd"), 4, devConn)
+	gw.registerConn(devConn, nil, nil)
+
+	// 浏览器投图连接（同一设备身份、不同 clientID，不订阅）
+	webConn := &mqttConn{deviceID: deviceID, clientID: "iot-web-6b1da649"}
+	gw.registerConn(webConn, nil, nil)
+	assert.True(t, gw.IsConnected(deviceID), "两条连接应共存")
+
+	// 投图连接结束 → 设备仍在线，不得被置 OFFLINE
+	gw.unregisterConn(webConn)
+	assert.True(t, gw.IsConnected(deviceID), "投图连接结束不应影响设备连接")
+	status, _, err := rcache.GetCachedDeviceStatus(context.Background(), deviceID)
+	require.NoError(t, err)
+	assert.Equal(t, "ONLINE", status, "投图连接结束不得把设备置离线")
+
+	// 设备连接结束 → 真正离线
+	gw.unregisterConn(devConn)
+	assert.False(t, gw.IsConnected(deviceID))
+	status, _, err = rcache.GetCachedDeviceStatus(context.Background(), deviceID)
+	require.NoError(t, err)
+	assert.Equal(t, "OFFLINE", status)
 }
 
 func TestMqttGatewayController_PresenceCallbacks(t *testing.T) {
