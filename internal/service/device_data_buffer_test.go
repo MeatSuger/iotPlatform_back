@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -139,21 +140,36 @@ func TestDeviceDataBuffer_Defaults(t *testing.T) {
 	assert.Equal(t, "buffer:device_reports", defaultBufferKey)
 	assert.Equal(t, 200, defaultBatchSize)
 	assert.Equal(t, 200*time.Millisecond, defaultFlushInterval)
+	assert.Equal(t, 4, defaultWorkers)
 }
 
 // ========================================
 // 真实 Redis（miniredis）缓冲队列测试
 // ========================================
 
-// fakeWriter 记录 FlushReports 调用，可注入失败
+// fakeWriter 记录 FlushReports 调用，可注入失败（多 worker 并发写入，需加锁）
 type fakeWriter struct {
+	mu      sync.Mutex
 	reports [][]BufferedReport
 	fail    error
 }
 
 func (w *fakeWriter) FlushReports(_ context.Context, reports []BufferedReport) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.reports = append(w.reports, reports)
 	return w.fail
+}
+
+// total 返回已刷盘的报条数
+func (w *fakeWriter) total() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := 0
+	for _, batch := range w.reports {
+		n += len(batch)
+	}
+	return n
 }
 
 func testReport(deviceID string, ts int64) BufferedReport {
@@ -258,4 +274,40 @@ func TestDeviceDataBuffer_RPopError(t *testing.T) {
 	buf.Start()
 	time.Sleep(80 * time.Millisecond)
 	buf.Stop() // 空队列 + Redis 正常：无副作用
+}
+
+// TestDeviceDataBuffer_ConcurrentWorkers 多 worker 并发 drain 不丢不重
+func TestDeviceDataBuffer_ConcurrentWorkers(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	writer := &fakeWriter{}
+	buf := NewDeviceDataBuffer(rdb, writer)
+	buf.batchSize = 10
+	buf.flushInterval = 80 * time.Millisecond
+
+	now := time.Now().UnixMilli()
+	for i := range 50 {
+		enqueueReport(t, rdb, buf, testReport("dev"+strconv.Itoa(i), now))
+	}
+
+	buf.Start()
+	defer buf.Stop()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && queuedReports(t, rdb, buf) > 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	assert.Equal(t, int64(0), queuedReports(t, rdb, buf))
+	assert.Equal(t, 50, writer.total(), "每条上报只应刷盘一次")
+}
+
+// TestDeviceDataBuffer_Push 降级写回：payload 原样入队，后台 worker 照常落库
+func TestDeviceDataBuffer_Push(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	buf := NewDeviceDataBuffer(rdb, &fakeWriter{})
+
+	data, err := json.Marshal(testReport("dev1", time.Now().UnixMilli()))
+	require.NoError(t, err)
+	require.NoError(t, buf.Push(context.Background(), data))
+
+	assert.Equal(t, int64(1), queuedReports(t, rdb, buf))
 }

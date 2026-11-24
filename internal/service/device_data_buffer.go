@@ -66,6 +66,7 @@ type DeviceDataBuffer struct {
 	bufferKey     string        // Redis List key
 	batchSize     int           // 每批最大条数
 	flushInterval time.Duration // 刷新间隔
+	workers       int           // 后台并发 drain 的 worker 数
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -75,6 +76,9 @@ const (
 	defaultBufferKey     = cache.BufferDeviceReportsKey
 	defaultBatchSize     = 200
 	defaultFlushInterval = 200 * time.Millisecond
+	// defaultWorkers 单 worker 时吞吐上限 = batchSize / 单批写入耗时，InfluxDB 抖一下就积压；
+	// 多 worker 让「写入慢」只影响延迟不影响吞吐。
+	defaultWorkers = 4
 )
 
 // NewDeviceDataBuffer 创建设备数据缓冲器
@@ -85,17 +89,31 @@ func NewDeviceDataBuffer(rdb *redis.Client, writer BatchWriter) *DeviceDataBuffe
 		bufferKey:     defaultBufferKey,
 		batchSize:     defaultBatchSize,
 		flushInterval: defaultFlushInterval,
+		workers:       defaultWorkers,
 		stopCh:        make(chan struct{}),
 	}
 }
 
 // Start 启动后台 worker
 func (b *DeviceDataBuffer) Start() {
-	b.wg.Add(1)
-	go b.worker()
+	b.wg.Add(b.workers)
+	for range b.workers {
+		go b.worker()
+	}
 	zap.L().Info("[DataBuffer] 后台缓冲 worker 已启动",
+		zap.Int("workers", b.workers),
 		zap.Int("batchSize", b.batchSize),
 		zap.Duration("flushInterval", b.flushInterval))
+}
+
+// Push 降级写回：Redis 快路径失败时把原始上报 payload 放回队列，交给后台 worker 落库。
+// 推左侧（worker 从右侧取），失败重试不会形成紧循环。
+func (b *DeviceDataBuffer) Push(ctx context.Context, raw []byte) error {
+	pipe := b.rdb.Pipeline()
+	pipe.LPush(ctx, b.bufferKey, raw)
+	pipe.LTrim(ctx, b.bufferKey, 0, cache.BufferQueueMaxLen-1)
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 // Stop 优雅停止
