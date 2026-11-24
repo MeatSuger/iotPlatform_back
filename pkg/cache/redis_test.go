@@ -354,6 +354,44 @@ func TestRedisCache_FastReportWrite(t *testing.T) {
 	assert.Equal(t, int64(1), n)
 }
 
+// TestRedisCache_FastReportWrite_NoPublish 上报热路径不得广播跨实例失效（会把读侧 L1 打穿）
+func TestRedisCache_FastReportWrite_NoPublish(t *testing.T) {
+	_, c, _ := newCacheWithMini(t)
+	ctx := context.Background()
+
+	sub := c.client.Subscribe(ctx, invalidationChannel)
+	defer func() { _ = sub.Close() }()
+	if _, err := sub.Receive(ctx); err != nil {
+		t.Fatalf("订阅建立失败: %v", err)
+	}
+	ch := sub.Channel()
+
+	assert.NoError(t, c.FastReportWrite(ctx, "d-hot", "ONLINE", 1,
+		[]byte(`[{"name":"t"}]`), []byte(`{"device_id":"d-hot"}`)))
+	select {
+	case msg := <-ch:
+		t.Fatalf("热路径不应广播失效，收到: %s", msg.Payload)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestRedisCache_FastReportWrite_TrimsBufferQueue 缓冲队列超限时必须裁掉最旧的
+func TestRedisCache_FastReportWrite_TrimsBufferQueue(t *testing.T) {
+	_, c, _ := newCacheWithMini(t)
+	ctx := context.Background()
+
+	vals := make([]any, BufferQueueMaxLen+10)
+	for i := range vals {
+		vals[i] = "old"
+	}
+	assert.NoError(t, c.client.LPush(ctx, BufferDeviceReportsKey, vals...).Err())
+
+	assert.NoError(t, c.FastReportWrite(ctx, "d1", "ONLINE", 1, []byte(`[]`), []byte(`{"new":1}`)))
+	n, err := c.client.LLen(ctx, BufferDeviceReportsKey).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(BufferQueueMaxLen), n)
+}
+
 func TestRedisCache_SensorCaches(t *testing.T) {
 	_, c, _ := newCacheWithMini(t)
 	ctx := context.Background()
@@ -495,25 +533,25 @@ func TestRedisCache_SensorHistoryKeyBucket(t *testing.T) {
 	end := time.Unix(1700003600, 0)
 
 	var out []int
-	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start, end, false, "raw", &out, loader))
+	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start, end, "raw", &out, loader))
 	// 1 秒后的滚动窗口（同一分钟内）→ 命中同一份缓存
-	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start.Add(time.Second), end.Add(time.Second), false, "raw", &out, loader))
+	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start.Add(time.Second), end.Add(time.Second), "raw", &out, loader))
 	assert.Equal(t, 1, loadCount)
 
 	// 不同时间窗仍是不同键
-	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start.Add(-time.Hour), end, false, "raw", &out, loader))
+	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start.Add(-time.Hour), end, "raw", &out, loader))
 	assert.Equal(t, 2, loadCount)
 
 	// 降采样变体不能与原始点共用缓存
-	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start, end, false, "1h", &out, loader))
+	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start, end, "1h", &out, loader))
 	assert.Equal(t, 3, loadCount)
 
-	// 窄窗口（<1 个桶）必须精确入键：两端取整都会落到同一分钟，
-	// 取整会让两个不同的 30 秒窗口互相串数据（返回窗口外的点）
+	// 分钟粒度：窄窗口两端取整后落到同一分钟 → 同一份缓存（查询语义已降为分钟级）
 	narrowStart := time.Unix(1700010005, 0)
-	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, narrowStart, narrowStart.Add(30*time.Second), false, "raw", &out, loader))
-	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, narrowStart.Add(15*time.Second), narrowStart.Add(45*time.Second), false, "raw", &out, loader))
-	assert.Equal(t, 5, loadCount)
+	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, narrowStart, narrowStart.Add(30*time.Second), "raw", &out, loader))
+	assert.Equal(t, 4, loadCount)
+	assert.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, narrowStart.Add(15*time.Second), narrowStart.Add(45*time.Second), "raw", &out, loader))
+	assert.Equal(t, 4, loadCount)
 }
 
 // TestHashInt64 Hash 字段数字解析（HSet 写入的 int64 读回为 string）
@@ -735,4 +773,59 @@ func TestRedisCache_GetOrLoad_NotFoundClearsStale(t *testing.T) {
 	}))
 	assert.Equal(t, "fresh-value", fresh, "not-found 后不得再返回 stale 旧值")
 	assert.Equal(t, 3, loadCount, "Redis 故障且无 stale 时应调用 loader")
+}
+
+// TestRedisCache_SensorHistoryStaleOK 本分钟缓存未就绪时不阻塞请求：
+// 用上一分钟的旧值立刻顶位，回源在后台跑。
+func TestRedisCache_SensorHistoryStaleOK(t *testing.T) {
+	_, c, _ := newCacheWithMini(t)
+	ctx := context.Background()
+
+	start := time.Unix(1700000000, 0)
+	end := start.Add(3 * 24 * time.Hour)
+
+	// 第一分钟：冷启动，同步回源
+	loadCount := 0
+	loader := func(ctx context.Context) (any, error) {
+		loadCount++
+		return []int{loadCount}, nil
+	}
+	var out []int
+	require.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, start, end, "raw", &out, loader))
+	require.Equal(t, 1, loadCount)
+	require.Equal(t, []int{1}, out)
+
+	// 下一分钟：本分钟无缓存，但上一分钟有 —— 必须立即返回旧值，不能被 loader 阻塞
+	var slowDone = make(chan struct{})
+	slowLoader := func(ctx context.Context) (any, error) {
+		defer close(slowDone)
+		time.Sleep(300 * time.Millisecond)
+		return []int{2}, nil
+	}
+	nextStart, nextEnd := start.Add(time.Minute), end.Add(time.Minute)
+
+	began := time.Now()
+	var out2 []int
+	require.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, nextStart, nextEnd, "raw", &out2, slowLoader))
+	elapsed := time.Since(began)
+	require.Less(t, elapsed, 150*time.Millisecond, "陈旧值必须立刻返回，不能等回源")
+	require.Equal(t, []int{1}, out2, "返回的是上一分钟的旧值")
+
+	// 后台刷新最终会把本分钟填上
+	select {
+	case <-slowDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("后台刷新没有执行")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	var out3 []int
+	for time.Now().Before(deadline) {
+		out3 = nil
+		require.NoError(t, c.GetCachedSensorHistoryWithLoader(ctx, "d1", 50, nextStart, nextEnd, "raw", &out3, slowLoader))
+		if len(out3) == 1 && out3[0] == 2 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("后台刷新后仍读到旧值: %v", out3)
 }

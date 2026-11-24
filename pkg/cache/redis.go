@@ -92,19 +92,17 @@ const (
 
 	// 传感器历史曲线：单次查询要扫 InfluxDB 的 3 天窗口并排序，
 	// 是全部接口里唯一的重查询（压测实测 P95 比其他接口高 8~10 倍）。
-	// TTL 取"图表可接受的延迟"而非"数据实时性"——3 天趋势图落后 2 分钟无感知，
-	// 却能把 InfluxDB 查询量降 1~2 个数量级（30s → 120s 再降 4 倍）。
-	TTLSensorHistory      = 120 * time.Second // L2（3 天趋势图对 2 分钟延迟无感知）
-	TTLSensorHistoryLocal = 15 * time.Second  // L1（须 < L2）
+	// 需求定的是 30 秒粒度：Redis（L2）TTL 取 30s。
+	// 注意 L1 会在命中 L2 时刷新自己的 TTL，所以实际最坏可见延迟 ≈ L2 + L1。
+	TTLSensorHistory      = 2 * time.Minute  // L2 Redis：历史曲线按分钟粒度缓存，键本身每分钟换一次
+	TTLSensorHistoryLocal = 15 * time.Second // L1（须 < L2）
 
 	// TTLDeviceStatusLocal 设备状态 L1 TTL。状态是上下线抖动最敏感的数据，
 	// 取 5s 让跨实例的短暂不一致（状态写不广播失效）停在秒级。
 	TTLDeviceStatusLocal = 5 * time.Second
 
-	// sensorHistoryKeyBucket 历史查询缓存键的时间粒度。
-	// 用 API 原始时间戳（秒）做键会让"滚动窗口"（每次请求 start/end 都变）
-	// 命中率为 0——而滚动窗口正是历史曲线的典型用法。按分钟取整后同一分钟
-	// 内的窗口共用一份缓存，代价是最多落后 1 个桶（叠加 L2 TTL 后仍无感知）。
+	// sensorHistoryKeyBucket 历史查询缓存键的时间粒度，必须与
+	// service.HistoryGranularity（1 分钟）保持一致 —— 键取整比查询窗口粗，就会返回窗口外的点。
 	sensorHistoryKeyBucket = time.Minute
 
 	// staleLocalTTL 进程内"上一次成功值"的保留时长。Redis 故障时用它顶上，
@@ -511,45 +509,107 @@ func (c *RedisCache) EvictSensorRecentCache(ctx context.Context, deviceID string
 	return c.evictKey(ctx, PrefixSensorRecent+deviceID+":latest", false)
 }
 
-// GetCachedSensorHistoryWithLoader 读取设备历史曲线（Cache-Aside + singleflight）
+// GetCachedSensorHistoryWithLoader 读取设备历史曲线（Cache-Aside + stale-while-revalidate）
 //
-// 为什么必须缓存：历史查询要扫 InfluxDB 的 3 天窗口并排序，是全部接口里
-// 唯一的重查询。压测显示它是把 InfluxDB 打满（147% CPU）进而拖垮写路径的根因。
+// 为什么必须缓存：历史查询要扫 InfluxDB 的 3 天窗口（432 个 parquet 文件，单次 240~520ms，
+// 抖动时到秒级），是全部接口里唯一的重查询，也是压测里把 InfluxDB 和请求线程一起拖死的根因。
 //
-// 走 GetOrLoad 直接复用了缓存层已有的三项保护：
-//   - singleflight 防击穿：缓存过期瞬间的并发 miss 只回源一次
-//   - TTL 抖动防雪崩：±25% 随机偏移，避免批量同时过期
-//   - L1(本地) + L2(Redis) 两级缓存
+// 键 = deviceID + limit + 时间窗（按分钟取整）+ variant。同一分钟内的所有请求命中同一份缓存；
+// 上报新数据时不做任何增量更新，下一分钟自然换键。
 //
-// key 组成：deviceID + limit + 时间窗 + variant
-//   - 默认时间窗 → ":default"（高频路径，稳定命中）
-//   - 显式时间窗 → 按 unix 秒区分（避免不同窗口互相污染）
-//   - variant → 降采样模式等变体，必须区分：否则原始点请求会命中聚合缓存（反之亦然）
+// 快路径是 stale-while-revalidate（getOrLoadAllowStale）：命中直接返回；本分钟未命中就
+// 拿上一分钟的旧值顶位、后台刷新，请求线程不等 InfluxDB。只有冷启动（连上一分钟都没有）
+// 才同步回源，走 GetOrLoad 的 singleflight + L1/L2 两层缓存。
 func (c *RedisCache) GetCachedSensorHistoryWithLoader(
 	ctx context.Context,
 	deviceID string,
 	limit int,
 	start, end time.Time,
-	isDefaultRange bool,
 	variant string,
 	dest any,
 	loader func(context.Context) (any, error),
 ) error {
-	key := fmt.Sprintf("%s%s:%d", PrefixSensorHistory, deviceID, limit)
-	if isDefaultRange {
-		key += ":default"
-	} else if end.Sub(start) >= sensorHistoryKeyBucket {
-		// 宽窗口按桶取整：秒级时间戳会让滚动窗口（每次请求 start/end 都变）
-		// 与"只传 start"的请求命中率恒为 0，历史查询就会全部压到 InfluxDB。
-		key += fmt.Sprintf(":%d:%d", start.Truncate(sensorHistoryKeyBucket).Unix(), end.Truncate(sensorHistoryKeyBucket).Unix())
-	} else {
-		// 窄窗口（<1 个桶）两端会落到同一分钟，取整会让不同窗口互相串数据，必须精确
-		key += fmt.Sprintf(":%d:%d", start.Unix(), end.Unix())
-	}
+	key := sensorHistoryKey(deviceID, limit, start, end, variant)
+	// 上一分钟的键：本分钟还没查询完时用它顶位，让请求永远不等 InfluxDB
+	prevKey := sensorHistoryKey(deviceID, limit,
+		start.Add(-sensorHistoryKeyBucket), end.Add(-sensorHistoryKeyBucket), variant)
+	return c.getOrLoadAllowStale(ctx, key, prevKey, dest, loader)
+}
+
+// sensorHistoryKey 历史曲线缓存键：deviceID + limit + 时间窗（按分钟取整）+ variant
+func sensorHistoryKey(deviceID string, limit int, start, end time.Time, variant string) string {
+	key := fmt.Sprintf("%s%s:%d:%d:%d", PrefixSensorHistory, deviceID, limit,
+		start.Truncate(sensorHistoryKeyBucket).Unix(), end.Truncate(sensorHistoryKeyBucket).Unix())
 	if variant != "" {
 		key += ":" + variant
 	}
+	return key
+}
+
+// getOrLoadAllowStale 读缓存，允许用“上一份旧值”顶位（stale-while-revalidate）。
+//
+// 为什么必须这样：InfluxDB 的历史查询会抖（实测 0.3s~7s，偶发挂死到 60s 超时），
+// 而请求线程一旦等它，就会在 singleflight 里成片排队——压测里 history 的
+// p95=7.36s / p99=58s 全部是这么来的。现在：
+//
+//	L1/L2 命中    → 直接返回
+//	本分钟未命中  → 立刻返回上一分钟的旧值，同时后台单飞刷本分钟（不等人）
+//	连旧值也没  → 同步回源（冷启动/新设备，无法避免）
+//
+// 代价是最多晚 1~2 分钟才能查到刚上报的数据，与分钟粒度的产品语义一致。
+func (c *RedisCache) getOrLoadAllowStale(ctx context.Context, key, prevKey string, dest any, loader func(context.Context) (any, error)) error {
+	if data, ok := c.readHistoryCache(ctx, key); ok {
+		return json.Unmarshal(data, dest)
+	}
+
+	if prevKey != "" {
+		if data, ok := c.readHistoryCache(ctx, prevKey); ok {
+			if err := json.Unmarshal(data, dest); err == nil {
+				c.refreshHistoryAsync(key, loader)
+				return nil
+			}
+		}
+	}
+
 	return c.GetOrLoad(ctx, key, dest, TTLSensorHistory, TTLSensorHistoryLocal, loader)
+}
+
+// readHistoryCache L1 → L2 读取原始 bytes（L2 命中时回填 L1）
+func (c *RedisCache) readHistoryCache(ctx context.Context, key string) ([]byte, bool) {
+	if data, found, isNeg := c.local.getBytes(key); found {
+		return data, !isNeg
+	}
+	data, err := c.client.Get(ctx, key).Bytes()
+	if err != nil {
+		return nil, false
+	}
+	c.local.setBytes(key, data, TTLSensorHistoryLocal)
+	c.local.setStale(key, data)
+	return data, true
+}
+
+// refreshHistoryAsync 后台刷新当前分钟的缓存。
+// 走 singleflight 的 DoChan：同一键已有回源在飞时直接合并，不会堆 goroutine；
+// 结果无人接收也无妨（只为了把缓存填上）。
+func (c *RedisCache) refreshHistoryAsync(key string, loader func(context.Context) (any, error)) {
+	c.sg.DoChan(key, func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), loaderTimeout)
+		defer cancel()
+
+		result, err := loader(ctx)
+		if err != nil {
+			zap.L().Warn("[RedisCache] 历史查询后台刷新失败", zap.String("key", key), zap.Error(err))
+			return nil, err
+		}
+		data, err := json.Marshal(result)
+		if err != nil {
+			return nil, err
+		}
+		c.client.Set(ctx, key, data, jitterTTL(TTLSensorHistory))
+		c.local.setBytes(key, data, TTLSensorHistoryLocal)
+		c.local.setStale(key, data)
+		return data, nil
+	})
 }
 
 // ============================================================
@@ -614,14 +674,6 @@ const BufferDeviceReportsKey = "buffer:device_reports"
 // BufferQueueMaxLen 缓冲队列长度上限（防 InfluxDB 故障时无限增长耗尽内存）
 const BufferQueueMaxLen = 20000
 
-// bufferPushSrc 缓冲队列原子入队：LPUSH + LTRIM。
-// 拆成两条命令时，LTrim 失败会让 List 无限增长（与 MQTT 历史同一个坑）。
-const bufferPushSrc = `
-	redis.call('LPUSH', KEYS[1], ARGV[1])
-	redis.call('LTRIM', KEYS[1], 0, tonumber(ARGV[2]))
-	return 1
-`
-
 // FastReportWrite 一次 Pipeline 完成：更新设备状态 Hash + 缓存传感器数据 + 推入缓冲队列
 // 将多次 Redis 往返合并为 1 次
 // FastReportWrite 上报热路径的一次性 Pipeline 写入。
@@ -639,8 +691,9 @@ func (c *RedisCache) FastReportWrite(ctx context.Context, deviceID string, statu
 	// 1. 更新设备状态 Hash
 	pipe.HSet(ctx, statusKey, "status", status, "lastActiveTime", lastActiveTime)
 	pipe.Expire(ctx, statusKey, jitterTTL(TTLDeviceStatus))
-	// 跨实例失效（同一个 pipeline，不额外增加往返）
-	pipe.Publish(ctx, invalidationChannel, statusKey)
+	// 这里故意不广播跨实例失效：上报是最热路径，逐条 PUBLISH 会让每个实例的 L1 状态缓存
+	// 被写入频率打穿（读侧永远回落到 L2），Redis 侧还多一份 fan-out 开销。
+	// 跨实例一致性由 TTLDeviceStatusLocal(5s) 兜底；上下线/心跳等低频变更走 CacheDeviceStatus。
 
 	// 2. 缓存传感器最新数据。空数据（[]/null）不写：
 	// 否则一条不带传感器的状态上报会把上一次的"最新快照"抹成空，设备页数据凭空消失。
@@ -649,8 +702,14 @@ func (c *RedisCache) FastReportWrite(ctx context.Context, deviceID string, statu
 		pipe.Set(ctx, sensorKey, sensorJSON, jitterTTL(TTLSensorRecent))
 	}
 
-	// 3. 推入缓冲队列（Lua 原子 LPUSH + LTRIM，防部分失败导致 List 无限增长）
-	pipe.Eval(ctx, bufferPushSrc, []string{BufferDeviceReportsKey}, bufferData, BufferQueueMaxLen-1)
+	// 3. 推入缓冲队列（与上面同一次 pipeline，1 次往返）
+	//
+	// 早先用 Lua 保证 LPUSH+LTRIM 原子性，实测同效果下每条上报多花约 80µs Redis CPU
+	// （全部命令里最贵的一项，占上报写路径 Redis CPU 的一半以上），故改为普通命令。
+	// shortcut: LPUSH 成功而 LTRIM 失败时 List 会超限，下一次成功上报立即裁掉；
+	// 只有 Redis 写入整体不可用时才会发生，此时上报本身已在降级路径。
+	pipe.LPush(ctx, BufferDeviceReportsKey, bufferData)
+	pipe.LTrim(ctx, BufferDeviceReportsKey, 0, BufferQueueMaxLen-1)
 
 	_, err := pipe.Exec(ctx)
 	return err

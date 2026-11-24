@@ -19,6 +19,9 @@ package service
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
@@ -112,10 +115,58 @@ func TestInfluxDBService_WriteSensors_ConnectionRefused(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// 回归：写必须走 V3 write_lp + no_sync。
+// v2 同步写会等一轮 WAL flush（生产 10s），写入延迟直接撞 10s 客户端超时，
+// 上报缓冲队列随即打满并 LTRIM 丢数据（2026-11 压测事故）。
+func TestInfluxDBService_WriteSensors_UsesV3NoSync(t *testing.T) {
+	var gotPath, gotQuery, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("读取请求体失败: %v", err)
+		}
+		gotBody = string(body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	svc := NewInfluxDBService(testConfig(srv.URL), nil)
+	defer svc.Close()
+
+	err := svc.WriteSensors(t.Context(), []SensorData{
+		{DeviceID: "d1", SensorName: "temperature", Type: "number", Value: 26.5},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, "/api/v3/write_lp", gotPath)
+	assert.Contains(t, gotQuery, "no_sync=true")
+	assert.Contains(t, gotBody, "device_sensors")
+	assert.Contains(t, gotBody, "deviceID=d1")
+}
+
 func TestInfluxDBService_WriteSensorsAsync_NotConnected(t *testing.T) {
 	svc := &InfluxDBService{database: "iot"}
 	svc.WriteSensorsAsync([]SensorData{{DeviceID: "d1"}}) // goroutine 内报错并退出，不 panic
 	time.Sleep(30 * time.Millisecond)
+}
+
+func TestInfluxDBService_WriteSensorsAsync_DoesNotBlockWhenSaturated(t *testing.T) {
+	svc := &InfluxDBService{database: "iot", writeSem: make(chan struct{}, inflightWrites)}
+	for range inflightWrites {
+		svc.writeSem <- struct{}{} // 占满所有写入槽（模拟 InfluxDB 卡住）
+	}
+
+	done := make(chan struct{})
+	go func() {
+		svc.WriteSensorsAsync([]SensorData{{DeviceID: "d1"}}) // 槽满：丢弃而不是阻塞上报线程
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("WriteSensorsAsync 在槽位满时阻塞了调用方")
+	}
 }
 
 func TestInfluxDBService_Ping_NotConnected(t *testing.T) {
@@ -328,4 +379,23 @@ func TestDownsampleBucket(t *testing.T) {
 		assert.Equal(t, "", downsampleBucket(72*time.Hour, DownsampleAuto, ""))
 		assert.Equal(t, "", downsampleBucket(time.Hour, DownsampleMode("1m"), "1 minute"))
 	})
+}
+
+// TestHistoryWindow 历史查询窗口：默认最近 3 天，且两端都向下取整到整分钟
+func TestHistoryWindow(t *testing.T) {
+	now := time.Date(2026, 12, 1, 10, 30, 45, 123456789, time.UTC)
+
+	start, end := historyWindow(time.Time{}, time.Time{}, now)
+	assert.Equal(t, now.Truncate(time.Minute), end, "end 取整到分钟：当前分钟的数据不返回")
+	assert.Equal(t, now.Add(-72*time.Hour).Truncate(time.Minute), start)
+
+	// 显式窗口同样取整（同一分钟内的不同 end 落到同一份结果）
+	e := now.Add(3 * time.Second)
+	s, e2 := historyWindow(e.Add(-time.Hour), e, now)
+	assert.Equal(t, e.Truncate(time.Minute), e2)
+	assert.Equal(t, e.Add(-time.Hour).Truncate(time.Minute), s)
+
+	// 只传 end：start 仍按默认 3 天算
+	s, _ = historyWindow(time.Time{}, now, now)
+	assert.Equal(t, now.Add(-72*time.Hour).Truncate(time.Minute), s)
 }

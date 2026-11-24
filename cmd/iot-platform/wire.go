@@ -88,7 +88,7 @@ func provideInfluxDBService(redisCache *cache.RedisCache) *service.InfluxDBServi
 		Database:              cfg.InfluxDB.Database,
 		AuthScheme:            cfg.InfluxDB.AuthScheme,
 		WriteTimeout:          10 * time.Second,
-		QueryTimeout:          2 * time.Minute,
+		QueryTimeout:          10 * time.Second,
 		IdleConnectionTimeout: 90 * time.Second,
 		MaxIdleConnections:    maxIdleConns,
 	}, redisCache)

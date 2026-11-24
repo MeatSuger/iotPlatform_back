@@ -23,10 +23,14 @@ import (
 )
 
 // ApiResponse 统一API响应结构
+//
+// Meta 是可选的附加说明（如“历史数据最多延迟 1 分钟”），只在需要时返回，
+// 旧客户端忽略它即可，不改变 data 的形状。
 type ApiResponse struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Data    any    `json:"data"`
+	Meta    any    `json:"meta,omitempty"`
 }
 
 // 通用响应码
@@ -61,6 +65,16 @@ func Success(c *gin.Context, data any) {
 		Code:    CodeSuccess,
 		Message: "success",
 		Data:    data,
+	})
+}
+
+// SuccessWithMeta 返回带附加说明的成功响应（前端据此提示数据延迟等）
+func SuccessWithMeta(c *gin.Context, data, meta any) {
+	c.JSON(http.StatusOK, ApiResponse{
+		Code:    CodeSuccess,
+		Message: "success",
+		Data:    data,
+		Meta:    meta,
 	})
 }
 

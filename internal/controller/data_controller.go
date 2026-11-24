@@ -182,7 +182,13 @@ func (ctl *DataController) QueryData(c *gin.Context) {
 		return
 	}
 
-	common.Success(c, records)
+	// 历史数据按分钟粒度缓存：最新数据最多晚 HistoryMaxDelay 才能查到（见 service.HistoryGranularity）。
+	// 用 meta 而不是改 data 形状：旧前端拿到的仍是一个数组，新前端读 meta 展示延迟提示。
+	common.SuccessWithMeta(c, records, gin.H{
+		"granularitySeconds": int(service.HistoryGranularity / time.Second),
+		"maxDelaySeconds":    int(service.HistoryMaxDelay / time.Second),
+		"notice":             "历史数据按分钟缓存，最新数据可能延迟 1~2 分钟",
+	})
 }
 
 // parseTimeRange 解析 URL 查询参数 start/end。
