@@ -53,11 +53,29 @@ type DeviceReportService struct {
 	pgUpdateTimer    *time.Timer
 	pgFlushing       bool                                        // 是否有 flush 正在执行（防止并发 flush 叠加）
 	updateLastActive func(context.Context, string, string) error // 可注入，生产指向 deviceRepo.UpdateLastActive
+
+	// 每设备的「id/名称 → 物模型定义」映射（进程内缓存，上报校验用）
+	sensorDefMu    sync.Mutex
+	sensorDefCache map[string]sensorDefEntry
 }
+
+type sensorDefEntry struct {
+	byName    map[string]entity.Sensor
+	expiresAt time.Time
+}
+
+// sensorDefCacheTTL 与物模型定义的 L1 TTL 对齐：定义变更最多滞后这么久生效
+const sensorDefCacheTTL = cache.TTLDefsLocal
+
+// maxSensorDefCacheEntries 映射缓存条数上限（每设备一条，超出先清过期再整体丢弃）
+const maxSensorDefCacheEntries = 1024
 
 const (
 	pgDebounceInterval = 5 * time.Second  // PostgreSQL 活跃时间更新防抖间隔
 	pgFlushTimeout     = 30 * time.Second // 单次批量更新总超时（PG 不可用时不无限挂住）
+
+	// degradePushTimeout 降级写回队列的超时：Redis 已不健康时不能让请求跟着等满客户端超时
+	degradePushTimeout = 200 * time.Millisecond
 )
 
 func NewDeviceReportService(
@@ -73,6 +91,7 @@ func NewDeviceReportService(
 		deviceSvc:       deviceSvc,
 		localCache:      cache.NewLocalCache(5 * time.Second), // L1 5s TTL，覆盖高频上报
 		pgUpdatePending: make(map[string]time.Time),
+		sensorDefCache:  make(map[string]sensorDefEntry),
 	}
 	if deviceRepo != nil {
 		svc.updateLastActive = deviceRepo.UpdateLastActive
@@ -92,27 +111,21 @@ func (s *DeviceReportService) SetSensorSvc(svc *DeviceSensorService) {
 
 // validateSensorValues 按物模型定义校验上报值类型与 dataType 对齐（JSON 格式统一）。
 //
-// 定义列表走缓存（L1/L2），热设备命中 L1 为纯内存读取；定义缺失/加载失败时放行
-// （fail-open，保持上报链路可用）。非法数据点逐条丢弃并告警，字符串 "400ppm" 之类的
-// 类型错乱值不再进入类型敏感的 InfluxDB。
+// 定义列表走缓存（L1/L2），name→def 映射另做进程内缓存：上报热路径每条都要用它，
+// 逐条 unmarshal 全量定义 + 重建 map 曾占上报处理的约 23%（pprof 实测）。
+// 定义缺失/加载失败时放行（fail-open，保持上报链路可用）。非法数据点逐条丢弃并告警。
 func (s *DeviceReportService) validateSensorValues(ctx context.Context, deviceID string, dto *entity.DeviceStatusDTO) {
 	if s.sensorSvc == nil || len(dto.Sensors) == 0 {
 		return
 	}
-	defs, err := s.sensorSvc.List(ctx, deviceID)
+	byName, err := s.sensorDefMap(ctx, deviceID)
 	if err != nil {
 		zap.L().Warn("[DeviceReport] 物模型定义加载失败，跳过值校验",
 			zap.String("deviceID", deviceID), zap.Error(err))
 		return
 	}
-	if len(defs) == 0 {
+	if len(byName) == 0 {
 		return
-	}
-
-	byName := make(map[string]entity.Sensor, len(defs)*2)
-	for _, def := range defs {
-		byName[def.ID] = def
-		byName[def.Name] = def // 上报 name 兼容 id / 名称两种写法
 	}
 
 	valid := dto.Sensors[:0]
@@ -138,6 +151,48 @@ func (s *DeviceReportService) validateSensorValues(ctx context.Context, deviceID
 			zap.String("deviceID", deviceID),
 			zap.Int("dropped", dropped),
 			zap.Int("kept", len(valid)))
+	}
+}
+
+// sensorDefMap 取该设备的「id/名称 → 物模型定义」映射（进程内缓存，TTL 同物模型 L1）。
+// 返回的 map 只读，调用方不得修改。
+func (s *DeviceReportService) sensorDefMap(ctx context.Context, deviceID string) (map[string]entity.Sensor, error) {
+	now := time.Now()
+	s.sensorDefMu.Lock()
+	if e, ok := s.sensorDefCache[deviceID]; ok && now.Before(e.expiresAt) {
+		s.sensorDefMu.Unlock()
+		return e.byName, nil
+	}
+	s.sensorDefMu.Unlock()
+
+	defs, err := s.sensorSvc.List(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]entity.Sensor, len(defs)*2)
+	for _, def := range defs {
+		byName[def.ID] = def
+		byName[def.Name] = def // 上报 name 兼容 id / 名称两种写法
+	}
+
+	s.sensorDefMu.Lock()
+	if len(s.sensorDefCache) >= maxSensorDefCacheEntries {
+		s.pruneSensorDefCacheLocked(now)
+	}
+	s.sensorDefCache[deviceID] = sensorDefEntry{byName: byName, expiresAt: now.Add(sensorDefCacheTTL)}
+	s.sensorDefMu.Unlock()
+	return byName, nil
+}
+
+// pruneSensorDefCacheLocked 先删过期项，仍然满则整体丢弃（极端设备数下宁可直接重建）；调用方持锁
+func (s *DeviceReportService) pruneSensorDefCacheLocked(now time.Time) {
+	for k, e := range s.sensorDefCache {
+		if now.After(e.expiresAt) {
+			delete(s.sensorDefCache, k)
+		}
+	}
+	if len(s.sensorDefCache) >= maxSensorDefCacheEntries {
+		s.sensorDefCache = make(map[string]sensorDefEntry)
 	}
 }
 
@@ -268,12 +323,23 @@ func (s *DeviceReportService) reportStatusFast(ctx context.Context, deviceID str
 	// 3. 一次 Pipeline 完成所有 Redis 写操作（1 次往返！）
 	if s.buffer != nil {
 		if err := s.cache.FastReportWrite(ctx, deviceID, "ONLINE", nowMs, sensorsJSON, bufferData); err != nil {
+			// 客户端断开导致的 ctx 取消失败：直接放弃。降级路径反而会多打三次 Redis，
+			// 而结果没人读（请求方已经走了）；设备侧会重发或下一拍补上。
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
 			zap.S().Warnf("[DeviceReport] 快速写入失败 [device=%s]: %v", deviceID, err)
-			// 降级：逐条写入。缓存是尽力而为（PG/InfluxDB 才是落库路径），
-			// 失败不能让上报返回错误。
-			_ = s.cache.CacheDeviceStatus(ctx, deviceID, "ONLINE", nowMs)
-			_ = s.cache.CacheSensorRecent(ctx, deviceID, dto.Sensors)
-			s.writeSensorsSync(deviceID, dto)
+			// 降级：把原始 payload 写回缓冲队列，交给后台 worker 落库。
+			// 不能在请求线程里同步写 InfluxDB：8 个写入槽位满时调用方被阻塞，单次写入
+			// 最长 10s，3000 VUs 压测的超时雪崩就是这条路径（见 docs/influxdb-load-test-findings.md）。
+			// 状态/传感器缓存由下一次成功上报补齐，此处不再额外打 Redis。
+			pushCtx, cancel := context.WithTimeout(ctx, degradePushTimeout)
+			pushErr := s.buffer.Push(pushCtx, bufferData)
+			cancel()
+			if pushErr != nil {
+				// 队列也写不进（Redis 整体不可用）：退到进程内异步写，槽位满则丢弃，同样不阻塞请求。
+				s.writeSensorsSync(deviceID, dto)
+			}
 		}
 	} else {
 		// 无缓冲器：逐条更新状态与传感器缓存，并同步写 InfluxDB。
@@ -290,7 +356,8 @@ func (s *DeviceReportService) reportStatusFast(ctx context.Context, deviceID str
 	return nil
 }
 
-// writeSensorsSync 同步写入传感器数据到 InfluxDB（降级路径）
+// writeSensorsSync 降级写入传感器数据到 InfluxDB（Redis 队列也不可用时的最后一级兑底）。
+// WriteSensorsAsync 不阻塞：写入槽位满时直接丢弃，不会把上报请求拖成超时。
 func (s *DeviceReportService) writeSensorsSync(deviceID string, dto entity.DeviceStatusDTO) {
 	data := make([]SensorData, len(dto.Sensors))
 	for i, sensor := range dto.Sensors {

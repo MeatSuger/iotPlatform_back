@@ -285,8 +285,62 @@ func TestReportStatusFast_ValueValidation(t *testing.T) {
 	assert.NotContains(t, string(raw), `turbo`)
 }
 
-// ---------- helpers ----------
+// TestSensorDefMap_CachesPerDevice name→def 映射必须按设备复用，不能每条上报重建
+func TestSensorDefMap_CachesPerDevice(t *testing.T) {
+	client := newTestEnt(t)
+	_, rcache := newTestRedisCache(t)
+	sensorSvc := NewDeviceSensorService(repository.NewDeviceThingRepo(client), nil, rcache)
+	svc := NewDeviceReportService(nil, nil, rcache, nil)
+	svc.SetSensorSvc(sensorSvc)
+	ctx := context.Background()
 
+	m1, err := svc.sensorDefMap(ctx, "dev-x")
+	require.NoError(t, err)
+	m1["synthetic"] = entity.Sensor{Name: "synthetic"} // 只在同一次缓存寿命内可见
+
+	m2, err := svc.sensorDefMap(ctx, "dev-x")
+	require.NoError(t, err)
+	assert.Contains(t, m2, "synthetic", "映射应被复用而不是重新加载")
+
+	// 过期后必须重建（不再带 synthetic）
+	svc.sensorDefMu.Lock()
+	entry := svc.sensorDefCache["dev-x"]
+	entry.expiresAt = time.Now().Add(-time.Second)
+	svc.sensorDefCache["dev-x"] = entry
+	svc.sensorDefMu.Unlock()
+
+	m3, err := svc.sensorDefMap(ctx, "dev-x")
+	require.NoError(t, err)
+	assert.NotContains(t, m3, "synthetic", "过期后应重新加载")
+}
+
+// TestReportStatusFast_CanceledCtxSkipsFallback 客户端断开导致的 ctx 取消不得走降级路径
+// （降级会多打 3 次 Redis，而结果没人读）
+func TestReportStatusFast_CanceledCtxSkipsFallback(t *testing.T) {
+	svc, repo, client := newReportCtx(t)
+	seedOnline2(t, client, repo)
+	stopPGDebounce(svc)
+
+	buf := NewDeviceDataBuffer(svc.cache.GetClient(), &fakeWriter{})
+	buf.flushInterval = time.Hour
+	svc.SetBuffer(buf)
+
+	// 先用活 ctx 暖本设备的 L1 存在性标记，使后续流程直达 FastReportWrite
+	_, err := svc.deviceSvc.GetByDeviceID(context.Background(), "dev1")
+	require.NoError(t, err)
+	svc.localCache.Set("dev:dev1", "ONLINE")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = svc.ReportStatusFast(ctx, "dev1", sensorDTO())
+	assert.ErrorIs(t, err, context.Canceled)
+
+	// 降级路径未执行：状态 Hash 与传感器快照都不应被写
+	assert.Equal(t, int64(0), svc.cache.GetClient().Exists(context.Background(), cache.PrefixDeviceStatus+"dev1").Val())
+	assert.Equal(t, int64(0), svc.cache.GetClient().Exists(context.Background(), cache.PrefixSensorRecent+"dev1:latest").Val())
+}
+
+// ---------- helpers ----------
 // mrHGet 读取 DeviceReportService 缓存中的 Hash 字段
 func mrHGet(t *testing.T, svc *DeviceReportService, deviceID, field string) string {
 	t.Helper()
@@ -406,4 +460,31 @@ func TestFlushPGUpdates_NoConcurrentFlush(t *testing.T) {
 	}
 	svc.pgUpdateMu.Unlock()
 	assert.False(t, svc.pgFlushing)
+}
+
+// TestReportStatusFast_FallbackRequeues 降级路径：Redis 快路径失败时写回缓冲队列，
+// 而不是在请求线程里同步写 InfluxDB（3000 VUs 超时的触发点）。
+func TestReportStatusFast_FallbackRequeues(t *testing.T) {
+	// 缓存指向一个已关闭的 Redis：FastReportWrite 必然失败
+	mrDead, rcacheDead := newTestRedisCache(t)
+	mrDead.Close()
+
+	client := newTestEnt(t)
+	repo := repository.NewDeviceRepo(client)
+	seedOnline2(t, client, repo)
+
+	// 缓冲队列指向健康的 Redis
+	_, rdb := newTestRedis(t)
+	writer := &fakeWriter{}
+	buf := NewDeviceDataBuffer(rdb, writer)
+	buf.flushInterval = time.Hour
+
+	influxSvc := &InfluxDBService{database: "iot"} // client nil：若走同步写会报“未连接”
+	svc := NewDeviceReportService(repo, influxSvc, rcacheDead, NewDeviceService(repo, rcacheDead, nil, nil))
+	stopPGDebounce(svc)
+	svc.SetBuffer(buf)
+	svc.localCache.Set("dev:dev1", "ONLINE") // 跳过设备存在性校验（其缓存已不可用）
+
+	assert.NoError(t, svc.ReportStatusFast(context.Background(), "dev1", sensorDTO()))
+	assert.Equal(t, int64(1), queuedReports(t, rdb, buf))
 }
