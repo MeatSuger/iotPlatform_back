@@ -5,7 +5,7 @@
 //   1. devices   —— 设备侧：数据上报 + 心跳 + 偶尔拉取下行命令（占大头）
 //   2. app_users —— App 用户：登录态检查 → 设备列表 → 设备详情 → 历史曲线 → 个人资料 + 偶尔更新设备
 //   3. ws_users  —— App 保持的 WebSocket 长连接（/api/ws/user）
-//   4. auth_flow —— 低频 登录/登出 配对（默认 test/123456，可用 USER_ACCOUNT/USER_PASSWD 覆盖）
+//   4. auth_flow —— 低频 登录/登出 配对（用 USER_ACCOUNT/USER_PASSWD，默认测试账号）
 //
 // 关键约定（与项目代码核对过）：
 //   - 业务成功码是响应体 code===200（pkg/common/response.go CodeSuccess=200），不是 0
@@ -46,13 +46,16 @@
 // 附带修复：endpoint:update 之前 0 样本，是因为 list 校验失败后 did 取不到值、
 //           update 分支根本没进去；Token 恢复后该分支会正常执行。
 //
-// 用法:
-//   k6 run scripts/k6-bench.js                       # 默认 100 VU 打生产（远端自动放宽延迟阈值）
-//   VUS=300 k6 run scripts/k6-bench.js               # 加压
-//   BASE_URL=http://127.0.0.1:9091/api k6 run scripts/k6-bench.js   # 直连后端（严格阈值）
-//   USER_ACCOUNT=xxx USER_PASSWD=yyy k6 run scripts/k6-bench.js     # 指定登录账号
+// 用法（默认值已写死成测试环境，直接 k6 run 即可）：
+//   k6 run scripts/k6-bench.js                       # 默认 400 VU 打 http://47.99.74.160:9091/api
+//   VUS=1000 k6 run scripts/k6-bench.js              # 加压
+//   BASE_URL=http://127.0.0.1:9091/api k6 run scripts/k6-bench.js   # 换目标（本机连还有严格阈值）
+//   USER_ACCOUNT=xxx USER_PASSWD=yyy k6 run scripts/k6-bench.js     # 换账号
+//   DEVICE_TOKEN=<已签发token> k6 run scripts/k6-bench.js           # 换设备（覆盖默认测试设备）
 //   DEVICE_ID=90431b DEVICE_SECRET=<注册时的deviceSecret> k6 run scripts/k6-bench.js
-//   DEVICE_TOKEN=<已签发token> k6 run scripts/k6-bench.js           # 跳过密钥换取
+//
+// 注意：默认账号密码与测试设备 Token 写在本文件里（仅开发/测试环境用），
+// 上生产前要么删掉默认值，要么别把这个文件带进公开仓库。
 //   SKIP_SETUP_CHECK=1 k6 run scripts/k6-bench.js    # 跳过 setup 预校验（不推荐）
 // ============================================================
 import http from 'k6/http';
@@ -61,7 +64,8 @@ import { Rate } from 'k6/metrics';
 import ws from 'k6/ws';
 
 // ---------- 环境配置 ----------
-const BASE = __ENV.BASE_URL || 'https://api.meatsuger.top/api';
+// 默认直接打测试机（47.99.74.160:9091 为后端直连端口，不经 nginx）
+const BASE = __ENV.BASE_URL || 'http://47.99.74.160:9091/api';
 const WS_BASE = BASE.replace(/^http/, 'ws');
 
 // 设备凭证：2026-11 起 /devices/{id}/token 必须携带注册时返回的 X-Device-Secret，
@@ -69,17 +73,18 @@ const WS_BASE = BASE.replace(/^http/, 'ws');
 //   A. DEVICE_ID + DEVICE_SECRET（推荐；SECRET 只返回一次，见注册响应 deviceSecret）
 //   B. DEVICE_TOKEN（已签发的设备 Token，调试/复用已有会话时用）
 // 若只设置 DEVICE_ID 而不设 DEVICE_SECRET/DEVICE_TOKEN，setup() 会立刻失败并提示。
-const DEVICE_ID = __ENV.DEVICE_ID || '';
+const DEVICE_ID = __ENV.DEVICE_ID || 'adc0c5';
 const DEVICE_SECRET = __ENV.DEVICE_SECRET || '';
-const USER_ACCOUNT = __ENV.USER_ACCOUNT || 'test';
-const USER_PASSWD = __ENV.USER_PASSWD || '123456';
-const VUS = parseInt(__ENV.VUS || '100', 10);
+const USER_ACCOUNT = __ENV.USER_ACCOUNT || 'meatsuger';
+const USER_PASSWD = __ENV.USER_PASSWD || 'aaaaaa';
+const VUS = parseInt(__ENV.VUS || '400', 10);
 const SKIP_SETUP_CHECK = __ENV.SKIP_SETUP_CHECK === '1';
 
 // 可选覆盖：仅在调试或账号不可用时使用。
 // 正常情况留空 —— setup() 会自动获取，不会再出现「token 过期」导致的满盘皆输。
 const ENV_USER_TOKEN = __ENV.USER_TOKEN || '';
-const ENV_DEVICE_TOKEN = __ENV.DEVICE_TOKEN || '';
+// 默认用测试设备的已签发 Token（DEVICE_TOKEN 环境变量仍可覆盖，留空则按 DEVICE_ID+SECRET 换取）
+const ENV_DEVICE_TOKEN = __ENV.DEVICE_TOKEN || '7159eef0-c663-47e4-a7f1-26c27685b9d6';
 
 // 远端目标要叠加公网 RTT（实测中位 ~86ms），本地直连才用严格 SLO
 const IS_LOCAL = /127\.0\.0\.1|localhost/.test(BASE);
@@ -514,8 +519,9 @@ export function userTraffic(data) {
   });
   checkBiz(detail, 'detail ok');
 
-  // 历史曲线（InfluxDB + L1 15s / L2 120s 缓存；不传 start/end 走默认 3 天，缓存键稳定；
-  // limit 上限 1000、跨度上限 31 天，本脚本用 limit=50 在合法范围内）
+  // 历史曲线（分钟粒度缓存：键按分钟取整，L1 15s / L2 2min，过期由后台刷新，
+  // 请求不等 InfluxDB；不传 start/end 走默认 3 天。limit 上限 1000、跨度上限 31 天，
+  // 本脚本用 limit=50 在合法范围内）
   const history = http.get(`${BASE}/devices/${did}/sensorData?limit=50`, {
     headers: hdrs,
     tags: { endpoint: 'history' },

@@ -105,7 +105,7 @@ DIST_FILE   = dist/$(PACKAGE)-$(VERSION).tar.gz
         install uninstall \
         clean mostlyclean distclean maintainer-clean \
         html dist distcheck \
-        version help deploy restart rollback health-check status
+        version help bench deploy restart rollback health-check status
 
 # ============================================================
 # 代码生成 (generate)
@@ -256,6 +256,10 @@ status:
 		echo "  回滚点:  $$(ls -la $(REMOTE_DIR)/build/$(PACKAGE).prev 2>/dev/null | awk "{print \$$5\" bytes\"}" || echo 无)"; \
 		echo "  目录:    $$(ls $(REMOTE_DIR) 2>/dev/null | tr "\n" " ")"'
 
+# bench 服务端本机压测（远端 127.0.0.1，隔离家宽/热点链路）
+bench: check
+	@./scripts/bench.sh 363 15
+
 uninstall:
 	@printf '$(C_CYAN)→ 删除远程二进制...$(C_RESET)\n'
 	ssh $(SSH_HOST) 'rm -f $(REMOTE_DIR)/build/$(PACKAGE)' || { printf '$(C_RED)✗ 卸载失败$(C_RESET)\n'; exit 1; }
@@ -339,6 +343,7 @@ help:
 	@echo "  generate         只补齐代码生成产物 (Ent / Wire / Swagger, 缺什么补什么)"
 	@echo "  check            运行测试"
 	@echo "  check-expensive  运行测试 (详细输出)"
+	@echo "  bench            服务端本机压测 (scripts/bench.sh [并发] [秒数])，不含家宽链路影响"
 	@echo "  dev              本地运行: SSH 隧道 + air 热重载, 按 q 退出"
 	@printf '$(C_YELLOW)安装/部署:$(C_RESET)\n'
 	@echo "  install          构建 + 推送 + 原子替换 + force-recreate + 健康检查"
