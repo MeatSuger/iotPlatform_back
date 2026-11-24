@@ -1,0 +1,60 @@
+# ============================================================
+# InfluxDB 3 Core（时序库，设备历史曲线的唯一数据源）
+#
+# 为什么单独一份 compose：这个服务原先由 1Panel 的「自定义应用」维护
+# (/opt/1panel/docker/compose/influxdb3/)，参数不在仓库里 —— 谁重启一次就可能
+# 丢掉调优项。收进来后由 `make install` 一起发布。
+#
+# 与 1Panel 那份的差异（均为性能/暴露面修复，数据目录保持不变）：
+#   1. WAL flush 1s → 10s：默认每秒新建一个 WAL 文件对象（实测空闲时 2 分钟 120 个），
+#      每次都要建文件 + 写 + fsync + 目录项，白白吃 I/O。10s 后文件数降一个数量级，
+#      代价只是非正常宕机时多回放 ≤10s 的 WAL（正常重启/关闭不受影响）。
+#   2. 端口只发布到 127.0.0.1：原先 0.0.0.0:8181 暴露公网，日志里持续有外网扫描器
+#      打 /query（返回 401，未失守但没必要）。容器间仍可用 influxdb3-core:8181 访问。
+#   3. 日志过滤：镜像内置 INFLUXDB3_LOG_FILTER=info，会覆盖 CLI 默认的降噪规则，
+#      导致每条查询刷 5 行 query_log、每秒刷一行 WAL。这里显式恢复降噪。
+#   4. healthcheck 改用 curl：镜像里没有 wget（原配置永远 unhealthy，纯误报）；
+#      /health 需要鉴权（无 token 返回 401），故 200/401 都算存活。
+#   5. async trigger 并发上限显式钉成 8（未来版本默认会从 unlimited 改成 8，钉住避免升级行为漂移）。
+#
+# 数据目录用变量兜底指向现有位置：默认值与 1Panel 那份完全一致，
+# 换成这份 compose 不会新建空库（换路径 = 新 catalog = 索引/Token 全丢）。
+# ============================================================
+services:
+  influxdb3-core:
+    image: influxdb:3-core
+    container_name: influxdb3-core
+    command: influxdb3 serve
+    environment:
+      INFLUXDB3_NODE_ID: node0
+      INFLUXDB3_OBJECT_STORE: file
+      INFLUXDB3_DATA_DIR: /var/lib/influxdb3/data
+      INFLUXDB3_WAL_FLUSH_INTERVAL: 10s
+      # 每个 Parquet 文件覆盖的时间跨度（Core 只接受 1m / 5m / 10m，不能更大）。
+      # 10m × 72h = 432 个文件，正好等于 --query-file-limit 默认上限，
+      # 而历史接口默认查 72h ⇒ 每发查询都贴着上限，轻则变慢重则直接报 file limit。
+      # 既然 gen1 降不下来，只能把上限抬起来。
+      INFLUXDB3_QUERY_FILE_LIMIT: "1000"
+      INFLUXDB3_ASYNC_TRIGGER_CONCURRENCY_LIMIT: "8"
+      INFLUXDB3_LOG_FILTER: "info,iox_query::query_log=warn,influxdb3_query_executor::query_planner=warn,influxdb3_wal::object_store=warn"
+    ports:
+      - "127.0.0.1:8181:8181"
+    volumes:
+      # 宿主机路径用 *_PATH 变量（不要和容器内的 INFLUXDB3_DATA_DIR 混用）
+      - ${INFLUXDB3_DATA_PATH:-/opt/1panel/docker/compose/influxdb3/influxdb3/data}:/var/lib/influxdb3/data
+      - ${INFLUXDB3_PLUGINS_PATH:-/opt/1panel/docker/compose/influxdb3/influxdb3/plugins}:/var/lib/influxdb3/plugins
+    healthcheck:
+      # 镜像里没有 wget/grep，只有 curl；/health 需鉴权（无 token → 401），
+      # 而 curl 只要拿到 HTTP 响应就返回 0 —— 正好表达“进程在监听且能应答”。
+      test: ["CMD", "curl", "-s", "-o", "/dev/null", "--max-time", "5", "http://localhost:8181/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - 1panel-network
+
+networks:
+  1panel-network:
+    external: true
