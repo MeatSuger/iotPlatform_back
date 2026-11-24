@@ -132,6 +132,7 @@ func Setup(svcs *Services, wsHandler *websocket.WsHandler, userPlugin *sagin.Plu
 	// 全局中间件
 	r.Use(middleware.Recovery())
 	r.Use(middleware.Logger())
+	r.Use(middleware.GzipJSON()) // ≥1KB 的 JSON 响应压缩，降低丢包链路上的尾延迟
 
 	// CORS配置
 	corsCfg := cors.Config{
