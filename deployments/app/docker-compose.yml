@@ -21,6 +21,18 @@ services:
       - ../../configs:/app/configs:ro
       - ../../build/iot-platform:/app/iot-platform:ro
     restart: unless-stopped
+    # 日志上限：json-file 默认无上限，雪崩时每条慢请求都写一行 JSON，几 GB 持续写盘（iowait）
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    # 高并发建连：容器默认 tcp_max_syn_backlog 只有 128，几千个 VU 同时重连时
+    # 内核直接把 SYN 丢掉（ListenDrops 暴涨），客户端表现为 dial/request timeout，
+    # 而服务端日志里一条慢请求都没有。这两个 sysctl 是 per-netns 的，只能在这里设。
+    sysctls:
+      net.core.somaxconn: 65535
+      net.ipv4.tcp_max_syn_backlog: 8192
 
 networks:
   1panel-network:
