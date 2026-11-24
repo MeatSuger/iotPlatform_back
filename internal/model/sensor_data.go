@@ -137,9 +137,19 @@ type DeviceStatus struct {
 	Sensors        []SensorData    `json:"sensors"`
 }
 
+// PanelInfo 设备面板信息（随 telemetry 顺带上报，不参与传感器入库）
+type PanelInfo struct {
+	Chip   string `json:"chip"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
 // DeviceStatusDTO 设备状态上报请求（DTO）
+// panel 为可选字段：设备连上 MQTT 后先发一条不带 sensors 的面板信息，
+// 复用 telemetry 通道，不新增主题。
 type DeviceStatusDTO struct {
 	Sensors []SensorData `json:"sensors" binding:"required"`
+	Panel   *PanelInfo   `json:"panel,omitempty"`
 }
 
 // ValidateSensorValue 校验上报值类型与物模型定义 dataType 对齐（JSON 格式统一）。

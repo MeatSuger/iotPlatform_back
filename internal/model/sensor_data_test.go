@@ -227,6 +227,19 @@ func TestDeviceStatusDTO_MissingSensors(t *testing.T) {
 	assert.Len(t, dto.Sensors, 0)
 }
 
+func TestDeviceStatusDTO_PanelOnly(t *testing.T) {
+	// 设备连上 MQTT 后先发一条不带 sensors 的面板信息（复用 telemetry 通道）
+	var dto DeviceStatusDTO
+	err := json.Unmarshal([]byte(`{"panel":{"chip":"ssd1683","width":400,"height":300}}`), &dto)
+	assert.NoError(t, err)
+	assert.Len(t, dto.Sensors, 0)
+	if assert.NotNil(t, dto.Panel) {
+		assert.Equal(t, "ssd1683", dto.Panel.Chip)
+		assert.Equal(t, 400, dto.Panel.Width)
+		assert.Equal(t, 300, dto.Panel.Height)
+	}
+}
+
 func TestSensorData_JSONRoundTrip(t *testing.T) {
 	// 缓存往返（sensorsJSON 写 Redis → 详情接口读回）必须保持时间戳不变：
 	// MarshalJSON 输出 "2006-01-02T15:04:05.000-07:00"，UnmarshalJSON 必须认得。
