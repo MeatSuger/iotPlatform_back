@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -132,4 +133,82 @@ func TestRedactQuery_MalformedDoesNotLeak(t *testing.T) {
 			assert.NotContains(t, got, "%zz")
 		})
 	}
+}
+
+// TestLogger_SlowRequestWarn 2xx 慢请求必须在 info 级别下留一条 warn（否则服务端耗时完全不可见）
+func TestLogger_SlowRequestWarn(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel) // 生产级别：debug 被过滤，走快路径
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(Logger())
+	r.GET("/slow", func(c *gin.Context) {
+		time.Sleep(600 * time.Millisecond)
+		c.JSON(200, gin.H{"ok": true})
+	})
+	r.GET("/fast", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	prev := zap.L()
+	zap.ReplaceGlobals(logger)
+	t.Cleanup(func() { zap.ReplaceGlobals(prev) })
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/slow", nil))
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, httptest.NewRequest(http.MethodGet, "/fast", nil))
+
+	var slow, fast int
+	for _, e := range logs.All() {
+		if e.Level != zap.WarnLevel || e.Message != "[HTTP] 慢请求" {
+			continue
+		}
+		if e.ContextMap()["path"] == "/slow" {
+			slow++
+		}
+		if e.ContextMap()["path"] == "/fast" {
+			fast++
+		}
+	}
+	assert.Equal(t, 1, slow, "慢请求应记一条 warn")
+	assert.Equal(t, 0, fast, "快请求不应记 warn")
+}
+
+// TestLogger_SlowRequestRateLimited 慢请求日志必须限流：饱和时每个请求都慢，
+// 逐条写日志会把磁盘打满（实测 iowait 成为瓶颈），超额的只计数并汇总。
+func TestLogger_SlowRequestRateLimited(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	prev := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	t.Cleanup(func() { zap.ReplaceGlobals(prev) })
+
+	r := gin.New()
+	r.Use(Logger())
+	r.GET("/slow", func(c *gin.Context) {
+		time.Sleep(2 * time.Millisecond)
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	// 直接打限流函数，避免依赖真实 500ms 阈值
+	slowLogWindowStart.Store(0)
+	slowLogCount.Store(0)
+	slowLogDeferred.Store(0)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/slow", nil)
+
+	const total = 100
+	for range total {
+		logSlowRequest(c, "/slow", 600*time.Millisecond)
+	}
+
+	detailed := 0
+	for _, e := range logs.All() {
+		if e.Message == "[HTTP] 慢请求" {
+			detailed++
+		}
+	}
+	assert.LessOrEqual(t, detailed, slowLogsPerSecond, "同一时间窗内逐条日志必须 ≤ 上限")
+	assert.Equal(t, int64(total-slowLogsPerSecond), slowLogDeferred.Load(), "其余必须记为被限流")
 }

@@ -19,6 +19,7 @@ package middleware
 import (
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -68,12 +69,61 @@ func redactQuery(raw string) string {
 	return values.Encode()
 }
 
+// slowRequestThreshold 慢请求告警阈值。
+//
+// 2xx 在生产(info) 下不记日志，于是“接口慢”在服务端完全不可见：压测时看到的几秒延迟
+// 到底是服务端还是客户端链路，只能猜。这条日志就是那个分界证据：
+// 压测时 `docker logs iot-platform-go | grep 慢请求`，有就是服务端慢，没有就是链路/客户端慢。
+const slowRequestThreshold = 500 * time.Millisecond
+
+// 慢请求日志限流：饱和时"几乎每个请求都 >500ms"，逐条写日志会把磁盘和 CPU 一起打满
+// （3603 VU 实测 1.7k 条/秒 JSON 写进 docker json-file，iowait 成为新的瓶颈），
+// 而日志只是因为限流丢掉明细，并不丢信息：每秒汇总一行“共 N 条、代表延迟 X”。
+const (
+	slowLogsPerSecond = 5 // 每个时间窗最多逐条记录的条数
+	slowLogWindow     = 1 * time.Second
+)
+
+var (
+	slowLogWindowStart atomic.Int64 // 当前窗口起始（UnixNano）
+	slowLogCount       atomic.Int64 // 当前窗口已逐条记录数
+	slowLogDeferred    atomic.Int64 // 当前窗口被限流跳过的条数
+)
+
+// logSlowRequest 带限流地记录一条慢请求日志（超额的只计数）
+func logSlowRequest(c *gin.Context, path string, latency time.Duration) {
+	now := time.Now()
+	start := slowLogWindowStart.Load()
+	if now.UnixNano()-start >= int64(slowLogWindow) {
+		// 换窗口：谁抢到谁负责把上一窗的汇总打出来
+		if slowLogWindowStart.CompareAndSwap(start, now.UnixNano()) {
+			slowLogCount.Store(0)
+			if suppressed := slowLogDeferred.Swap(0); suppressed > 0 {
+				zap.L().Warn("[HTTP] 慢请求汇总",
+					zap.Int64("suppressed", suppressed),
+					zap.Duration("window", slowLogWindow))
+			}
+		}
+	}
+
+	if slowLogCount.Add(1) <= slowLogsPerSecond {
+		zap.L().Warn("[HTTP] 慢请求",
+			zap.Duration("latency", latency),
+			zap.String("method", c.Request.Method),
+			zap.String("path", path),
+			zap.String("ip", c.ClientIP()))
+		return
+	}
+	slowLogDeferred.Add(1)
+}
+
 // Logger 使用 Zap 的结构化 HTTP 请求日志中间件
 //
 // 按响应状态码分级输出（配合 pkg/common.InitLogger 的 log-level）：
 //   - 5xx → error、4xx → warn、2xx/3xx → debug
+//   - 任何状态码只要耗时 ≥ slowRequestThreshold → 额外一条 warn
 //
-// 因此 debug 环境记录全部请求便于排查；生产环境（info/warn）只输出 4xx/5xx，
+// 因此 debug 环境记录全部请求便于排查；生产环境（info/warn）只输出 4xx/5xx 与慢请求，
 // 且 2xx/3xx 在日志级别被过滤时走快路径提前返回，避免构造日志字段的开销。
 func Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -88,10 +138,15 @@ func Logger() gin.HandlerFunc {
 		}
 
 		status := c.Writer.Status()
+		latency := time.Since(start)
 
 		// 快路径：2xx/3xx 且 Debug 被日志级别过滤时直接返回，
-		// 避免每请求构造字段（c.ClientIP / UserAgent / time.Format 均有分配）。
+		// 避免每请求构造字段（c.ClientIP / UserAgent / time.Format 均有分配）；
+		// 但慢请求例外，必须留一条能定位服务端耗时的日志。
 		if status < 400 && !zap.L().Core().Enabled(zap.DebugLevel) {
+			if latency >= slowRequestThreshold {
+				logSlowRequest(c, path, latency)
+			}
 			return
 		}
 
@@ -102,7 +157,7 @@ func Logger() gin.HandlerFunc {
 			zap.String("query", query),
 			zap.String("ip", c.ClientIP()),
 			zap.String("user-agent", c.Request.UserAgent()),
-			zap.Duration("latency", time.Since(start)),
+			zap.Duration("latency", latency),
 			zap.String("time", time.Now().Format(time.RFC3339)),
 		}
 		if len(c.Errors) > 0 {
