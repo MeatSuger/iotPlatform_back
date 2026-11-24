@@ -31,7 +31,7 @@ redis:
   read-timeout: 3
   write-timeout: 3
   pool-timeout: 4
-  max-retries: 3
+  max-retries: 1          # 超时读不重试：饱和时重试会把流量放大成 4 倍
 
 influxdb:
   url: "http://127.0.0.1:8181"

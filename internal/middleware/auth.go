@@ -52,7 +52,24 @@ type cachedAuth struct {
 	expiresAt time.Time
 }
 
+// userAuthCache 本地内存缓存：用户 Token → 登录信息。
+// 读接口每个请求本来要查 GetTokenInfo + GetRoles 两次 Redis（角色再查一次），
+// Redis 一慢这些读请求就整体变成 401（表现为“读失败”）。与设备鉴权同一套 5s 本地缓存。
+var (
+	userAuthCacheMu sync.RWMutex
+	userAuthCache   = make(map[string]cachedUserAuth)
+)
+
+type cachedUserAuth struct {
+	userID    uint
+	role      string
+	expiresAt time.Time
+}
+
 const deviceAuthCacheTTL = 5 * time.Second
+
+// userAuthCacheTTL 与设备鉴权对齐：退登/改角色最多滞后 5s 生效
+const userAuthCacheTTL = 5 * time.Second
 
 // getCachedDeviceID 从本地缓存获取已校验的 Token 对应的 deviceID
 func getCachedDeviceID(token string) (string, bool) {
@@ -72,20 +89,46 @@ func setCachedDeviceID(token, deviceID string) {
 	deviceAuthCacheMu.Unlock()
 }
 
+// getUserAuth 取用户 Token 对应的登录信息（未命中/已过期返回 false）
+func getUserAuth(token string) (cachedUserAuth, bool) {
+	userAuthCacheMu.RLock()
+	e, ok := userAuthCache[token]
+	userAuthCacheMu.RUnlock()
+	if ok && time.Now().Before(e.expiresAt) {
+		return e, true
+	}
+	return cachedUserAuth{}, false
+}
+
+// setUserAuth 缓存用户 Token → 登录信息
+func setUserAuth(token string, userID uint, role string) {
+	userAuthCacheMu.Lock()
+	userAuthCache[token] = cachedUserAuth{userID: userID, role: role, expiresAt: time.Now().Add(userAuthCacheTTL)}
+	userAuthCacheMu.Unlock()
+}
+
 // init 启动后台协程，每 30s 清理一次设备认证缓存中的过期条目
 func init() {
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			deviceAuthCacheMu.Lock()
 			now := time.Now()
+			deviceAuthCacheMu.Lock()
 			for k, v := range deviceAuthCache {
 				if now.After(v.expiresAt) {
 					delete(deviceAuthCache, k)
 				}
 			}
 			deviceAuthCacheMu.Unlock()
+
+			userAuthCacheMu.Lock()
+			for k, v := range userAuthCache {
+				if now.After(v.expiresAt) {
+					delete(userAuthCache, k)
+				}
+			}
+			userAuthCacheMu.Unlock()
 		}
 	}()
 }
@@ -103,6 +146,15 @@ func AuthMiddleware() gin.HandlerFunc {
 		if token == "" {
 			common.Fail(c, common.CodeUnauthorized)
 			c.Abort()
+			return
+		}
+
+		// L1 本地缓存：Token → 用户/角色（5s TTL），命中时零 Redis 往返
+		if cached, hit := getUserAuth(token); hit {
+			c.Set("userId", cached.userID)
+			c.Set("role", cached.role)
+			c.Set("token", token)
+			c.Next()
 			return
 		}
 
@@ -127,6 +179,8 @@ func AuthMiddleware() gin.HandlerFunc {
 		if len(roles) > 0 {
 			role = roles[0]
 		}
+
+		setUserAuth(token, uint(userID), role)
 
 		// 注入上下文
 		c.Set("userId", uint(userID))

@@ -6,7 +6,7 @@ server:
   port: 9091
   udp-port: 9092       # UDP 设备上报端口
   mode: release
-  log-level: info       # 日志级别: debug | info | warn | error
+  log-level: info        # 日志级别: debug | info | warn | error
                         # 生产环境建议 info：只输出必要日志（启动/关闭、连接、登录、命令下发、4xx/5xx 失败请求）
                         # 高频数据路径（UDP上报/WS消息/MQTT入库/成功请求）为 debug 级，生产不输出
   swagger-enabled: false  # 生产环境关闭 Swagger 文档
@@ -32,7 +32,7 @@ redis:
   read-timeout: 3
   write-timeout: 3
   pool-timeout: 4
-  max-retries: 3
+  max-retries: 1          # Redis 饱和时的超时读不要重试 3 次（会把 1 倍流量放大成 4 倍，越慢越堵）
 
 influxdb:
   url: "http://influxdb3-core:8181"

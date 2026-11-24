@@ -442,6 +442,8 @@ func initRedis(cfg *config.Config) (*redis.Client, error) {
 			WriteTimeout:  time.Duration(writeTimeout) * time.Second,
 			PoolTimeout:   time.Duration(poolTimeout) * time.Second,
 			MaxRetries:    maxRetries,
+			// 让请求 ctx 的 deadline/取消真正生效：Redis 饱和时客户端断开能立即释放连接与等待
+			ContextTimeoutEnabled: true,
 		})
 	case "cluster":
 		// Cluster 集群模式暂不支持（需要将 *redis.Client 改为 redis.UniversalClient 接口）
@@ -460,6 +462,8 @@ func initRedis(cfg *config.Config) (*redis.Client, error) {
 			WriteTimeout: time.Duration(writeTimeout) * time.Second,
 			PoolTimeout:  time.Duration(poolTimeout) * time.Second,
 			MaxRetries:   maxRetries,
+			// 让请求 ctx 的 deadline/取消真正生效：Redis 饱和时客户端断开能立即释放连接与等待
+			ContextTimeoutEnabled: true,
 		})
 	}
 
